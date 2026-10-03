@@ -50,6 +50,7 @@ Your standard: **every feature is proven end to end on real components, on arm64
   - conflicts
   - E2EE-encrypted data
   - installing the user's repeating-todos plugin in the web app
+- **Release smoke tests** (`tests/release/**`, for the ci-cd-specialist's delivery stories): pull each published artifact on amd64 and arm64 (images, npm package, release tarball). Run it, check health, verify signatures and attestations, and confirm the upstream logos are absent and the AGPL source offer is present.
 - **Patterns to keep from thescriptingguy/joplin-repeating-todos-plugin:**
   - negative-control specs (same flow without the feature → nothing happens)
   - "type like a user" input helpers (no synthetic change events)

@@ -43,17 +43,23 @@ The main Claude session is the **only orchestrator**. It dispatches one agent at
 |---|---|
 | `architect` | `docs/architecture/**`, `docs/adr/**`, `docs/spikes/**`, `docs/backlog/M*.md` |
 | `qa-specialist` | `docs/testing/**`, `docs/test-plans/**`, `tests/**`, test fixtures and harness config |
-| `senior-engineer` | `packages/**`, `deploy/**`, `upstream/**`, `patches/**`, CI workflows, `docs/worklog/**` |
+| `senior-engineer` | `packages/**`, `deploy/**`, `upstream/**`, `patches/**`, `docs/worklog/**` |
+| `ci-cd-specialist` | `.github/**`, `packaging/**`, release tooling config, `docs/delivery/**`, `docs/worklog/**` (its own stories) |
 | `lead-engineer` | `docs/reviews/**` (it never edits code) |
 
-**Phase A (architecture):**
+**Delivery** (Docker Hub, GHCR, npm, GitHub Releases, MCP Registry, …) belongs to the `ci-cd-specialist`. It investigates channels, builds the GitHub Actions pipelines, and configures registry and GitHub settings through the user's visible Chromium using Playwright.
+- **Credentials:** the agent opens the page and ends its turn with a `## HANDOFF` block. The orchestrator relays it to the user and resumes the agent when the user is done. Users enter credentials themselves in the browser, never in chat.
+- **Approval:** every outward-facing action (account or repo settings, secrets, first push, first publish per channel) needs the user's explicit approval, one action at a time. Publishing workflows run only in a GitHub `release` environment that requires the user's approval.
+
+**Phase A (architecture and delivery plan):**
 1. The architect produces the architecture, ADRs, spike reports and backlog.
-2. The orchestrator commits them.
-3. **STOP: the user approves** before any QA or engineering work. After approval, tag `plan-approved-v1`.
+2. The ci-cd-specialist produces `docs/delivery/channels.md` (investigation only).
+3. The orchestrator commits them.
+4. **STOP: the user approves** the architecture, the channel plan and the public name before any QA, engineering or account configuration. After approval, tag `plan-approved-v1`.
 
 **Phase B (per story, on branch `feat/<story-id>-<slug>`):**
 1. **QA** writes `docs/test-plans/<story>.md`, mapping every acceptance criterion (for example `M2-AC3`) to test IDs per layer, including a negative control where it makes sense. QA commits **failing tests first**.
-2. **Senior engineer** implements until QA's tests pass. It may **not** edit `tests/**` or ADRs; disagreements go under `## Disputes` in the test plan, and QA decides. It keeps `docs/worklog/<story>.md` with the approach, exact commands run, ADR deviations and test evidence.
+2. **Senior engineer** (or the **ci-cd-specialist** for pipeline and delivery stories) implements until QA's tests pass. It may **not** edit `tests/**` or ADRs; disagreements go under `## Disputes` in the test plan, and QA decides. It keeps `docs/worklog/<story>.md` with the approach, exact commands run, ADR deviations and test evidence.
 3. **QA** runs every layer and appends per-criterion results, with links to logs and traces, to the test plan.
 4. **Lead engineer** writes `docs/reviews/<story>-r<N>.md` with the verdict **APPROVE** or **CHANGES_REQUESTED**, keeping code findings and process findings separate. After 3 rounds without approval, the orchestrator escalates to the user.
 5. The orchestrator merges with `--no-ff`, never squashing, so the test-first history stays visible.
@@ -68,7 +74,7 @@ The main Claude session is the **only orchestrator**. It dispatches one agent at
 - Use small, focused commits with an imperative subject.
 - Every commit message ends with a trailer naming the agent, then the attribution line:
   ```
-  Agent: <architect|qa-specialist|senior-engineer|lead-engineer|orchestrator>
+  Agent: <architect|qa-specialist|senior-engineer|ci-cd-specialist|lead-engineer|orchestrator>
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   ```
 - **Never push, open PRs or publish images** unless the user explicitly approves it.
