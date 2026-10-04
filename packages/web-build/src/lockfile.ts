@@ -1,6 +1,8 @@
 // Checks that yarn.lock resolves the pinned CLI and its @joplin/* packages as ADR-0005 §1 requires:
 // - the CLI package (pin cli.npm, "joplin") resolves to exactly cli.version;
-// - every lockstep @joplin/* package resolves to a version inside the pin's minor.
+// - every lockstep @joplin/* package resolves to a version inside the pin's minor;
+// - the CLI and every @joplin/* package (forks included) resolve from the npm registry: `resolution:` is exactly
+//   `<name>@npm:<version>` (M1-AC26). git, github, http(s) tarballs, file, link, portal, exec and patch all fail.
 // The independently versioned upstream forks (@joplin/fork-*, @joplin/turndown*) follow their own version lines
 // and are exempt (docs/test-plans/M1-S1.md, interpretation 1). Any other @joplin/* package is checked (fail closed).
 import type { Pin } from './pin.ts';
@@ -55,6 +57,13 @@ export const parseLockfile = (text: string): LockEntry[] => {
 	return entries;
 };
 
+// The protocol of a resolution such as "@joplin/lib@npm:3.7.1" (npm), "joplin@patch:joplin@npm%3A3.7.1#…" (patch)
+// or "@joplin/lib@https://github.com/…" (https). "unknown" when the locator has no protocol.
+export const resolutionProtocol = (resolution: string): string => {
+	const reference = resolution.slice(packageNameOf(resolution).length + 1);
+	return /^([a-z][a-z0-9+.-]*):/i.exec(reference)?.[1].toLowerCase() ?? 'unknown';
+};
+
 export const isIndependentlyVersioned = (name: string): boolean =>
 	name.startsWith('@joplin/fork-') || name.startsWith('@joplin/turndown');
 
@@ -79,6 +88,15 @@ export const checkLockfile = (entries: LockEntry[], pin: Pin, lockfileLabel: str
 		if (!entry.version.startsWith(minorPrefix)) {
 			problems.push(`${entry.name}: ${lockfileLabel} resolves "${entry.key}" to ${entry.version}, expected ${pin.minor}.x (the pin's minor)`);
 		}
+	}
+
+	// Read from `resolution:`, never from the key: root `resolutions` rewrite the resolution, not the requested range.
+	for (const entry of entries) {
+		if (entry.name !== cliName && !entry.name.startsWith('@joplin/')) continue;
+		if (entry.resolution === `${entry.name}@npm:${entry.version}`) continue;
+		const protocol = resolutionProtocol(entry.resolution);
+		const detail = protocol === 'npm' ? `does not match its version ${entry.version}` : `uses the ${protocol} protocol`;
+		problems.push(`${entry.name}: ${lockfileLabel} resolves "${entry.key}" to "${entry.resolution}", which ${detail}; ${cliName} and every @joplin/* package must resolve from the npm registry as ${entry.name}@npm:<version>`);
 	}
 
 	return problems;
