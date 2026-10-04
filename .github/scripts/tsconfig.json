@@ -1,0 +1,8 @@
+{
+	"//": "Type-checks the CI helper scripts in .github/scripts (run by Node's type stripping, so erasable syntax only). Wired into `corepack yarn lint`.",
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"types": ["node"]
+	},
+	"include": ["**/*.ts"]
+}

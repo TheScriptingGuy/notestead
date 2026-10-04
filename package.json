@@ -12,13 +12,14 @@
     "packages/*"
   ],
   "scripts": {
-    "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json",
+    "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json && tsc -p .github/scripts/tsconfig.json",
     "test": "jest",
     "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'",
     "test:optin:real-dist": "node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-real-dist.optin.mts",
     "test:optin:build": "node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-build.optin.mts",
     "check:pin": "node packages/web-build/bin/check-pin.ts",
-    "check:no-upstream-copy": "node packages/web-build/bin/check-no-upstream-copy.ts"
+    "check:no-upstream-copy": "node packages/web-build/bin/check-no-upstream-copy.ts",
+    "check:workflows": "node .github/scripts/check-workflows.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
@@ -35,6 +36,7 @@
     "globals": "17.6.0",
     "jest": "29.7.0",
     "ts-jest": "29.4.6",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   }
 }

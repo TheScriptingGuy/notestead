@@ -1,0 +1,37 @@
+# Shared job setup (M1-S3): Node, corepack yarn and an immutable install of this repo, with the yarn cache keyed by
+# OS, architecture and lockfile. Run it after actions/checkout.
+name: setup
+description: Set up Node and corepack yarn, then run `corepack yarn install --immutable` with a cached yarn cache.
+inputs:
+  node-version:
+    description: >-
+      Node.js major for CI: 22 LTS, the engines floor (>= 22.19) and the container runtime (ADR-0009,
+      docs/testing/strategy.md). The Pi runs Node 24, so the two majors are both exercised. It must ship corepack.
+    required: false
+    default: '22'
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        package-manager-cache: false
+    - name: Restore the yarn cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        # .yarn/cache: this repo's package cache (enableGlobalCache: false); ~/.cache/node/corepack: yarn itself.
+        path: |
+          .yarn/cache
+          ~/.cache/node/corepack
+        key: yarn-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('yarn.lock', '.yarnrc.yml') }}
+        restore-keys: |
+          yarn-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install (immutable lockfile)
+      shell: bash
+      env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      run: |
+        node --version
+        corepack yarn --version
+        corepack yarn install --immutable

@@ -23,6 +23,7 @@ Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
   - Canonical command: `node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/<story>/*.test.mts'`. Files run one at a time (resource rule: one heavy job at a time).
 - **Opt-in suites (decided in M1-S2).** Tests that are too heavy for every run (the 43-minute native web build) or that need a local, uncommitted input (a real built bundle) live in `tests/acceptance/<story>/optin/*.optin.mts`. The default glob (`*.test.mts`) never matches them, so they are separate suites run by name, not skipped tests. A heavy suite that must not start by accident on the Pi fails with instructions unless an explicit env interlock is set (for example `NOTESTEAD_ALLOW_ARM64_WEB_BUILD=1`); CI runs it on x64.
 - **Setup in `before` hooks** goes through `attempt()`/`settled()` (`tests/acceptance/support/webBundle.mts`): a throwing hook would *cancel* the tests in node:test instead of failing each one with the reason.
+- **Static pipeline checks (decided in M1-S3).** Workflows are tested like code: `corepack yarn check:workflows` runs one pinned actionlint (with shellcheck pinned or disabled, so a tool on `PATH` cannot change the result) plus the repo's own rules (`[sha-pin]`, `[permissions]`, `[pull-request-target]`). Its acceptance tests use committed `*.yml.fixture` workflows outside `.github/` (so no bot or scanner treats them as live), copied into a temp `.github/` tree per test, each a declared edit of one valid fixture.
 - **Jest** (unit, integration, contract), as upstream. **Playwright** (E2E), as upstream, Chromium only.
 - **Upstream test helpers** (`@joplin/lib/testing/test-utils`) are not used until proven to work outside the monorepo (they hard-code monorepo paths, findings §5). Upstream test code is reused as a *pattern* only, never copied.
 
@@ -56,6 +57,8 @@ Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
 | `ubuntu-24.04-arm` (arm64) | same | consumes the x64-built bundle |
 
 Artifacts on failure: `test-results/**`, `playwright-report/**`, traces, container logs. The acceptance suite also emits JUnit (`--test-reporter=junit`) for CI.
+
+**CI evidence (from M1-S3).** CI uploads `test-results/**` (JUnit plus the redacted per-command logs) on every run, not only on failure, and writes the per-suite totals to the job summary. A CI result counts in a test plan only with the run URL, the head SHA and the runner image; downloaded evidence is kept under `test-results/ci/<run-id>/`. An acceptance criterion that can only run in CI stays **PENDING-CI** until that evidence exists; it never gets a local stand-in test. **JUnit counts never stand alone:** node:test writes no JUnit entry for a failing `describe`-level hook, so a result is read together with the test step's exit code or outcome (shown in the job summary). Reporter options go before the file glob; node:test ignores them after it. The procedure is in `docs/test-plans/M1-S3.md`.
 
 ## 8. Ownership and process
 - QA writes `docs/test-plans/<story>.md` and failing tests first (RED), then verifies and appends `## Results`.

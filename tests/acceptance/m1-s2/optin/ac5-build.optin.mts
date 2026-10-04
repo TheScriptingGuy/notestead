@@ -8,10 +8,15 @@
 //   node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-build.optin.mts
 // CI runs it on x64 (M1-S3 web-bundle.yml). On arm64 it also requires NOTESTEAD_ALLOW_ARM64_WEB_BUILD=1 (an interlock
 // against starting a 43-minute, swap-filling job by accident; resource rules in CLAUDE.md).
-// Optional: NOTESTEAD_BUILD_WORK=<dir> puts the upstream checkout on a disk with room (default: a temp dir).
+// Optional: NOTESTEAD_BUILD_WORK=<dir> puts the upstream checkout on a disk with room (default: a temp dir). The dir must
+// be new, empty, or one created by an earlier `build` (it carries the `.notestead-web-build-work` marker); `build`
+// refuses any other directory without changing it, and resets and cleans a marked one before building.
+// Optional: NOTESTEAD_BUILD_OUT=<dir> keeps the artifact (web-bundle-<tag>.tar.zst, SHA256SUMS, bundle-manifest.json)
+// in <dir> instead of a temp dir that is deleted afterwards, so CI uploads the artifact T90 verified (M1-AC27). The dir
+// must be new or empty.
 // Test plan: docs/test-plans/M1-S2.md.
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { assertExitZero, assertOutputIncludes, makeTempDir, readPin, removeDir } from '../../support/repo.mts';
@@ -39,7 +44,10 @@ describe('M1-AC5 build (full upstream recipe; opt-in)', () => {
 		temps.push(base);
 		const work = process.env.NOTESTEAD_BUILD_WORK ?? join(base, 'work');
 		if (!process.env.NOTESTEAD_BUILD_WORK) temps.push(work);
-		const out = join(base, 'out');
+		const keptOut = process.env.NOTESTEAD_BUILD_OUT;
+		assert.ok(!keptOut || !existsSync(keptOut) || readdirSync(keptOut).length === 0,
+			`NOTESTEAD_BUILD_OUT=${keptOut ?? ''} must be a new or empty directory (T90 checks the exact artifact file set)`);
+		const out = keptOut ?? join(base, 'out');
 		const r = webBuild('T90-build', 'build', ['--out', out, '--work', work], { timeoutMs: 180 * minute });
 		assertExitZero(r);
 		// The recipe is echoed: the onenote converter build is skipped and app-mobile's `yarn web` runs.
