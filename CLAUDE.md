@@ -82,11 +82,18 @@ The main Claude session is the **only orchestrator**. It dispatches one agent at
 
 ## Testing conventions
 - **Test pyramid:** unit (Jest, mocked Data API client), integration (real CLI profile), contract (a throwaway `joplin/server` container ↔ headless ↔ MCP over real HTTP), E2E (Playwright on a real browser against the web container).
-- **Throwaway Joplin Server for tests:** `joplin/server:<pinned tag>` with `APP_ENV=dev` (or `--env dev`) and `JOPLIN_IS_TESTING=1`.
+- **Throwaway Joplin Server for tests:** `joplin/server:<pinned tag>` started with the command `node dist/index.js --env dev --env-file /dev/null` and env `JOPLIN_IS_TESTING=1`.
+  - `APP_ENV=dev` is ignored by the image.
+  - Without `--env-file`, dev mode looks for a credentials file.
+  - Recipes are in `docs/spikes/S2/`.
   - Seed with `POST /api/debug {"action":"createTestUsers"}` (`admin@localhost`/`admin`, `user1@example.com`/`111111`).
   - Reset with `clearDatabase`.
   - Readiness: `GET /api/ping` → `{"status":"ok",…}`.
 - **Never point automated tests at the user's real Joplin Server.**
+- **CLI gotchas** (CLI 3.7.1, verified in spikes S3/S4):
+  - Run the headless container with an init process (`podman run --init`). Otherwise stopped CLI children become zombies and hang the sync cycle.
+  - A standalone `joplin e2ee enable --password …` exits 0 but saves nothing. Run it inside `joplin batch` together with `sync`.
+  - The CLI writes the full Data API token into `log-clipper.txt`. Rotate the token on every start, and never collect that log unredacted.
 - **Assert on data** through the Data API or MCP as well as through the UI. Use `expect.poll`/`waitFor`, never fixed sleeps. Isolate per test (fresh browser context and OPFS, fresh profile). Attach server, headless and browser-console logs to failing tests.
 - Keep the good patterns from the user's plugin repo (thescriptingguy/joplin-repeating-todos-plugin): negative controls, "type like a user" input helpers, a hand-written `jest.fn` mock module with a reset helper and pinned fake timers.
 - **No `.only`, no skipped tests,** and never weaken an assertion to make a test pass.
