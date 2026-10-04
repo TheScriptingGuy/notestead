@@ -1,0 +1,59 @@
+# Test strategy (living document)
+
+Owner: `qa-specialist`. Source decisions: ADR-0007 (test strategy and harness), ADR-0005 (version pin), ADR-0009 (layout and tooling), `CLAUDE.md` testing conventions. This file grows with each story; M1-S6 adds the harness and fixture details.
+
+## 1. Standard
+Every feature is proven end to end on real components, on arm64 (the Pi) and x64 (CI), by tests that would fail if the feature broke. A test that cannot fail is not a test: every acceptance criterion with a meaningful failure mode has a **negative control**, and every negative control has a **positive control** run through the same command, so a broken harness cannot pass as a "correct failure".
+
+## 2. Pyramid
+| Layer | Scope | Runner | Location | Real components |
+|---|---|---|---|---|
+| **Acceptance (repo-level)** | Black-box checks of the repository contract: root scripts, pin and lockfile checks, no-upstream-copy, lint rules. Runs `corepack yarn …` as a user would, against committed fixtures. | Node built-in `node:test` (see §3) | `tests/acceptance/<story>/*.test.mts` | yarn, eslint, tsc, Jest, git, the pinned upstream tree |
+| **Unit** | Pure logic: MCP handlers, sanitizer, supervisor state machine, `SyncStrategy`, Data API client, config parsing, redaction, pin parsing | Jest + ts-jest; hand-written mock Data API module (`tests/mocks/dataApi.ts`, `jest.fn` per method + `resetDataApiMock()`, mapped with `moduleNameMapper`); fake timers with a pinned clock | `packages/*/src/**/*.test.ts`, `tests/unit/**/*.test.ts` | none (mocks allowed only here) |
+| **Integration** | Supervisor and scripts against a real `joplin` CLI child process on a temp profile; scripts against a real upstream git tree | Jest + execa; fresh temp profile per test | `tests/integration/**/*.test.ts` | CLI, git |
+| **Contract** | Real HTTP between real components: throwaway `joplin/server:<pin>` ↔ `web` proxy ↔ `headless` ↔ MCP. Suites: `proxy`, `rest-shape`, `mcp-upstream`, `headless`. | Jest + `tests/stack` podman helper | `tests/contract/**/*.test.ts` | all containers |
+| **E2E** | Real Chromium against the real `web` container with server and headless running; cross-surface flows | Playwright, 1 worker on the Pi | `tests/e2e/**/*.spec.ts` | everything |
+| **Release smoke** | Published artifacts on amd64 + arm64: run, health, signatures/attestations, no upstream logos, AGPL source offer | Playwright/Jest (decided in M5) | `tests/release/**` | published images, npm package, tarball |
+
+Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
+
+## 3. Tooling choices
+- **`node:test` for repo-level acceptance tests (decided in M1-S1).** The first story has to fail meaningfully *before* `package.json`, yarn and Jest exist, and must keep working after. `node:test` ships with Node (24 on the Pi, 22 LTS in CI), needs no install, and runs TypeScript through Node's built-in type stripping. Files use the `.mts` extension (always ESM, independent of the root `package.json` `type`) and erasable-only TypeScript syntax (no enums, no parameter properties, `import type` for types). The suite shells out to `corepack yarn …` with `spawnSync` and writes one log per command under `test-results/acceptance/`.
+  - The acceptance suite is **not** part of `corepack yarn test` (it runs `yarn test` itself, so including it would recurse). Jest's `testMatch` must not collect `tests/acceptance/**`; Playwright's `testDir` is `tests/e2e`.
+  - Canonical command: `node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/<story>/*.test.mts'`. Files run one at a time (resource rule: one heavy job at a time).
+- **Jest** (unit, integration, contract), as upstream. **Playwright** (E2E), as upstream, Chromium only.
+- **Upstream test helpers** (`@joplin/lib/testing/test-utils`) are not used until proven to work outside the monorepo (they hard-code monorepo paths, findings §5). Upstream test code is reused as a *pattern* only, never copied.
+
+## 4. Fixtures and isolation
+- **Committed data fixtures** live under `tests/fixtures/<story>/`. File names encode the expectation where possible (for example `pin/invalid/<field>--<case>.json`: the checker must name `<field>`), so engineers can reuse them in their own unit tests.
+- **Upstream content is never committed as a fixture.** Tests that need a verbatim upstream file generate it at test time from the pinned commit (`JOPLIN_UPSTREAM_DIR`, then `~/joplin-web-app-work/upstream-joplin`, then a raw fetch of `web.repo` at `web.commit`) into a temp dir that is deleted in teardown.
+- **Fixtures that must be seen by a tool** (for example lint negatives) are committed with a `.fixture` suffix so no tool picks them up, copied into place for one run, and removed in `after`; the test asserts `git status` is unchanged afterwards.
+- **Planned harness fixtures (M1-S6, ADR-0007):** `joplinServer` (worker-scoped; `node dist/index.js --env dev --env-file /dev/null`, `JOPLIN_IS_TESTING=1`; readiness by polling `GET /api/ping` for `{"status":"ok"}`; seeded with `createTestUsers`; per-test users through the admin API; `clearDatabase` in worker teardown; free ports; container removal in teardown), `headless` (fresh profile/supervisor), `e2eeAccount` (CLI "other device", `e2ee enable` inside `joplin batch` with `sync`), `webApp` (fresh `BrowserContext`, OPFS isolated, served on `127.0.0.1`), `mcpClient`, `dataApi`. Page objects use `getByRole`.
+- **Real-server guard:** the harness refuses any `JOPLIN_SERVER_URL` that is not a container it started (M1-AC19). Automated tests never touch the user's server or notes.
+
+## 5. Rules
+- Assert on **data** (Data API / MCP / files / exit codes) in addition to the UI.
+- **No fixed sleeps.** Use `expect.poll` / `waitFor` / readiness probes. ESLint bans `page.waitForTimeout`, sleep helpers, `.only`, `.skip`, `test.fixme` (ADR-0009); M1-AC1 proves the rules fire.
+- **No `.only`, no skipped tests, no weakened assertions.** A failing test is fixed or the feature is fixed.
+- **"Type like a user"** input helpers in E2E (real key events, no synthetic change events).
+- **Isolation:** no state shared between tests in a file; fresh context, profile and temp dirs per test.
+- **Logs on failure:** server logs, supervisor logs (redacted), browser console, Playwright trace, Caddy access log (redacted). Acceptance tests write every command's output to `test-results/acceptance/**`. No unredacted `token=` or `X-API-AUTH` in any artifact.
+- **Version-pinned app under test:** every test reads versions from `upstream/joplin-version.json`; nothing hard-codes an upstream version except fixtures that deliberately test the pin checker.
+
+## 6. Flake policy
+- No retries locally. CI uses `retries: 1` with a flaky report; a test that is flaky twice in a week becomes a bug with a root cause, not a retry bump.
+- A flaky test is never skipped to get green.
+
+## 7. Where tests run (CI matrix)
+| Where | Layers | Notes |
+|---|---|---|
+| Pi (arm64, local) | all | one heavy job at a time; Playwright `workers: 1`; installed Chromium in `~/.cache/ms-playwright` (explicit `executablePath` allowed) |
+| `ubuntu-24.04` (x64) | acceptance, lint, unit, integration, contract, E2E | web bundle built once on x64 and shared as an artifact |
+| `ubuntu-24.04-arm` (arm64) | same | consumes the x64-built bundle |
+
+Artifacts on failure: `test-results/**`, `playwright-report/**`, traces, container logs. The acceptance suite also emits JUnit (`--test-reporter=junit`) for CI.
+
+## 8. Ownership and process
+- QA writes `docs/test-plans/<story>.md` and failing tests first (RED), then verifies and appends `## Results`.
+- Engineers never edit `tests/**`; disagreements go to `## Disputes` in the test plan and QA decides in writing.
+- When a test needs a production seam (a flag, an env var, an injectable clock), the test plan describes it and the engineer implements it.

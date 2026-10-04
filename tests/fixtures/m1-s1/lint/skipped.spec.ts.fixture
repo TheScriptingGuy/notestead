@@ -1,0 +1,6 @@
+// M1-AC1 NEG fixture (ADR-0009): `corepack yarn lint` must reject it with playwright/no-skipped-test.
+import { expect, test } from '@playwright/test';
+
+test.skip('a skipped Playwright test must be rejected by lint', async ({ page }) => {
+	await expect(page).toHaveTitle('');
+});

@@ -1,0 +1,7 @@
+// M1-AC1 NEG fixture (copied into place by tests/acceptance/m1-s1/ac1-scaffold.test.mts, then removed).
+// `corepack yarn lint` must reject it with jest/no-focused-tests.
+import { expect, test } from '@jest/globals';
+
+test.only('a focused test must be rejected by lint', () => {
+	expect(1 + 1).toBe(2);
+});

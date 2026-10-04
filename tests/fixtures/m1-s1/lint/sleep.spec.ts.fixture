@@ -1,0 +1,8 @@
+// M1-AC1 NEG fixture (ADR-0007/0009): `corepack yarn lint` must reject `page.waitForTimeout`
+// with a no-restricted-syntax (or equivalent restricted-property) rule.
+import { expect, test } from '@playwright/test';
+
+test('a fixed sleep must be rejected by lint', async ({ page }) => {
+	await page.waitForTimeout(1000);
+	await expect(page).toHaveTitle('');
+});
