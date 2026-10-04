@@ -21,9 +21,13 @@ describe('M1-AC7 verify rejects upstream icon hashes', () => {
 	let setup: Attempt<{ overlay: RunResult; overlaidTree: Tree }> | null = null;
 
 	// The overlaid F2 bundle (upstream public/ + synthetic webpack outputs, then `overlay`): the positive control.
+	// Since M1-AC29 `verify` also requires third-party-notices.txt linked from source.html; `build` writes the file
+	// before the overlay, so this fixture carries a placeholder from the start (docs/test-plans/M1-S9.md).
 	before(() => {
 		setup = attempt(() => {
-			const dir = materialize('m1s2-ac7-overlaid', upstreamPublicBundle());
+			const bundle = upstreamPublicBundle();
+			bundle.set('third-party-notices.txt', Buffer.from('Third-party notices (M1-S2 AC7 fixture placeholder)\n'));
+			const dir = materialize('m1s2-ac7-overlaid', bundle);
 			temps.push(dir);
 			const overlay = webBuild('T70-overlay-F2', 'overlay', [dir]);
 			return { overlay, overlaidTree: overlay.code === 0 ? readTree(dir) : new Map<string, Buffer>() };

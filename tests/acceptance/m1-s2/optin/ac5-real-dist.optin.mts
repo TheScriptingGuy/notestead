@@ -5,7 +5,7 @@
 // Default dist: the spike S1 output ~/joplin-web-app-work/spikes/S1/joplin/packages/app-mobile/web/dist.
 // Test plan: docs/test-plans/M1-S2.md.
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -31,6 +31,9 @@ describe('M1-AC5..AC7 on a real upstream bundle (opt-in, local)', () => {
 		temps.push(base);
 		const dist = join(base, 'dist');
 		cpSync(realDist, dist, { recursive: true });
+		// Since M1-AC29 `verify` requires third-party-notices.txt (written by `build` before the overlay). This test
+		// covers overlay → verify → package; the real notices are M1-S9's T490/T491 (docs/test-plans/M1-S9.md).
+		writeFileSync(join(dist, 'third-party-notices.txt'), 'Third-party notices (M1-S2 T95 placeholder)\n');
 
 		assertExitZero(webBuild('T95-overlay', 'overlay', [dist]));
 		assertExitZero(webBuild('T95-verify', 'verify', [dist]));
