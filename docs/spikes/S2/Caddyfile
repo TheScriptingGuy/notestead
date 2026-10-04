@@ -1,0 +1,110 @@
+# Spike S2: same-origin reverse proxy in front of a Joplin Server.
+# Spike-only config (the production Caddyfile is written by the engineer in deploy/).
+#
+# Env:
+#   JOPLIN_SERVER_DIAL        upstream to dial, e.g. http://jserver:22300
+#   JOPLIN_SERVER_HOST        Host header the server expects = host[:port] of its APP_BASE_URL
+#   JOPLIN_SERVER_PUBLIC_URL  public URL of the server (for published-note redirects)
+#   COEP                      credentialless | require-corp
+{
+	admin off
+	auto_https off
+	servers {
+		# Only trust X-Forwarded-For from these proxies (none in the spike).
+		trusted_proxies static 10.255.255.254/32
+	}
+}
+
+(app_headers) {
+	header {
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "{$COEP:credentialless}"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+(redacted_log) {
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				replace token REDACTED
+			}
+			request>headers>X-Api-Auth replace REDACTED
+			request>headers>Authorization replace REDACTED
+		}
+	}
+}
+
+# Main site: bundle + proxy, as designed.
+:8080 {
+	import app_headers
+	import redacted_log
+
+	# Links to published notes created in the web app are built from the sync URL
+	# (`${sync.9.path}/shares/<id>`). Never serve user content from the app origin:
+	# redirect to the server's own public origin instead.
+	@shares path_regexp shares ^/joplin-server/shares/([A-Za-z0-9]+)$
+	redir @shares {$JOPLIN_SERVER_PUBLIC_URL}/shares/{re.shares.1} 302
+
+	handle_path /joplin-server/* {
+		@api path /api/*
+		handle @api {
+			reverse_proxy {$JOPLIN_SERVER_DIAL} {
+				header_up Host {$JOPLIN_SERVER_HOST}
+				header_up -Origin
+				header_up -Referer
+				header_up -Cookie
+				header_up X-Real-IP {client_ip}
+				header_down -Set-Cookie
+				flush_interval -1
+			}
+		}
+		# Server web UI (/login, /admin, /users ...) is not re-published.
+		respond 404
+	}
+
+	handle {
+		root * /srv/www
+		@wasm path *.wasm
+		header @wasm Content-Type application/wasm
+		file_server
+	}
+}
+
+# Internal listener for the headless container (backend network only): sync proxy, nothing else.
+:8089 {
+	import redacted_log
+	handle_path /joplin-server/* {
+		@api path /api/*
+		handle @api {
+			reverse_proxy {$JOPLIN_SERVER_DIAL} {
+				header_up Host {$JOPLIN_SERVER_HOST}
+				header_up -Origin
+				header_up X-Real-IP {client_ip}
+				flush_interval -1
+			}
+		}
+		respond 404
+	}
+	respond 404
+}
+
+# Negative control 1: proxy WITHOUT Host rewrite (expect "Invalid origin").
+:8081 {
+	handle_path /joplin-server/* {
+		reverse_proxy {$JOPLIN_SERVER_DIAL}
+	}
+}
+
+# Negative control 2: proxy that forwards a client-supplied X-Real-IP unchanged
+# (shows why the main site must overwrite it).
+:8082 {
+	handle_path /joplin-server/* {
+		reverse_proxy {$JOPLIN_SERVER_DIAL} {
+			header_up Host {$JOPLIN_SERVER_HOST}
+		}
+	}
+}
