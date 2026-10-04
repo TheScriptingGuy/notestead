@@ -1,7 +1,7 @@
 # ADR-0007: Test strategy and harness
 
 ## Status
-Proposed (Phase A, 2026-10-03). The QA specialist owns and expands it in `docs/testing/strategy.md` once the plan is approved.
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day (see Amendments). Proposed in Phase A (2026-10-03). The QA specialist owns and expands it in `docs/testing/strategy.md` once the plan is approved.
 
 ## Context
 - **Upstream has no tests for the web build and no CI job builds it** (findings §1). Our suite is therefore the only gate between an upstream bump and the user's notes.
@@ -28,7 +28,7 @@ Proposed (Phase A, 2026-10-03). The QA specialist owns and expands it in `docs/t
 | **E2E** | A real browser against the real `web` container (served bundle + proxy) with server and headless running | Playwright, Chromium (1 worker on the Pi) | Pi + CI |
 
 **Contract suites:**
-- **`proxy`:** the S2 checklist C1–C8 plus R1–R3, including the negative controls (no Host rewrite → `Invalid origin`; passing `X-Real-IP` through → limiter bypass).
+- **`proxy`:** the S2 checklist C1–C8 plus R1–R3, and since gate 1 C9/C10 and the tunnel-mode client-IP check with R5-neg (S6), including the negative controls (no Host rewrite → `Invalid origin`; passing `X-Real-IP` through → limiter bypass; `CF-Connecting-IP` from an untrusted peer → ignored). A fixture container at the trusted address stands in for cloudflared, so no Cloudflare account is needed in tests.
 - **`rest-shape`:** snapshots of response *shapes* (keys and types, not values) for every route we use.
 - **`mcp-upstream`:** `tools/list` snapshot of the upstream allow-listed tools (names, descriptions and input schemas).
 - **`headless`:**
@@ -93,3 +93,6 @@ Proposed (Phase A, 2026-10-03). The QA specialist owns and expands it in `docs/t
 - **S3:** the CLI integration patterns and timings.
 - **S4:** Playwright on the Pi with OPFS/COEP.
 - **M1 acceptance criteria:** the walking skeleton on both architectures.
+
+## Amendments (2026-10-04, gate 1)
+- The `proxy` contract suite gains C9 (Cloudflare Access headers not forwarded), C10 (`no-store, no-transform`) and the tunnel-mode client-IP test with negative control R5-neg (ADR-0002 rule 4, S6). Real-Cloudflare checks happen only in the user's manual smoke test (M5-AC11); automated tests never need a Cloudflare account.

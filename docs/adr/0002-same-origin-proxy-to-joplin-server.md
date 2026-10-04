@@ -1,7 +1,7 @@
 # ADR-0002: Same-origin reverse proxy from the web origin to the user's Joplin Server
 
 ## Status
-Proposed (Phase A, 2026-10-03). Verified by spike S2: GO-WITH-CONDITIONS, see `docs/spikes/S2-same-origin-proxy.md`.
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day for the Cloudflare Tunnel front (see Amendments). Proposed in Phase A (2026-10-03). Verified by spike S2 (GO-WITH-CONDITIONS, `docs/spikes/S2-same-origin-proxy.md`) and spike S6 (GO-WITH-CONDITIONS, `docs/spikes/S6-cloudflare-tunnel.md`).
 
 ## Context
 - **The web app syncs from the browser.** Its sync client builds every request as `${sync.9.path}/${path}` (`upstream:packages/lib/JoplinServerApi.ts:203`). Every path the client uses starts with `api/` (`api/items/…`, `api/batch_items`, `api/locks`, `api/sessions`, `api/shares`, `api/share_users`, `api/users/…`; grep of `packages/lib` at `v3.7.21`). Auth is the `X-API-AUTH` header plus `X-API-MIN-VERSION`, with no cookies (`JoplinServerApi.ts:183-184`).
@@ -28,17 +28,24 @@ The user enters `https://<web-host>/joplin-server` as the Joplin Server URL in t
 **Proxy rules** (each one has a contract test from S2):
 1. **Host rewrite:** `header_up Host {JOPLIN_SERVER_HOST}`. It defaults to the host of `JOPLIN_SERVER_PUBLIC_URL`, which must equal the server's `APP_BASE_URL`. *(C1; negative control C1-neg: without it the server answers `404 Invalid origin`.)*
 2. **Prefix strip** via `handle_path /joplin-server/*`. Only `/api/*` is forwarded. *(C1, C3, C4.)*
-3. **Strip `Origin`, `Referer` and `Cookie`** upstream, and `Set-Cookie` downstream. Same-origin requests don't need CORS. Stripping keeps the server's CORS layer from echoing `https://joplinapp.org` and keeps browser cookies away from the server. *(C2.)*
-4. **Overwrite `X-Real-IP`** with Caddy's `{client_ip}`. `trusted_proxies` is set to the user's front proxy only, if any. The limiter then stays per real client and can't be bypassed by a client-supplied header. *(R1, R2; negative control R3-neg: passing the header through lets a client reset the limiter at will.)*
-5. **Streaming both ways** (`flush_interval -1`; Caddy doesn't buffer bodies by default). Attachments up to the server's 200 MB hard limit (`ItemModel.itemSizeHardLimit`) pass through. *(C5: 100 MiB round trip, sha256 equal.)*
+3. **Strip `Origin`, `Referer` and `Cookie`** upstream, and `Set-Cookie` downstream. Same-origin requests don't need CORS. Stripping keeps the server's CORS layer from echoing `https://joplinapp.org` and keeps browser cookies away from the server. Also strip the Cloudflare Access credentials `Cf-Access-Jwt-Assertion` and `Cf-Access-Authenticated-User-Email` upstream (gate 1). *(C2, C9.)*
+4. **Overwrite `X-Real-IP`** with Caddy's `{client_ip}`, which comes from exactly one source:
+   - **`CF-Connecting-IP`, only when the TCP peer is cloudflared** (`TRUSTED_PROXIES` = cloudflared's fixed address, `CLIENT_IP_HEADER=CF-Connecting-IP`; the default front since gate 1, ADR-0006).
+   - **the TCP peer** for every other request (LAN clients, the internal listener, any other container).
+   - With an existing reverse proxy instead of the tunnel, `TRUSTED_PROXIES` names that proxy and `CLIENT_IP_HEADER` names the single header it sets (`X-Real-IP`, or `X-Forwarded-For` parsed right to left).
+   - Never the left part of `X-Forwarded-For`: Cloudflare *appends* to a client-supplied value (S6 T2b).
+
+   The limiter then stays per real client and can't be bypassed by a client-supplied header. *(R1, R2; negative controls: R3-neg, passing the header through lets a client reset the limiter at will; R5-neg, `CF-Connecting-IP` from a peer other than cloudflared is ignored, S6 T3/T4.)*
+5. **Streaming both ways** (`flush_interval -1`; Caddy doesn't buffer bodies by default). Attachments up to the server's 200 MB hard limit (`ItemModel.itemSizeHardLimit`) pass through our proxy. *(C5: 100 MiB round trip, sha256 equal.)* The front can be stricter: Cloudflare caps request bodies per plan (Free/Pro 100 MB, Business 200 MB). Upstream treats the resulting 413 as "rejected by target", so the item shows as "cannot sync" and the rest of the sync continues (`upstream:packages/lib/file-api-driver-joplinServer.ts:188-193`, `upstream:packages/lib/Synchronizer.ts:810-812`). With E2EE the upload is ≈ 1.34× the attachment, so the web app's practical attachment limit behind Free/Pro is ≈ 74 MB (limitation L16, S6).
 6. **Published notes are never served from the app origin.** `/joplin-server/shares/<id>` redirects to the server's public URL. The server renders user content on its own origin, which holds no OPFS data or secrets. *(C6.)*
-7. **Access-log redaction** of `X-Api-Auth`, `Authorization`, `Cookie` and the `token` query parameter. *(C8.)*
+7. **Access-log redaction** of `X-Api-Auth`, `Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, `CF-Access-Client-Secret` and the `token` query parameter. *(C8.)*
+8. **No caching or transformation by a front** (gate 1): proxied responses carry `Cache-Control: no-store, no-transform`. *(C10.)*
 
 **Configuration** (env):
-- `JOPLIN_SERVER_URL`: the address Caddy dials, which may be internal, e.g. `http://192.168.1.10:22300`.
+- `JOPLIN_SERVER_URL`: the address Caddy dials. It **must be a direct address** of the server (LAN or container network, e.g. `http://192.168.1.10:22300`), not a Cloudflare-proxied hostname: Cloudflare strips `X-Real-IP` (S6 T2b), and the headless sync path would then also be subject to the body limit and an extra edge round trip.
 - `JOPLIN_SERVER_PUBLIC_URL`: the server's `APP_BASE_URL`.
 - `JOPLIN_SERVER_HOST`: optional override.
-- `TRUSTED_PROXIES`.
+- `TRUSTED_PROXIES`, `CLIENT_IP_HEADER` (default: none trusted, TCP peer only; the `tunnel` compose profile sets cloudflared's fixed address and `CF-Connecting-IP`).
 
 The headless container reaches the same server **through this proxy** on an internal-only listener (ADR-0006). That gives the headless service exactly one egress path.
 
@@ -53,6 +60,7 @@ The headless container reaches the same server **through this proxy** on an inte
 ## Consequences
 - The web app works with an **unmodified** Joplin Server of any 3.x version whose sync API lives under `/api/`.
 - If the user's server sits behind another proxy that already sets `X-Real-IP`, the web container must be listed in that proxy's trust, or its own `trusted_proxies` must include it. Otherwise the limiter sees a single IP. This is documented in the deploy guide.
+- Under rootless podman, a direct request through a published port arrives with the `web` container's own address as its source (S6 T3), so all direct-LAN clients share one limiter key. That is stricter, not bypassable. Tunnel clients are keyed individually by `CF-Connecting-IP`.
 - Published-note links created in the web app are only useful if `JOPLIN_SERVER_PUBLIC_URL` is reachable by the people the user shares with. This is the same as for links created by desktop/mobile.
 
 ## Upgrade impact
@@ -63,8 +71,16 @@ The headless container reaches the same server **through this proxy** on an inte
 
 ## Verification
 - **Spike S2:** C1–C8 and R1–R3 with outputs.
+- **Spike S6:** the client-IP rule behind cloudflared (T2–T4), header pass-through (T1), `no-transform` (T5).
 - **Backlog:**
   - M1-AC10, M1-AC11, M1-AC13 (proxy contract suite, rate limiter, internal listener)
   - M2-AC1 (browser sync through the proxy)
   - M2-AC7 (large attachment through the browser)
   - M2-AC14 (published-note link redirect)
+
+## Amendments (2026-10-04, gate 1)
+- **Front = Cloudflare Tunnel** (user decision). Rule 4 now names its single client-IP source: `CF-Connecting-IP` only from cloudflared's fixed address, otherwise the TCP peer; new negative control R5-neg (M1-AC11).
+- Rule 3 also strips Cloudflare Access credentials upstream (C9); rule 7 redacts them; new rule 8 sends `no-store, no-transform` on proxied responses (C10). Both in M1-AC10.
+- Rule 5 documents the Cloudflare body limit and upstream's per-item 413 handling (limitation L16).
+- `JOPLIN_SERVER_URL` must be a direct address, never a Cloudflare-proxied hostname.
+- Evidence: `docs/spikes/S6-cloudflare-tunnel.md`.

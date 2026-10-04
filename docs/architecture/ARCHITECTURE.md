@@ -1,6 +1,6 @@
-# Architecture: a self-hosted web app, Data API and MCP stack for Joplin (unofficial)
+# Architecture: Notestead for Joplin (unofficial), a self-hosted web app, Data API and MCP stack
 
-Status: **Proposed**, Phase A / M0, 2026-10-03 (architect). It becomes binding when the user approves it (tag `plan-approved-v1`).
+Status: **Approved** at gate 1 on 2026-10-04 (tag `plan-approved-v1`), with the gate 1 amendments applied the same day (§14: Cloudflare Tunnel front, the name Notestead, versioning rule D7, the user's versions). Proposed in Phase A / M0, 2026-10-03 (architect).
 
 Upstream reference: laurent22/joplin `release-3.7` @ `e41516e66` (tag `v3.7.21`), npm `joplin@3.7.1` (`cli-v3.7.1` = `425a05ac4`), `joplin/server:3.7.2` (`server-v3.7.2`). Citations look like `upstream:<path>:<line>` and point into `~/joplin-web-app-work/upstream-joplin`.
 
@@ -14,7 +14,8 @@ Upstream reference: laurent22/joplin `release-3.7` @ `e41516e66` (tag `v3.7.21`)
   1. **Web UI:** the real Joplin UI in a browser, syncing with their existing server, with installable plugins.
   2. **Headless Data API:** the same REST Data API that the desktop app exposes, kept in sync and decrypted.
   3. **MCP server:** AI clients can manage notes, to-dos with alarms, notebooks and tags, reorganise them and trigger sync.
-- **Public distribution** of the stack (images, an npm MCP package, the bundle) is also a goal. The channels are chosen in `docs/delivery/channels.md`, pending (ci-cd-specialist).
+- **Public distribution** of the stack (images, an npm MCP package, the bundle) is also a goal, under the public name **Notestead** ("Notestead for Joplin (unofficial)"). The channels are chosen in `docs/delivery/channels.md` (approved at gate 1); artifact names are in ADR-0006.
+- **The HTTPS front is Cloudflare Tunnel** (gate 1): `cloudflared` → the `web` container (ADR-0006, S6).
 
 **Goals.**
 - G1. Reuse upstream components through published or documented interfaces. **No fork.** Zero source patches today.
@@ -25,7 +26,7 @@ Upstream reference: laurent22/joplin `release-3.7` @ `e41516e66` (tag `v3.7.21`)
   - no server-side changes
   - tests never touch the real server
 - G5. Secure by default (§5): E2EE secrets, the Data API token, LLM-controlled input, the file:// exfiltration path.
-- G6. Simple: two small containers, one compose file.
+- G6. Simple: two small containers, one compose file (plus the optional `cloudflared` container for the tunnel front).
 
 **Non-goals.**
 - Modifying or replacing Joplin Server, or hosting it.
@@ -58,11 +59,12 @@ flowchart LR
   JS[("User's Joplin Server<br/>(unmodified)")]
   AI["AI client<br/>(Claude, …)"]
   DEV["User's desktop / phone"]
-  UI --> ST
-  UI -- same-origin --> PX --> JS
+  CF["Cloudflare edge → cloudflared<br/>(default HTTPS front, CF-Connecting-IP)"]
+  UI -- HTTPS --> CF --> ST
+  CF -- "same-origin /joplin-server/api/*" --> PX --> JS
   SH -.-> JS
   SUP -- "joplin sync (via)" --> IP --> JS
-  AI -- "HTTPS + Bearer" --> OPT --> SUP
+  AI -- "HTTPS + Bearer" --> CF --> OPT --> SUP
   SUP --> MCP -- "REST ?token= / JSON-RPC" --> CLI
   SUP -- "child processes:<br/>config --import · sync · e2ee decrypt · server start" --> CLI
   CLI --- P
@@ -76,6 +78,7 @@ flowchart LR
 | `headless` container | Node supervisor running the pinned CLI through public commands | ours (supervisor) + upstream (CLI) | 0003 |
 | MCP server | `@modelcontextprotocol/sdk` server. Passes allow-listed upstream `/mcp` tools through, and adds REST gap tools. | ours + upstream tools | 0004 |
 | Data API client | typed client for the documented REST API, with guards | ours | 0004, 0008 |
+| `cloudflared` (optional, compose profile `tunnel`) | Cloudflare's official tunnel connector, pinned by digest; the default HTTPS front | third party (not Joplin) | 0006, 0008 |
 
 ## 3. Deployment topology (x64 and arm64)
 
@@ -86,25 +89,28 @@ flowchart TB
   subgraph Host["Docker/podman host (Pi 4 arm64 or x64)"]
     subgraph FE["network: frontend (bridge, egress)"]
       web["web :8080"]
+      cfd["cloudflared (fixed address, profile tunnel)"]
     end
     subgraph BE["network: backend (internal: true)"]
       web2["web :8089 (internal listener)"]
       hl["headless :8090"]
     end
     vol[("volume headless-data")]
-    sec[("secrets: joplin_password, e2ee_master_password, mcp_token, gateway_token")]
+    sec[("secrets: joplin_password, e2ee_master_password, mcp_token, gateway_token, cf_tunnel_token (cloudflared only)")]
   end
-  TLS["User's TLS front<br/>(reverse proxy / tunnel)<br/>or Caddy ACME (option)"] --> web
+  TLS["Cloudflare edge (default front)"] --> cfd --> web
+  ALT["existing reverse proxy (alternative)<br/>or Caddy ACME in web (option)"] -.-> web
   web --> JS[("Joplin Server")]
   hl --> web2
   hl --- vol
   hl --- sec
 ```
 
-- **Only `web` publishes a port** (default `127.0.0.1:8080`), and only `web` has egress.
+- **Only `web` publishes a port** (default `127.0.0.1:8080`; with the tunnel, only for local use). Only `web` and `cloudflared` have egress, and `cloudflared` has no route to `backend`.
 - **`headless` sits on an `internal` network.** Its only route out is `web:8089`, which forwards only `/joplin-server/api/*` to the configured server (ADR-0006).
 - **No pod:** a shared localhost would expose the CLI's `127.0.0.1:41184` to `web`.
-- **TLS:** by default behind the user's existing TLS front. Optionally, Caddy handles ACME itself. For use on a single machine, `http://127.0.0.1:8080` is a secure context and needs no TLS. A private CA is unsupported (phones).
+- **TLS (gate 1): Cloudflare Tunnel by default.** `cloudflared` sits on `frontend` at a fixed address and routes the public hostname to `web:8080`; `web` trusts `CF-Connecting-IP` only from that address. The existing reverse proxy is the documented alternative, and Caddy ACME an option. For use on a single machine, `http://127.0.0.1:8080` is a secure context and needs no TLS. A private CA is unsupported (phones).
+- **`JOPLIN_SERVER_URL` is a direct address** of the user's server (LAN or container network), never a Cloudflare-proxied hostname (ADR-0002).
 - **Resources measured on the Pi:**
   - `web` (Caddy) ~12 MB RSS
   - `headless` 84–109 MB for the container (the CLI `server start` process is 134–165 MB RSS), with brief single-core peaks during sync and decrypt (S3)
@@ -116,7 +122,7 @@ flowchart TB
 ## 4. Data and sync flows (including E2EE)
 
 **Browser.**
-1. The user opens `https://<host>/`, and the service worker installs (COOP/COEP).
+1. The user opens `https://<host>/` (Cloudflare edge → cloudflared → `web`), and the service worker installs (COOP/COEP pass through Cloudflare unchanged, S6).
 2. The user picks the "Joplin Server" sync target with URL `https://<host>/joplin-server` and their credentials.
 3. Upstream's sync client calls `/joplin-server/api/*`. Caddy forwards to the server with the Host rewritten (S2 C1–C3).
 4. Items arrive encrypted. The app asks for the master password and decrypts them in the browser (WebCrypto).
@@ -175,7 +181,9 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 | Secrets at rest (Linux: plaintext in the profile DB) | Secrets come from podman secrets, are piped through `config --import` on stdin (never argv or env), the volume is `0700` and non-root. Encrypted disk is recommended. A least-privilege bot account is offered as an option (Q8). | M1-AC14, M3-AC7 |
 | Prompt injection → destructive actions | Trash by default. Permanent delete needs `MCP_ALLOW_PERMANENT_DELETE` and carries `destructiveHint`. Read-only mode. Rate limits. An audit log without content. | M4-AC9/10/17 |
 | MCP endpoint exposure / DNS rebinding | Bearer token ≥ 32 bytes, `Origin` allow-list, TLS via the front, off the host by default | M4-AC2 |
-| Proxy abuse / limiter bypass | Only `/joplin-server/api/*` is proxied. `X-Real-IP` is overwritten with the real client IP. `trusted_proxies` is set. Server UI is not re-published. | M1-AC10/11 (S2 R1–R4) |
+| Proxy abuse / limiter bypass | Only `/joplin-server/api/*` is proxied. `X-Real-IP` is overwritten with the real client IP, taken from `CF-Connecting-IP` only when the peer is cloudflared, else from the TCP peer. Server UI is not re-published. | M1-AC10/11 (S2 R1–R4, S6 R5-neg) |
+| TLS terminated by Cloudflare (gate 1) | Stated plainly (L17): Cloudflare sees the web login, session ids, the MCP bearer token and decrypted MCP results; sync payloads stay E2EE. `MCP_PUBLIC=false` keeps MCP host-local for users who don't accept it. Tunnel token from a podman secret; optional Access service token on `/mcp`; bearer token stays mandatory. | M5-AC13, M5-AC11 |
+| Front caches or rewrites the app | `Cache-Control: no-cache, no-transform` on static files, `no-store, no-transform` on API/MCP; zone checklist (Rocket Loader, Bot Fight Mode, challenges off) | M1-AC10 C10, M1-AC12, M5-AC11 |
 | User content on the app origin (XSS → OPFS secrets) | Published notes redirect to the server origin. The upstream CSP stays intact. Nothing else is served on the origin. | M2-AC14 |
 | Supply chain | Pinned commit, lockfile, image digests, SBOM, provenance, signing (ci-cd), `check:no-upstream-copy`, licence allow-list | M1-AC4, M5-AC4/5 |
 
@@ -193,6 +201,7 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 | 8 | Version safety | `syncVersion: 3` (`upstream:packages/lib/models/Setting.ts:306`) | constant | **High, and critical.** | A bump upgrades the user's sync target and locks older devices out | `check:pin`; M3-AC9; M6-AC2 |
 | 9 | Test server | `docker.io/joplin/server:3.7.2` | `node dist/index.js --env dev --env-file /dev/null`; `POST /api/debug` (`createTestUsers`, `clearDatabase`); `GET /api/ping`; `JOPLIN_IS_TESTING` | **Medium-low.** Test hooks, undocumented; the image CMD ignores `APP_ENV` (S2). | The harness can't seed | Harness self-tests M1-AC18–20 |
 | 10 | Plugins on web | Plugin API inside the bundle; plugin repo `github.com/joplin/plugins` | `.jpl` format; manifest `platforms` includes `mobile` | **Medium** | Web plugin API gaps change | M2-AC9/10 |
+| 11 | HTTPS front (third party, not Joplin) | `docker.io/cloudflare/cloudflared` (2026.9.3 at S6), pinned by digest, plus Cloudflare's edge | `CF-Connecting-IP`; plan body limits (Free/Pro 100 MB); 524 after 125 s; zone defaults (caching by extension, Email Obfuscation) | **Medium.** Documented, but limits and defaults change on Cloudflare's schedule. | Limits/timeouts tighten; a new default transformation | M1-AC11/12 (our side of the contract); M5-AC11 zone checklist on the real tunnel |
 
 ## 7. Version skew, upgrade and rollback (summary of ADR-0005)
 
@@ -204,6 +213,7 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 - **Upgrades:**
   - Patch bumps come as automated PRs gated by the full suite on both architectures (M6).
   - A minor bump happens only after the user confirms that their server and clients are on that minor, with an ADR amendment.
+  - **Our version (D7, gate 1):** one lockstep semver for all artifacts. An upstream patch is our PATCH; a Joplin minor upgrade is our **MAJOR** (MINOR while 0.x) and moves the floating `joplin<minor>` image tag (ADR-0006).
 - **Rollback:**
   - Image digests are immutable. The headless profile is snapshotted before a CLI version change (last 3 kept).
   - The browser database migrates forward only: roll back, then "clear site data" and re-sync. Unsynced local edits, local E2EE password entry and plugins are lost.
@@ -241,9 +251,11 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 - **L13.** **Upstream MCP is beta.** Its tools can change between patch releases. Snapshot tests make this visible, and the REST fallback keeps tool names stable.
 - **L14.** **The first web login adds upstream's welcome notebook** ("0. About the web app" … "5. Joplin Privacy Policy") to your account (S4). Delete it once if you don't want it. Upstream gives no option to skip it.
 - **L15.** **The web app checks connectivity against `https://joplinapp.org/connection_check/`.** It's an upstream behaviour (S4). Under cross-origin isolation the request fails harmlessly, but the attempt is visible to your network and possibly to joplinapp.org.
+- **L16.** **Attachment size through Cloudflare.** Cloudflare's Free and Pro plans accept request bodies up to 100 MB (Business 200 MB). With E2EE, an attachment grows ≈ 1.34× when encrypted, so the **web app** can upload attachments up to ≈ 74 MB on Free/Pro. Larger ones show as "cannot sync" in the web app's sync status, and the rest of the sync continues. Desktop and mobile sync directly with your server and are unaffected; so is the headless service.
+- **L17.** **Cloudflare sees your plaintext web traffic.** Cloudflare terminates TLS for the tunnel, so it can see the web login (your Joplin Server password), session ids, the MCP bearer token and the **decrypted notes that MCP returns**. Note content in sync stays end-to-end encrypted. If that's not acceptable for MCP, keep `MCP_PUBLIC=false` and use MCP only on the host, or use your own reverse proxy instead of the tunnel.
 
 ## 10. Upstream-first ledger
-Each shim we carry has an upstream change that would remove it. Filing needs the user's GitHub account (Q12):
+Each shim we carry has an upstream change that would remove it. Filing uses the user's GitHub account (Q11, approved at gate 1; U2 and U5 go privately through Joplin's security policy):
 
 | # | Proposal | Removes |
 |---|---|---|
@@ -268,7 +280,8 @@ Each shim we carry has an upstream change that would remove it. Filing needs the
 | S2 same-origin proxy | GO-WITH-CONDITIONS | Unmodified server 3.7.2 works through Caddy. The Host rewrite and the `X-Real-IP` overwrite are mandatory (negative controls prove it). 100 MiB streams with Caddy at 11 MB RSS. Share links redirect. |
 | S3 headless sync on arm64 | GO-WITH-CONDITIONS (stop-the-world); NO-GO (TUI under a PTY as the default) | The CLI 3.7.1 installs with prebuilt arm64 binaries. Non-interactive E2EE decrypt works. Settings stay intact. Egress is confined by an `--internal` network. The outage is ~16–19 s per cycle, and search is fresh 10 s after restart. Requires `--init` (zombie hang found) and token rotation (the token is in `log-clipper.txt`). |
 | S4 browser + MCP | A GO; B GO-WITH-CONDITIONS; C GO-WITH-CONDITIONS | Chromium on the Pi is cross-origin isolated with OPFS in both COEP modes. The browser syncs through the proxy and completes the E2EE round trip both ways; `info.json` stays at v3. Upstream `/mcp` works headless once enabled through `config`. REST `POST /notes` copying a local `file:` into a resource is reproduced. |
-| S5 compatibility | GO-WITH-CONDITIONS | `syncVersion` is 3 in every pinned ref. Web 3.7.21 / CLI 3.7.1 / server 3.7.2 are mutually compatible. It needs the user's server and client versions and a single master password for all keys. |
+| S5 compatibility | GO-WITH-CONDITIONS, **GO after gate 1** | `syncVersion` is 3 in every pinned ref. Web 3.7.21 / CLI 3.7.1 / server 3.7.2 are mutually compatible. The user confirmed server and clients on 3.7.x and one master password for all keys. |
+| S6 Cloudflare Tunnel front (gate 1) | GO-WITH-CONDITIONS | COOP/COEP/CORP pass through; `CF-Connecting-IP` is reliable and unspoofable when trusted only from cloudflared's address; Email Obfuscation rewrites HTML unless `no-transform`; body limit 100 MB on Free/Pro (≈ 74 MB E2EE attachments from the web app; 413 → per-item "cannot sync"); 524 after 125 s. |
 
 ## 12. Decisions (ADRs)
 
@@ -298,20 +311,38 @@ Each shim we carry has an upstream change that would remove it. Filing needs the
 
 SE = senior-engineer (`packages/**`, `deploy/**`, `upstream/**`, `patches/**`); CI = ci-cd-specialist (`.github/**`, `packaging/**`, release config, `docs/delivery/**`); QA = qa-specialist (`tests/**`, `docs/test-plans/**`).
 
-## 14. Open questions for the user
-Only decisions that are yours. Each one has a recommendation.
+## 14. Gate 1: decision log and open questions
+The user approved the plan on 2026-10-04 (tag `plan-approved-v1`) with the recommended defaults. Answers are recorded in `docs/backlog/STATUS.md`.
 
-| # | Question | Recommendation |
-|---|---|---|
-| **Q1** | **Public name, icon and trademark.** Public distribution is a goal, so this is a **precondition of the first release on any channel** (ADR-0010, M5-S1). What is the public name? Do we ask JOPLIN SAS for permission or feedback before the first public release? | A descriptive, unofficial name that never starts with a bare "Joplin" (for example "Notes Web Companion for Joplin (unofficial)"), our own icon set, and an "unofficial, not affiliated" notice everywhere. Email JOPLIN SAS before the first public release, and keep everything private until then. |
-| **Q2** | **TLS front** for the web app: your existing reverse proxy or tunnel, or Caddy ACME inside the `web` container? | Use your existing front. Check its request-body limit: attachments up to 200 MB pass our proxy, but some tunnel and CDN plans cap uploads (e.g. at 100 MB). Make sure it passes the client IP (S2 condition 2). |
-| **Q3** | **Your Joplin Server:** version, `APP_BASE_URL`, how it is fronted (does the front set `X-Real-IP`/`X-Forwarded-For`?), whether `USER_CONTENT_BASE_URL` is set, and whether the `web` container's host can reach it. | Needed for the deploy configuration and the compatibility matrix (S5). Nothing is ever pointed at it before M5-S6, and only after you have backed up its database. |
-| **Q4** | **Your clients and E2EE keys:** desktop and mobile versions, and do all master keys unlock with your one master password (desktop: Settings → Encryption)? | All clients on 3.7.x. If some keys use an older password, re-encrypt or unify them first; otherwise the headless service can't decrypt those items (S5 condition 3). |
-| **Q5** | **GitHub:** approval and credentials for the first push (no `gh` on the box), repo visibility, and runners. | GitHub-hosted `ubuntu-24.04` + `ubuntu-24.04-arm` runners. No self-hosted runner on the Pi for now. Keep the repo private until Q1 is settled. The ci-cd-specialist's channel plan (`docs/delivery/channels.md`) covers the registries. |
-| **Q6** | **Headless sync outage:** with stop-the-world, the Data API and MCP pause ~16–19 s per cycle on the Pi (requests wait). Is a 5-minute interval plus a sync 30 s after AI writes acceptable? | Yes, accept it, and revisit when upstream ships U3 (sync while serving). The alternative, hooking CLI internals, trades the outage for fragility on every upgrade. |
-| **Q7** | **Exposure:** should the MCP endpoint be reachable through your TLS front (LAN/internet, bearer token), and should the REST Data API gateway be enabled at all? | MCP on, behind your TLS front, with a ≥ 32-byte bearer token and an Origin allow-list. Gateway off unless you have a concrete client that needs the REST API. |
-| **Q8** | **Account model for the headless service:** your full account (needs your E2EE master password) or a dedicated "bot" account that only receives shared notebooks (least privilege)? | Your full account. It's the only way MCP can manage all notebooks and tags and set alarms anywhere. Offer read-only mode (`MCP_READ_ONLY`) if you want to start cautiously. The bot-account mode can be added later. |
-| **Q9** | **MCP safety defaults:** permanent delete and tag deletion off, remote images/links in AI-written notes refused, and the time zone for due dates. | Keep the defaults. Confirm your time zone (we assume `Europe/Amsterdam`). |
-| **Q10** | **First web login side effect:** upstream adds six welcome notes to the account (L14). OK? | Accept it and delete them once. Upstream offers no option to skip them, and patching it isn't worth the cost. |
-| **Q11** | **Upstream contributions** (U1–U12) under your GitHub account. | Yes. Start with U11 (bug report). **Report U2 (`X-Real-IP` trust) and U5 (`POST /notes` copies `file:` URLs) privately** via Joplin's security policy rather than as public issues, because both are security-relevant for every Joplin user. |
-| **Q12** | **Pi system tuning** (optional): a larger swap or zram, to make occasional native web-bundle builds safer (S1 filled 2 GB of swap). | Not needed for the chosen path, where releases use the x64 CI build. Only do it if you want to rebuild bundles locally. |
+### 14.1 Decision log: resolved at gate 1
+
+| # | Question (Phase A) | Resolved at gate 1 | Applied in |
+|---|---|---|---|
+| Q1 | Public name, icon, trademark | **Notestead**, shown as "Notestead for Joplin (unofficial)"; our own icons; the "unofficial, not affiliated" notice everywhere. The trademark check is still open (O1). The Phase A advice to keep the repo private is superseded by D3. | ADR-0006 (artifact names), ADR-0010, M5 |
+| Q2 | TLS front | **Cloudflare Tunnel** (`cloudflared` → `web`). The existing reverse proxy stays documented as the alternative. | ADR-0002, ADR-0006, ADR-0008, S6, L16, L17, M1-AC10–12, M5-AC9/11/13 |
+| Q3 | The user's Joplin Server | **3.7.x.** Its `APP_BASE_URL`, a direct `JOPLIN_SERVER_URL`, `USER_CONTENT_BASE_URL` and the Cloudflare plan are deploy-time configuration, collected in M5-S4. | S5 (resolution), M5-S6 prerequisites |
+| Q4 | Clients and E2EE keys | **All clients on 3.7.x; one master password unlocks all keys.** | S5 (resolution), ADR-0005 |
+| Q5 | GitHub push, visibility, runners | Repo stays **public** and is renamed to `TheScriptingGuy/notestead` before the first push (D3); GitHub-hosted `ubuntu-24.04` + `ubuntu-24.04-arm`. The rename and push themselves still need approval (O2). | channels.md, M1-S3/S8 |
+| Q6 | Headless sync outage | **Accepted** (~16–19 s per cycle; requests wait). | ADR-0003, L7 |
+| Q7 | Exposure | **MCP on behind TLS** (now the tunnel) with a ≥ 32-byte bearer token and an Origin allow-list; **REST gateway off.** With the tunnel, L17 applies to MCP traffic. | ADR-0004, ADR-0008 |
+| Q8 | Account model | **The full account.** | ADR-0008 |
+| Q9 | MCP safety defaults | **Permanent delete and remote links off; time zone `Europe/Amsterdam`.** | ADR-0004, ADR-0008 |
+| Q10 | Welcome notes on first web login | **Accepted once** (L14). | — |
+| Q11 | Upstream contributions | **Yes**; U2 and U5 go **privately** through Joplin's security policy. | §10 |
+| Q12 | Pi swap/zram | **No change.** | — |
+| D2 | Channels | Phase 1: GitHub Releases, GHCR, npm, MCP Registry; Docker Hub in Phase 2; catalogs in Phase 3. | channels.md, M5 |
+| D3 | Repo visibility | Public; rename before the first push. | channels.md |
+| D4 | Docker Hub namespace | Personal namespace with an expiring token; apply to DSOS later. | channels.md |
+| D5 | Release tooling | release-please with Conventional Commits. | channels.md, M5-AC6 |
+| D6 | GitHub App | None for now. | channels.md |
+| D7 | Versioning on Joplin minor upgrades | **Our MAJOR (MINOR while 0.x) plus a floating `joplin<minor>` image tag.** | ADR-0005, ADR-0006, M5-AC12, M6-AC6 |
+
+Routed to the architect by channels.md §11 and recorded: the D7 rule (above), and the **self-hosting-catalog network model**, now a pre-condition for any Phase 3 catalog story (ADR-0006, "Self-hosting catalogs"; M5 scope note).
+
+### 14.2 Still open (only the user can do these)
+
+| # | Item | Needed by | Recommendation |
+|---|---|---|---|
+| **O1** | **EUIPO TMview** (or WIPO Global Brand Database) check for "Notestead" in classes 9 and 42 | before the first public release on any channel (M5, Phase 1a) | Do it before the first release candidate. Also send the courtesy email to JOPLIN SAS recommended in Phase A. |
+| **O2** | **Approve the repo rename** to `TheScriptingGuy/notestead` **and the first push** | when CI is needed: M1-AC9 and M1-AC22 (M1-S3/S8) | Approve both together once M1-S1…S7 are green on the Pi, so the first push already contains a working skeleton. |
+| **O3** | **Confirm the Docker Hub and npm accounts `thescriptingguy` are yours**, with 2FA on | npm before Phase 1b; Docker Hub before Phase 2 | Confirm before M5-S3 starts. |

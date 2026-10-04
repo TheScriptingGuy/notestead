@@ -1,9 +1,9 @@
 # ADR-0010: Branding overlay (trademark) and AGPL source offer
 
 ## Status
-Proposed (Phase A, 2026-10-03). The name and icon are decided by the user at the gate.
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day (see Amendments). Proposed in Phase A (2026-10-03). The public name is **Notestead**, shown as "Notestead for Joplin (unofficial)". The user still runs an EUIPO TMview check before the first public release.
 
-**Public distribution is a project goal** (Docker Hub, GHCR, npm, GitHub Releases, MCP Registry; channel plan in `docs/delivery/channels.md`, pending). The trademark and logo question is therefore **not optional**: it is a precondition of the first public release on any channel.
+**Public distribution is a project goal** (Docker Hub, GHCR, npm, GitHub Releases, MCP Registry; channel plan in `docs/delivery/channels.md`, approved at gate 1). The trademark and logo question is therefore **not optional**: it is a precondition of the first public release on any channel.
 
 ## Context
 - **"Joplin" is a registered trademark of JOPLIN SAS, and the upstream logos and icons are all rights reserved** (`CLAUDE.md`). The upstream web bundle carries them only in static files copied from `packages/app-mobile/web/public/` after webpack (`"web": "webpack … && cp -r ./web/public/* ./web/dist/"`):
@@ -24,7 +24,7 @@ Proposed (Phase A, 2026-10-03). The name and icon are decided by the user at the
 | File | Overlay |
 |---|---|
 | `environment.js` | Replaced by ours. `window.__DEV__ = false` unconditionally, the same `exports`/`process.env.EXPO_OS` shims, and nothing else. |
-| `manifest.json` | Our `name`/`short_name` ("<Name> for Joplin (unofficial)"), our icons, no upstream screenshots. Keeps `start_url: "./"` and `display: standalone`. |
+| `manifest.json` | Our `name` ("Notestead for Joplin (unofficial)") and `short_name` ("Notestead"), our icons, no upstream screenshots. Keeps `start_url: "./"` and `display: standalone`. |
 | `icons/*` | Our own icon set (SVG + PNG 64/192/256/512), under a licence we own. |
 | `screenshots/*` | Removed. |
 | `index.html`, `just-one-client.html`, `closed.html` | `<title>`/description/`og:*` replaced with our name plus a "not affiliated with JOPLIN SAS" notice in meta. The upstream CSP and script tags stay byte-identical. One added `<link rel="license" href="./source.html">` and a small fixed-position "Source" link (overlay CSS, `aria-label`, keyboard reachable) that opens `source.html`. |
@@ -36,9 +36,9 @@ Proposed (Phase A, 2026-10-03). The name and icon are decided by the user at the
   - no upstream icon hashes remain in `dist/`
   - `__DEV__` is false on any origin
   - the CSP `<meta>` is unchanged from upstream
-- **Every published artifact** (images, the npm MCP package, the release tarball, registry listings) uses our name, never a bare "Joplin …" name. Nothing is published until the user has settled the name and the trademark question (open question Q1).
+- **Every published artifact** (images, the npm MCP package, the release tarball, registry listings) uses our name (Notestead), never a bare "Joplin …" name. Nothing is published until the user has completed the trademark check (ARCHITECTURE §14, open item O1).
 - **Pre-publish gate.** These preconditions are acceptance criteria of M5 and are checked by the ci-cd-specialist's pre-publish checklist:
-  - the user has decided the public name and it isn't a bare "Joplin …"
+  - the user has decided the public name and it isn't a bare "Joplin …" (decided: Notestead; the user's EUIPO TMview check is still open)
   - no upstream icon hash in any artifact
   - `LICENSE` inside the images and the npm tarball
   - `source.html`/`/source` and the OCI `org.opencontainers.image.source` label point to the exact commits
@@ -61,3 +61,6 @@ Proposed (Phase A, 2026-10-03). The name and icon are decided by the user at the
 - M2-AC12 (`source.html` links the exact commits; E2E)
 - M2-AC13 (`__DEV__` false on a `localhost` origin; E2E negative control: the unmodified bundle on `localhost` shows dev mode)
 - M5-AC1 to M5-AC3 (pre-publish gate: artifact scan for upstream icon hashes, licence and source-offer presence, name check)
+
+## Amendments (2026-10-04, gate 1)
+- **Public name decided: Notestead** ("Notestead for Joplin (unofficial)"; artifact names in ADR-0006 and channels.md §5). The overlay's `manifest.json` name and short name are now concrete. The first public release still waits for the user's EUIPO TMview check.
