@@ -3,7 +3,7 @@
 // packages/app-mobile) with SKIP_ONENOTE_CONVERTER_BUILD=1, then applies the overlay, verifies and packages.
 // Primary path: x64 CI. On arm64 it runs only with NOTESTEAD_ALLOW_ARM64_WEB_BUILD=1, under the spike S1 conditions
 // (docs/spikes/S1/build-web-arm64.sh: ~43 min, ~7 GiB peak, ~13 GB of disk).
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Pin } from './pin.ts';
 import { git } from './upstreamCopy.ts';
@@ -82,26 +82,43 @@ const hasCommitObject = (dir: string, commit: string): boolean => {
 export const trackedChanges = (work: string): string[] =>
 	git(work, ['status', '--porcelain', '--untracked-files=no']).toString().split('\n').filter(line => line.trim() !== '');
 
-// Ensures `work` is a pristine checkout of `repo` at exactly `commit` (a depth-1 fetch of that commit). An existing
-// checkout is reused, but always restored: tracked files are reset to the commit and untracked, non-ignored files are
-// removed, so a locally edited upstream tree can never be built and labelled as web.commit. Ignored files (the
-// ~11 GB of node_modules and upstream's build outputs) are kept on purpose so a rebuild is incremental; the recipe
-// regenerates the build outputs, and nothing here detects edits inside ignored files (docs/worklog/M1-S2.md).
+// Marks a directory as a work dir created by `build`. Only marked (or new, or empty) directories are ever touched by
+// the destructive steps below (checkout --force, clean), so a mistyped --work can never lose anyone's files.
+export const workMarker = '.notestead-web-build-work';
+
+// Makes sure `work` may be used: a missing or empty directory is created and marked; a marked one is reused; anything
+// else is refused before any change, naming the directory.
+export const claimWorkDir = (work: string, repo: string): void => {
+	if (existsSync(work)) {
+		if (!statSync(work).isDirectory()) throw new Error(`the work directory ${work} is not a directory; nothing was changed`);
+		if (existsSync(join(work, workMarker))) return;
+		if (readdirSync(work).length > 0) {
+			throw new Error(`refusing to use ${work} as the build work directory: it is not empty and was not created by \`build\` (no ${workMarker} marker). Pass a new or empty directory with --work; nothing in ${work} was changed.`);
+		}
+	}
+	mkdirSync(work, { recursive: true });
+	writeFileSync(join(work, workMarker), `Work directory of \`corepack yarn workspace web-build build\` (Notestead), a checkout of ${repo}.\nbuild resets and cleans this directory on every run; delete it to reclaim the space.\n`);
+};
+
+// Ensures `work` is a pristine checkout of `repo` at exactly `commit` (a depth-1 fetch of that commit). The directory
+// must be new, empty or marked by an earlier build (claimWorkDir). A marked checkout is reused, but always restored:
+// tracked files are reset to the commit and untracked, non-ignored files are removed, so a locally edited upstream
+// tree can never be built and labelled as web.commit. Ignored files (the ~11 GB of node_modules and upstream's build
+// outputs) are kept on purpose so a rebuild is incremental; the recipe regenerates the build outputs, and nothing
+// here detects edits inside ignored files (docs/worklog/M1-S2.md).
 export const checkoutPinned = (pin: Pin, work: string, log: (line: string) => void): void => {
 	const { repo, commit } = pin.web;
 	if (repo.startsWith('-')) throw new Error(`web.repo ${repo} is not a repository URL`);
+	claimWorkDir(work, repo);
 	const reuse = existsSync(join(work, '.git'));
 	const steps: string[][] = [];
-	if (!reuse) {
-		mkdirSync(work, { recursive: true });
-		steps.push(['init', '--quiet']);
-	}
+	if (!reuse) steps.push(['init', '--quiet']);
 	if (reuse && hasCommitObject(work, commit)) {
 		log(`build: reusing the checkout of ${commit} in ${work}; restoring its tracked files and removing untracked ones (ignored files such as node_modules are kept)`);
 	} else {
 		steps.push(['fetch', '--quiet', '--depth', '1', '--no-tags', repo, commit]);
 	}
-	steps.push(['checkout', '--quiet', '--force', '--detach', commit], ['clean', '--quiet', '--force', '-d']);
+	steps.push(['checkout', '--quiet', '--force', '--detach', commit], ['clean', '--quiet', '--force', '-d', '--exclude', `/${workMarker}`]);
 	for (const args of steps) {
 		log(`+ (cd ${work} && git ${args.join(' ')})`);
 		git(work, args);

@@ -2,9 +2,10 @@
 // (fetched by commit over file://) with an injected runner standing in for `corepack yarn install` / `yarn web`.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, describeCommand, recipe } from './build.ts';
+import { childEnv, describeCommand, recipe, workMarker } from './build.ts';
 import type { CommandSpec } from './build.ts';
-import { pinFor, removeTempDirs, repoRoot, tempDir, upstreamRepo, webpackFiles, writeFiles } from './testing/fixtures.ts';
+import { gitRepo, pinFor, removeTempDirs, repoRoot, tempDir, upstreamRepo, webpackFiles, writeFiles } from './testing/fixtures.ts';
+import { hashFiles } from './tree.ts';
 import { runWebBuild } from './webBuild.ts';
 
 interface Captured {
@@ -68,7 +69,6 @@ describe('webBuild', () => {
 		const work = join(tempDir('work'), 'joplin');
 		const out = join(tempDir('out'), 'out');
 		const calls: CommandSpec[] = [];
-		writeFiles(join(work, 'packages/app-mobile/web/dist'), { 'stale.js': 'from an earlier build' });
 		const result = await run(['build', '--out', out, '--work', work, '--pin', writePin(upstream.url, upstream.commit)], { runner: fakeRecipe(calls) });
 
 		expect(result.error).toEqual([]);
@@ -83,8 +83,8 @@ describe('webBuild', () => {
 		const manifest = JSON.parse(readFileSync(join(out, 'bundle-manifest.json'), 'utf8'));
 		const paths: string[] = manifest.files.map((file: { path: string }) => file.path);
 		expect(paths).toEqual(expect.arrayContaining(['app.bundle.js', 'source.html', 'icons/icon-512.png']));
-		expect(paths).not.toContain('stale.js');
 		expect(paths.some(path => path.startsWith('screenshots/'))).toBe(false);
+		expect(readFileSync(join(work, workMarker), 'utf8')).toContain(upstream.url);
 		expect(readFileSync(join(work, 'packages/app-mobile/web/dist/source.html'), 'utf8')).toContain('https://example.org/notestead/tree/');
 
 		expect(result.info).toContain('build: the upstream recipe left every tracked file unchanged');
@@ -100,7 +100,7 @@ describe('webBuild', () => {
 		const publicDir = join(work, 'packages/app-mobile/web/public');
 		writeFileSync(join(publicDir, 'index.html'), `${readFileSync(join(publicDir, 'index.html'), 'utf8')}<!-- LOCALLY MODIFIED -->\n`);
 		writeFiles(publicDir, { 'extra.js': 'untracked local file' });
-		writeFiles(work, { 'node_modules/kept.txt': 'ignored install output' });
+		writeFiles(work, { 'node_modules/kept.txt': 'ignored install output', 'packages/app-mobile/web/dist/stale.js': 'from an earlier build' });
 		const again = await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe([]) });
 
 		expect(again.error).toEqual([]);
@@ -108,7 +108,43 @@ describe('webBuild', () => {
 		expect(readFileSync(join(work, 'packages/app-mobile/web/dist/index.html'), 'utf8')).not.toContain('LOCALLY MODIFIED');
 		const manifest = JSON.parse(readFileSync(join(out, 'bundle-manifest.json'), 'utf8'));
 		expect(manifest.files.map((file: { path: string }) => file.path)).not.toContain('extra.js');
+		expect(manifest.files.map((file: { path: string }) => file.path)).not.toContain('stale.js');
 		expect(existsSync(join(work, 'node_modules/kept.txt'))).toBe(true);
+		expect(existsSync(join(work, workMarker))).toBe(true);
+		expect(again.info).toContain(`build: reusing the checkout of ${upstream.commit} in ${work}; restoring its tracked files and removing untracked ones (ignored files such as node_modules are kept)`);
+	});
+
+	test('build refuses a non-empty --work it did not create, changing nothing in it', async () => {
+		const upstream = upstreamRepo();
+		const pinPath = writePin(upstream.url, upstream.commit);
+		const plain = tempDir('precious');
+		writeFiles(plain, { 'precious/notes.txt': 'keep me', '.hidden': 'keep me too' });
+		const clone = gitRepo({ 'tracked.txt': 'committed' }).dir;
+		writeFiles(clone, { 'tracked.txt': 'uncommitted edit', 'untracked.txt': 'keep me' });
+
+		for (const work of [plain, clone]) {
+			const before = hashFiles(work);
+			const calls: CommandSpec[] = [];
+			const out = join(tempDir('out'), 'out');
+			const result = await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe(calls) });
+			expect(result.code).toBe(1);
+			expect(result.error[0]).toBe(`build: refusing to use ${work} as the build work directory: it is not empty and was not created by \`build\` (no ${workMarker} marker). Pass a new or empty directory with --work; nothing in ${work} was changed.`);
+			expect(hashFiles(work)).toEqual(before);
+			expect(calls).toEqual([]);
+			expect(existsSync(out)).toBe(false);
+		}
+		expect(existsSync(join(plain, '.git'))).toBe(false);
+	});
+
+	test('build takes an existing empty --work, marks it, and reuses it on the next run', async () => {
+		const upstream = upstreamRepo();
+		const pinPath = writePin(upstream.url, upstream.commit);
+		const work = tempDir('empty-work');
+		const out = join(tempDir('out'), 'out');
+		expect((await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe([]) })).code).toBe(0);
+		expect(existsSync(join(work, workMarker))).toBe(true);
+		const again = await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe([]) });
+		expect(again.code).toBe(0);
 		expect(again.info).toContain(`build: reusing the checkout of ${upstream.commit} in ${work}; restoring its tracked files and removing untracked ones (ignored files such as node_modules are kept)`);
 	});
 
