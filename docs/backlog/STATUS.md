@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); next: M1-S9, then the first push |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); next: first push (needs the user's approval), then M1-S4/S5 |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,6 +44,7 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification (closes on the first green run after the user-approved push; QA's V1–V8 in docs/test-plans/M1-S3.md)
 - M1-AC8 (x64), M1-AC9, M1-AC27, and through M1-AC27: **M1-AC5** (full web build on x64).
+- M1-AC24/25/26/29 on x64, and M1-AC29's T90 notices assertions.
 - If the first run fails, fixes go on a `fix/M1-S3-*` branch, not the merged story branch.
 
 ## Follow-ups from reviews (route into the named story when it starts)
@@ -52,7 +53,14 @@ The orchestrator (main Claude session) maintains this file.
   - C2: ban `pull_request_target` outright.
   - C3: also check local actions outside `.github/actions/`.
   - C4/C5 (nits): verify the sha256 of a cached tool binary, and add a download timeout.
-- **Architect (with M1-S9):** an ADR-0009 amendment allowing pipeline-only tooling in `.github/scripts/` (review M1-S3 P1), and an M1.md fix: post-merge CI fixes go on `fix/M1-S3-*`.
+- **Before the first push (ci-cd-specialist):** `ci.yml` runs `check:licenses`, `check:pin` and `check:no-upstream-copy` on both architectures (M1-S9 goal).
+- **M1-S9 review follow-ups, for the architect to schedule:**
+  - C1: `check:pin` alias hole — any `joplin`/`@joplin/*` lockfile entry must resolve to the same name. Needs a concrete story.
+  - C2: ADR-0010 should say an exception's text wins over the standard SPDX text, which is what the code does.
+  - C3: missing installed packages, and banners that name no package, should fail unless the package is platform-specific or on a reviewed list.
+  - C4/P1: treat a plain-string legacy `"licenses": "MIT"` (e.g. `requireg@0.2.2`) as declared.
+  - Optional upstream courtesy: `tkwidgets` lacks `"license": "MIT"` (the user can file it).
+- **Architect (with M1-S9, done):** an ADR-0009 amendment allowing pipeline-only tooling in `.github/scripts/` (review M1-S3 P1), and an M1.md fix: post-merge CI fixes go on `fix/M1-S3-*`.
 - **M1-S9 / M1-AC26:** `check:pin` must also check the *source* of `joplin`/`@joplin/*` in the lockfile: require `npm:` resolutions, reject git or local patches (review M1-S1 C1).
 - **M1-S9 `check:licenses`:** exception list with reasons for 5 transitive packages of `joplin@3.7.1` (one LGPL-3.0, one MPL-2.0-no-copyleft-exception, one AFL/BSD, two with no licence field) (review M1-S1).
 - **M1-S6:** the lint ban on fixed sleeps should also catch `setTimeout`-based sleeps in tests (C2). Playwright Chromium revision mismatch (expects r1217, the Pi has r1223): pin to the installed browser or ask the user before downloading. Fixture log attachments and the CI report format.
