@@ -58,7 +58,7 @@ Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
 
 Artifacts on failure: `test-results/**`, `playwright-report/**`, traces, container logs. The acceptance suite also emits JUnit (`--test-reporter=junit`) for CI.
 
-**CI evidence (from M1-S3).** CI uploads `test-results/**` (JUnit plus the redacted per-command logs) on every run, not only on failure, and writes the per-suite totals to the job summary. A CI result counts in a test plan only with the run URL, the head SHA and the runner image; downloaded evidence is kept under `test-results/ci/<run-id>/`. An acceptance criterion that can only run in CI stays **PENDING-CI** until that evidence exists; it never gets a local stand-in test. The procedure is in `docs/test-plans/M1-S3.md`.
+**CI evidence (from M1-S3).** CI uploads `test-results/**` (JUnit plus the redacted per-command logs) on every run, not only on failure, and writes the per-suite totals to the job summary. A CI result counts in a test plan only with the run URL, the head SHA and the runner image; downloaded evidence is kept under `test-results/ci/<run-id>/`. An acceptance criterion that can only run in CI stays **PENDING-CI** until that evidence exists; it never gets a local stand-in test. **JUnit counts never stand alone:** node:test writes no JUnit entry for a failing `describe`-level hook, so a result is read together with the test step's exit code or outcome (shown in the job summary). Reporter options go before the file glob; node:test ignores them after it. The procedure is in `docs/test-plans/M1-S3.md`.
 
 ## 8. Ownership and process
 - QA writes `docs/test-plans/<story>.md` and failing tests first (RED), then verifies and appends `## Results`.
