@@ -54,11 +54,14 @@ export const upstreamBlobIndex = (gitDir: string, commit: string): Map<string, s
 	return index;
 };
 
+// The git-tracked paths of `root` (POSIX, relative to it). Untracked and ignored files are never listed.
+export const trackedFiles = (root: string): string[] => splitNul(git(root, ['ls-files', '-z']));
+
 // Scans the git-tracked regular files of `root` (untracked and ignored files are never read).
 export const findCopies = (root: string, index: Map<string, string[]>): ScanResult => {
 	const copies: Copy[] = [];
 	let scanned = 0;
-	for (const path of splitNul(git(root, ['ls-files', '-z']))) {
+	for (const path of trackedFiles(root)) {
 		const absolute = join(root, path);
 		let stats;
 		try {
