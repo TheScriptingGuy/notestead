@@ -137,3 +137,8 @@ Many catalogs (Umbrel, Unraid, TrueNAS) can't express the `internal: true` `back
 - **Versioning rule D7** (channels.md §6): a Joplin minor upgrade is our MAJOR (MINOR while 0.x), plus the floating `joplin<minor>` image tag.
 - **Names:** Notestead artifact names from channels.md §5.
 - **Catalog network model:** recorded as a pre-condition for Phase 3 catalog work, with a non-binding position.
+
+## Amendments (2026-10-04, MCP exposure)
+- **User decision (L17, STATUS 2026-10-04):** the user's deployment publishes `/mcp` through the Cloudflare Tunnel with `MCP_PUBLIC=true`, behind a **Cloudflare Access application on `<host>/mcp` plus our bearer token**. For this deployment Access goes from "optional" to **required**. The product default stays opt-in: `MCP_PUBLIC=false`, Access off.
+- The compose `tunnel` profile is unchanged. The `/mcp` ingress rule with `access.required` and the Access application are deploy-time settings documented in `deploy/README.md` (M5-AC14). The Access policy type (a service token for header-capable clients; an OAuth-capable application for claude.ai connectors) depends on open item O4 (ARCHITECTURE §14.2).
+- Verification: M4-AC18 (exposure gate, fixture tunnel peer), M5-AC14 (deploy docs/defaults), M5-AC11 step 5 (the user's real cloud client through Access).
