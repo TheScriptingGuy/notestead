@@ -1,0 +1,160 @@
+# Web bundle (M1-S3; ADR-0001, M1-AC9, M1-AC27): builds the pinned upstream web bundle once on x64 by running M1-S2's
+# T90 (the full `web-build build`), uploads the artifact T90 verified (no second build), and checks its SHA256SUMS on
+# both architectures. The build logic lives in packages/web-build; this workflow only orchestrates it.
+name: web-bundle
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - upstream/joplin-version.json
+      - packages/web-build/**
+      - tests/acceptance/m1-s2/**
+      - tests/acceptance/support/**
+      - .github/workflows/web-bundle.yml
+      - .github/actions/setup/**
+      - .github/scripts/junit-summary.ts
+      - package.json
+      - yarn.lock
+  pull_request:
+    paths:
+      - upstream/joplin-version.json
+      - packages/web-build/**
+      - tests/acceptance/m1-s2/**
+      - tests/acceptance/support/**
+      - .github/workflows/web-bundle.yml
+      - .github/actions/setup/**
+      - .github/scripts/junit-summary.ts
+      - package.json
+      - yarn.lock
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: web-bundle-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build (T90, ubuntu-24.04)
+    # Same-repo pull requests are already built by their push run; pull_request runs are for forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.pin.outputs.tag }}
+    env:
+      FORCE_COLOR: '0'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Disk space for the upstream build (~13 GB under the work dir)
+        run: |
+          df -h / "$RUNNER_TEMP"
+          avail_kib=$(df --output=avail -k "$RUNNER_TEMP" | tail -n 1)
+          if [ "$avail_kib" -lt $((25 * 1024 * 1024)) ]; then
+            echo "Less than 25 GiB free: removing preinstalled toolchains this job does not use"
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+            df -h / "$RUNNER_TEMP"
+          fi
+
+      - name: Set up Node and install
+        uses: ./.github/actions/setup
+
+      - name: Read the pin
+        id: pin
+        run: |
+          tag=$(node -p "JSON.parse(require('node:fs').readFileSync('upstream/joplin-version.json', 'utf8')).web.tag")
+          echo "web.tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: T90, the full build (M1-AC5 / M1-AC27)
+        # T90 builds into NOTESTEAD_BUILD_OUT, verifies the result and keeps it; that directory is what gets uploaded.
+        run: |
+          mkdir -p test-results/junit
+          NOTESTEAD_BUILD_OUT="$RUNNER_TEMP/web-bundle-out" NOTESTEAD_BUILD_WORK="$RUNNER_TEMP/web-build-work" \
+            node --test --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=junit --test-reporter-destination=test-results/junit/m1-s2-t90.xml \
+              tests/acceptance/m1-s2/optin/ac5-build.optin.mts
+
+      - name: SHA256SUMS of the artifact T90 verified
+        run: |
+          ls -l "$RUNNER_TEMP/web-bundle-out"
+          cat "$RUNNER_TEMP/web-bundle-out/SHA256SUMS"
+          {
+            echo '### Bundle artifact SHA256SUMS'
+            echo '```'
+            cat "$RUNNER_TEMP/web-bundle-out/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the bundle artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-bundle-${{ steps.pin.outputs.tag }}
+          path: ${{ runner.temp }}/web-bundle-out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Cache the bundle by pin hash (ADR-0001)
+        # For later consumers (images, e2e.yml) that restore it with the same path and key instead of rebuilding.
+        # The key also hashes packages/web-build, so an overlay change never reuses an old bundle. The manifest and
+        # source.html of a cached bundle name the commit that built it.
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/web-bundle-out
+          key: web-bundle-${{ hashFiles('upstream/joplin-version.json') }}-${{ hashFiles('packages/web-build/**', '!packages/web-build/node_modules/**') }}
+
+      - name: Job summary
+        if: always()
+        run: node .github/scripts/junit-summary.ts "T90 full web build (ubuntu-24.04)" test-results/junit/m1-s2-t90.xml >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results (JUnit and redacted logs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-web-bundle-ubuntu-24.04
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  verify-artifact:
+    name: verify-artifact (${{ matrix.runner }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    # Downloading an artifact of the same run needs no GITHUB_TOKEN scope, and nothing is checked out.
+    permissions: {}
+    steps:
+      - name: Download the bundle artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-bundle-${{ needs.build.outputs.tag }}
+          path: ${{ runner.temp }}/web-bundle
+
+      - name: sha256sum -c SHA256SUMS
+        working-directory: ${{ runner.temp }}/web-bundle
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          ls -l
+          cat SHA256SUMS
+          expected=$(printf '%s\n' SHA256SUMS bundle-manifest.json "web-bundle-${TAG}.tar.zst" | sort)
+          actual=$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::the artifact must hold exactly SHA256SUMS, bundle-manifest.json and web-bundle-${TAG}.tar.zst"
+            exit 1
+          fi
+          sha256sum --strict -c SHA256SUMS
