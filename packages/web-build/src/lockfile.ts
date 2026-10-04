@@ -13,6 +13,10 @@ export interface LockEntry {
 	name: string;
 	version: string;
 	resolution: string;
+	// The descriptors of the key, e.g. ["@joplin/lib@npm:^3.7.1", "@joplin/lib@npm:~3.7"].
+	descriptors: string[];
+	// The entry's `dependencies:` (name → range; yarn lists optional dependencies here too).
+	dependencies: Record<string, string>;
 }
 
 const unquote = (value: string): string => value.trim().replace(/^"(.*)"$/, '$1');
@@ -24,10 +28,12 @@ export const packageNameOf = (locator: string): string => {
 };
 
 // Parses the entries of a Yarn Berry lockfile (the subset of its YAML used for package entries: top-level keys
-// followed by two-space-indented `version:` and `resolution:` fields). Entries without a resolution are skipped.
+// followed by two-space-indented `version:`, `resolution:` and `dependencies:` fields, the latter with four-space-
+// indented `name: range` lines). Entries without a resolution are skipped.
 export const parseLockfile = (text: string): LockEntry[] => {
 	const entries: LockEntry[] = [];
-	let current: { key: string; version?: string; resolution?: string } | null = null;
+	let current: { key: string; version?: string; resolution?: string; dependencies: Record<string, string> } | null = null;
+	let section = '';
 	const flush = (): void => {
 		if (current?.resolution !== undefined && current.key !== '__metadata') {
 			entries.push({
@@ -35,6 +41,8 @@ export const parseLockfile = (text: string): LockEntry[] => {
 				name: packageNameOf(current.resolution),
 				version: current.version ?? '',
 				resolution: current.resolution,
+				descriptors: current.key.split(/,\s*/).map(unquote),
+				dependencies: current.dependencies,
 			});
 		}
 		current = null;
@@ -44,14 +52,20 @@ export const parseLockfile = (text: string): LockEntry[] => {
 		if (line.startsWith('#') || line.trim() === '') continue;
 		if (!line.startsWith(' ')) {
 			flush();
-			current = { key: unquote(line.replace(/:\s*$/, '')) };
+			current = { key: unquote(line.replace(/:\s*$/, '')), dependencies: {} };
+			section = '';
 			continue;
 		}
-		const field = /^ {2}(version|resolution):\s*(.+)$/.exec(line);
-		if (field && current) {
-			if (field[1] === 'version') current.version = unquote(field[2]);
-			else current.resolution = unquote(field[2]);
+		if (!current) continue;
+		const field = /^ {2}([^\s:]+):\s*(.*)$/.exec(line);
+		if (field) {
+			section = field[1];
+			if (section === 'version') current.version = unquote(field[2]);
+			else if (section === 'resolution') current.resolution = unquote(field[2]);
+			continue;
 		}
+		const dependency = /^ {4}("[^"]+"|[^\s:]+):\s*(.+)$/.exec(line);
+		if (dependency && section === 'dependencies') current.dependencies[unquote(dependency[1])] = unquote(dependency[2]);
 	}
 	flush();
 	return entries;

@@ -22,6 +22,8 @@ describe('lockfile', () => {
 			name: '@joplin/lib',
 			version: '3.7.1',
 			resolution: '@joplin/lib@npm:3.7.1',
+			descriptors: ['@joplin/lib@npm:^3.7.1', '@joplin/lib@npm:~3.7'],
+			dependencies: expect.objectContaining({ '@joplin/fork-htmlparser2': expect.any(String) }),
 		}]);
 		expect(lockfile('valid.yarn.lock').some(e => e.key === '__metadata')).toBe(false);
 	});
@@ -55,7 +57,7 @@ describe('lockfile', () => {
 	});
 
 	test('checks an unknown lockstep @joplin/* package (fail closed)', () => {
-		const entries = [...lockfile('valid.yarn.lock'), { key: '@joplin/new@npm:^4.0.0', name: '@joplin/new', version: '4.0.0', resolution: '@joplin/new@npm:4.0.0' }];
+		const entries = [...lockfile('valid.yarn.lock'), { key: '@joplin/new@npm:^4.0.0', name: '@joplin/new', version: '4.0.0', resolution: '@joplin/new@npm:4.0.0', descriptors: ['@joplin/new@npm:^4.0.0'], dependencies: {} }];
 		expect(checkLockfile(entries, pin(), 'yarn.lock')).toEqual([expect.stringMatching(/^@joplin\/new: .* to 4\.0\.0, expected 3\.7\.x/)]);
 	});
 
