@@ -1,0 +1,116 @@
+# CI (M1-S3; ADR-0007, ADR-0009): lint, type checks, unit tests, the repo checks and the default acceptance suites on
+# x64 and arm64. The workflow only orchestrates root scripts that run identically on the Pi.
+# Evidence for QA (docs/test-plans/M1-S3.md, Verification procedure): JUnit per architecture, the redacted
+# per-command logs (test-results/**) uploaded on every run, and the acceptance totals in the job summary.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.runner }})
+    # A pull request from a branch of this repository is already tested by its push run; pull_request runs are for
+    # forks. No job here uses a secret, and the token is read-only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FORCE_COLOR: '0'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node and install
+        id: setup
+        uses: ./.github/actions/setup
+
+      # The checks below run even when an earlier one fails, so one run reports every result.
+      - name: Lint and type checks
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: corepack yarn lint
+
+      - name: Unit tests (Jest)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: corepack yarn test
+
+      - name: check:workflows
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: corepack yarn check:workflows
+
+      - name: check:pin
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: corepack yarn check:pin
+
+      - name: check:no-upstream-copy
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: corepack yarn check:no-upstream-copy
+
+      - name: Acceptance suites (M1-S1, M1-S2 default, M1-S3)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        # Same files and options as `corepack yarn test:acceptance`, plus JUnit. node:test reads reporter options only
+        # before the file glob, so they cannot be appended to the yarn script.
+        run: |
+          mkdir -p test-results/junit
+          node --test --test-concurrency=1 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination="test-results/junit/acceptance-${RUNNER_ARCH}.xml" \
+            'tests/acceptance/**/*.test.mts'
+
+      - name: NEG (arm64) the full web build refuses to start without NOTESTEAD_ALLOW_ARM64_WEB_BUILD
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.arch == 'ARM64' }}
+        timeout-minutes: 4
+        run: |
+          unset NOTESTEAD_ALLOW_ARM64_WEB_BUILD
+          mkdir -p test-results/neg
+          log=test-results/neg/t90-interlock-arm64.log
+          set +e
+          timeout --kill-after=10 120 corepack yarn test:optin:build > "$log" 2>&1
+          code=$?
+          set -e
+          cat "$log"
+          if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+            echo "::error::test:optin:build did not finish within 120 s: the arm64 interlock did not stop the build"
+            exit 1
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo "::error::test:optin:build exited 0 on arm64 without the opt-in variable; the interlock must refuse"
+            exit 1
+          fi
+          if ! grep -qF 'Refusing to start the ~43-minute native arm64 web build' "$log"; then
+            echo "::error::test:optin:build failed (exit $code) without the interlock's refusal message"
+            exit 1
+          fi
+          echo "OK: the T90 interlock refused (exit $code)"
+
+      - name: Job summary
+        if: always()
+        run: node .github/scripts/junit-summary.ts "Acceptance suites (${{ matrix.runner }})" "test-results/junit/acceptance-${RUNNER_ARCH}.xml" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results (JUnit and redacted logs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-ci-${{ matrix.runner }}
+          # Hidden paths (test-results/.cache: the upstream git cache) are excluded by default.
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 30
