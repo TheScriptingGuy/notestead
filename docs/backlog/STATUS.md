@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (lead APPROVE r1); next: M1-S2 web bundle build + overlay |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3; M1-AC5 PENDING-CI until M1-AC27) |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -46,6 +46,10 @@ The orchestrator (main Claude session) maintains this file.
 - **M1-S9 / M1-AC26:** `check:pin` must also check the *source* of `joplin`/`@joplin/*` in the lockfile: require `npm:` resolutions, reject git or local patches (review M1-S1 C1).
 - **M1-S9 `check:licenses`:** exception list with reasons for 5 transitive packages of `joplin@3.7.1` (one LGPL-3.0, one MPL-2.0-no-copyleft-exception, one AFL/BSD, two with no licence field) (review M1-S1).
 - **M1-S6:** the lint ban on fixed sleeps should also catch `setTimeout`-based sleeps in tests (C2). Playwright Chromium revision mismatch (expects r1217, the Pi has r1223): pin to the installed browser or ask the user before downloading. Fixture log attachments and the CI report format.
+- **M1-S2 follow-ups:**
+  - `verify` should also hash-check upstream screenshots and every other binary the overlay replaces (at M1-AC29 or the M5-AC1 scan) (r1-C2).
+  - Cache cleanup policy for `~/.cache/notestead/web-build/<commit>` (~13 GB each) (r1-C4).
+  - QA: the T90 note should say `NOTESTEAD_BUILD_WORK` must be new, empty, or created by an earlier `build`.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
