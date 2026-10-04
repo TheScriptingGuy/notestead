@@ -102,6 +102,15 @@ export default defineConfig([
 		},
 	},
 	{
+		// Files the web-build overlay installs into the web bundle (ADR-0010): classic browser scripts, not modules.
+		name: 'Web bundle overlay scripts',
+		files: ['packages/web-build/overlay/**/*.js'],
+		languageOptions: {
+			sourceType: 'script',
+			globals: { ...globals.browser },
+		},
+	},
+	{
 		name: 'TypeScript',
 		files: tsFiles,
 		languageOptions: {

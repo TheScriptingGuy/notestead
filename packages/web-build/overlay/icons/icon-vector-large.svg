@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+	<title>Notestead (placeholder icon)</title>
+	<rect width="512" height="512" rx="96" fill="#2e6b4f"/>
+	<path d="M256 96 L424 236 L424 416 L88 416 L88 236 Z" fill="#f5f1e6"/>
+	<rect x="148" y="268" width="216" height="22" rx="11" fill="#2e6b4f"/>
+	<rect x="148" y="316" width="216" height="22" rx="11" fill="#2e6b4f"/>
+	<rect x="148" y="364" width="148" height="22" rx="11" fill="#2e6b4f"/>
+</svg>
