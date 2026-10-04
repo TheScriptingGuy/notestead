@@ -1,10 +1,10 @@
 // The commands end to end, except the upstream recipe itself: `build` runs against a local upstream-like repository
 // (fetched by commit over file://) with an injected runner standing in for `corepack yarn install` / `yarn web`.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, describeCommand, recipe, workMarker } from './build.ts';
 import type { CommandSpec } from './build.ts';
-import { gitRepo, pinFor, removeTempDirs, repoRoot, tempDir, upstreamRepo, webpackFiles, writeFiles } from './testing/fixtures.ts';
+import { gitRepo, installedFiles, pinFor, removeTempDirs, repoRoot, tempDir, upstreamLayout, upstreamRepo, webpackFiles, writeFiles } from './testing/fixtures.ts';
 import { hashFiles } from './tree.ts';
 import { runWebBuild } from './webBuild.ts';
 
@@ -32,9 +32,11 @@ const writePin = (repo: string, commit: string): string => {
 	return path;
 };
 
-// Stands in for the upstream recipe: `yarn web` copies public/ into dist/ and adds webpack outputs.
+// Stands in for the upstream recipe: `yarn install` installs node_modules; `yarn web` copies public/ into dist/ and
+// adds webpack outputs.
 const fakeRecipe = (calls: CommandSpec[]) => (spec: CommandSpec): number => {
 	calls.push(spec);
+	if (spec.args.join(' ') === 'yarn install') writeFiles(spec.cwd, installedFiles());
 	if (spec.args.join(' ') === 'yarn web') {
 		const dist = join(spec.cwd, 'web', 'dist');
 		mkdirSync(dist, { recursive: true });
@@ -64,7 +66,7 @@ describe('webBuild', () => {
 		expect(result.error[0]).toBe(`overlay: ${path} is not a valid upstream pin (run \`corepack yarn check:pin\`):`);
 	});
 
-	test('build checks out the pinned commit, runs the recipe, overlays, verifies and packages', async () => {
+	test('build checks out the pinned commit, runs the recipe, writes the notices, overlays, verifies and packages', async () => {
 		const upstream = upstreamRepo();
 		const work = join(tempDir('work'), 'joplin');
 		const out = join(tempDir('out'), 'out');
@@ -82,7 +84,11 @@ describe('webBuild', () => {
 		expect(readdirSync(out).sort()).toEqual(['SHA256SUMS', 'bundle-manifest.json', 'web-bundle-v9.9.9.tar.zst']);
 		const manifest = JSON.parse(readFileSync(join(out, 'bundle-manifest.json'), 'utf8'));
 		const paths: string[] = manifest.files.map((file: { path: string }) => file.path);
-		expect(paths).toEqual(expect.arrayContaining(['app.bundle.js', 'source.html', 'icons/icon-512.png']));
+		expect(paths).toEqual(expect.arrayContaining(['app.bundle.js', 'source.html', 'icons/icon-512.png', 'third-party-notices.txt']));
+		const dist = join(work, 'packages/app-mobile/web/dist');
+		expect(readFileSync(join(dist, 'third-party-notices.txt'), 'utf8')).toContain('Package: fixture-dep@1.0.0\nLicense: MIT\n\nLicence file: LICENSE\n\nFixture licence text for fixture-dep.\n');
+		expect(readFileSync(join(dist, 'source.html'), 'utf8')).toContain('<a href="./third-party-notices.txt">third-party-notices.txt</a>');
+		expect(result.info.findIndex(l => l.startsWith('notices: OK.'))).toBeLessThan(result.info.findIndex(l => l.startsWith('overlay: OK.')));
 		expect(paths.some(path => path.startsWith('screenshots/'))).toBe(false);
 		expect(readFileSync(join(work, workMarker), 'utf8')).toContain(upstream.url);
 		expect(readFileSync(join(work, 'packages/app-mobile/web/dist/source.html'), 'utf8')).toContain('https://example.org/notestead/tree/');
@@ -172,5 +178,41 @@ describe('webBuild', () => {
 	test('the recipe environment drops the variables yarn injects into our own scripts', () => {
 		expect(childEnv({ PATH: '/bin', npm_package_name: 'web-build', YARN_IGNORE_PATH: '1', BERRY_BIN_FOLDER: '/x', INIT_CWD: '/r', PROJECT_CWD: '/r', HOME: '/h' }, { A: '1' }))
 			.toEqual({ PATH: '/bin', HOME: '/h', A: '1' });
+	});
+
+	test('build stops before the overlay when a package cannot be given a notice', async () => {
+		const upstream = upstreamRepo();
+		const out = join(tempDir('out'), 'out');
+		const work = join(tempDir('work'), 'w');
+		const recipe = fakeRecipe([]);
+		const result = await run(['build', '--out', out, '--work', work, '--pin', writePin(upstream.url, upstream.commit)], {
+			runner: spec => {
+				const code = recipe(spec);
+				if (spec.args.join(' ') === 'yarn install') {
+					writeFiles(spec.cwd, { 'node_modules/fixture-dep/package.json': '{ "name": "fixture-dep", "version": "1.0.0" }' });
+					rmSync(join(spec.cwd, 'node_modules/fixture-dep/LICENSE'));
+				}
+				return code;
+			},
+		});
+		expect(result.code).toBe(1);
+		expect(result.error).toContainEqual(expect.stringMatching(/^build: {3}- fixture-dep@1\.0\.0 \(node_modules\/fixture-dep\): no licence file, no usable declared licence \(none declared\)/));
+		expect(existsSync(join(work, 'packages/app-mobile/web/dist/third-party-notices.txt'))).toBe(false);
+		expect(result.info.some(l => l.startsWith('overlay:'))).toBe(false);
+		expect(existsSync(out)).toBe(false);
+	});
+
+	test('notices: requires --bundle and --out, and writes the file for an upstream tree', async () => {
+		expect((await run(['notices', '/tmp/x', '--out', '/tmp/y'])).error[0]).toBe('notices: --bundle <dist> and --out <file> are required');
+		expect((await run(['notices', '/tmp/x', '--bundle', '/tmp/b', '--out', '/tmp/y', '--work', '/tmp/w'])).code).toBe(2);
+		const tree = tempDir('tree');
+		writeFiles(tree, { ...upstreamLayout(), ...installedFiles() });
+		const bundle = tempDir('bundle');
+		writeFiles(bundle, webpackFiles());
+		const out = join(tempDir('notices'), 'n.txt');
+		const result = await run(['notices', tree, '--bundle', bundle, '--out', out]);
+		expect(result.error).toEqual([]);
+		expect(result.code).toBe(0);
+		expect(readFileSync(out, 'utf8')).toContain('Package: fixture-dep@1.0.0\n');
 	});
 });

@@ -73,9 +73,22 @@ export const gitRepo = (files: Record<string, string | Buffer>): { dir: string; 
 	return { dir, url: `file://${dir}`, commit: git(dir, ['rev-parse', 'HEAD']).toString().trim() };
 };
 
+// The upstream yarn layout `notices` reads (M1-AC29): workspaces, an app-mobile workspace with one dependency and its
+// lockfile entry. `installedFiles()` is what the fake `yarn install` adds (node_modules is git-ignored).
+export const upstreamLayout = (): Record<string, string> => ({
+	'package.json': `${JSON.stringify({ private: true, workspaces: ['packages/*'] })}\n`,
+	'packages/app-mobile/package.json': `${JSON.stringify({ name: '@fixture/app-mobile', version: '9.9.9', dependencies: { 'fixture-dep': '1.0.0' } })}\n`,
+	'yarn.lock': '__metadata:\n  version: 8\n\n"fixture-dep@npm:1.0.0":\n  version: 1.0.0\n  resolution: "fixture-dep@npm:1.0.0"\n  languageName: node\n  linkType: hard\n',
+});
+
+export const installedFiles = (): Record<string, string> => ({
+	'node_modules/fixture-dep/package.json': `${JSON.stringify({ name: 'fixture-dep', version: '1.0.0', license: 'MIT' })}\n`,
+	'node_modules/fixture-dep/LICENSE': 'Fixture licence text for fixture-dep.\n',
+});
+
 // An upstream-like repository with the public files under packages/app-mobile/web/public.
 export const upstreamRepo = (): { dir: string; url: string; commit: string } => {
-	const files: Record<string, string> = { 'package.json': '{ "private": true }\n', '.gitignore': 'node_modules/\ndist/\n' };
+	const files: Record<string, string> = { ...upstreamLayout(), '.gitignore': 'node_modules/\ndist/\n' };
 	for (const [path, content] of Object.entries(publicFiles())) files[`packages/app-mobile/web/public/${path}`] = content;
 	return gitRepo(files);
 };
