@@ -43,7 +43,7 @@
 - **Split between script and workflow.** The scripts above live in `packages/**` and run identically on the Pi and in CI. The workflows in `.github/**` only orchestrate them, so a pipeline never contains build logic that can't be run locally.
 - **`check:no-upstream-copy`:** a CI script that hashes every tracked text file with a size of at least 1 KiB. It fails if any matches a file in the pinned upstream tree (computed in CI from a sparse clone at the pinned commit), or if a file carries upstream's license header with upstream's copyright line.
 - **ESLint:** a flat config modelled on upstream's `eslint.config.js`, using the same plugins (`@typescript-eslint`, `@stylistic`, react-hooks where relevant). It adds `jest/no-focused-tests`, `jest/no-disabled-tests` and `playwright/no-skipped-test`, plus a `no-restricted-syntax` rule against `waitForTimeout`.
-- **Dependencies:** licences must be AGPL-compatible. `check:licenses` runs `yarn licenses list` against an allow-list (MIT, ISC, BSD-2/3, Apache-2.0, MPL-2.0, AGPL/GPL/LGPL-3.0 family, CC0, 0BSD, BlueOak). Known needs:
+- **Dependencies:** licences must be AGPL-compatible. `check:licenses` runs `yarn licenses list` against an allow-list (MIT, ISC, BSD-2/3, Apache-2.0, MPL-2.0, AGPL/GPL/LGPL-3.0 family, CC0, 0BSD, BlueOak; Python-2.0, Unlicense, Zlib and CC-BY-4.0 added by A8). Known needs:
   - `@modelcontextprotocol/sdk` (MIT)
   - `execa` (MIT)
   - `zod` (MIT)
@@ -97,3 +97,21 @@ These amendments record the architect's verdicts on the deviations in `docs/work
   - **Stays in `packages/**`:** anything the build, the images, the product or the other repo checks use or share code with (`check:pin`, `check:no-upstream-copy`, `check:licenses`, `check:prepublish`, the bundle build, the overlay). If a pipeline script grows a second consumer outside the pipeline, it moves to `packages/**` (the private `tooling` workspace of A2) in that story.
   - **Forbidden triggers.** `check:workflows` bans `pull_request_target` and `workflow_run` outright (M1-AC31). Allowing one for a specific, reviewed workflow needs an amendment here that names the file and the reason.
   - Verification: M1-AC8 (QA's `check:workflows` suite), M1-AC30 to M1-AC33 (review M1-S3-r1 C1–C5), and `corepack yarn lint` covering `.github/scripts/*.ts`.
+
+## Amendments (2026-10-04, M1-S9 test plan, findings F1 and Interpretations 4–5)
+- **A8. Allow-list additions (F1): Python-2.0, Unlicense, Zlib, CC-BY-4.0.** The real tree has `argparse@2.0.1` (Python-2.0), `markdown-it-anchor@5.3.0` and `tweetnacl@0.14.5` (Unlicense), `pako@1.0.11` (`MIT AND Zlib`) and `caniuse-lite` (CC-BY-4.0).
+  - **Rule for the allow-list (binding from now on).** An SPDX ID is allow-listed only through an amendment here, and only if the FSF licence list marks it compatible with GPLv3 **and** it is either permissive or GPL-family. Anything else (unusual IDs, `-exception` variants, unknown or missing licences) stays a per-package, exact-version exception with a reason.
+  - All four meet the rule (FSF licence list, fetched 2026-10-04): Python "2.0.1, 2.1.1, and newer versions … is compatible with the GNU GPL" (the SPDX `Python-2.0` text is that licence stack); the Unlicense is a GPL-compatible public-domain dedication with a lax fallback licence; zlib "is a free software license, and compatible with the GPL"; CC BY 4.0 "is compatible with all versions of the GNU GPL".
+  - **CC-BY-4.0 is allow-listed without a "data-only" restriction.** The FSF's advice that CC licences shouldn't be used for software is about style, not compatibility. A name-scoped restriction would be a third mechanism next to the allow-list and the exception list, and `caniuse-lite`'s weekly version churn makes an exact-version exception unworkable. Its attribution duty is met the same way as MIT's: by shipping the licence text and notice (M1-AC29 for the bundle, the M5 gate for images).
+  - Not added: the older Python licences (1.6b1 to 2.1, GPL-incompatible per the FSF), `PSF-2.0`, `CC-BY-3.0` and other CC versions. None is in the tree today; if one appears, it is an exception first and an amendment only if it meets the rule.
+- **A9. Legacy licence forms (Interpretation 5) are evaluated, not treated as missing.**
+  - A legacy `licenses` array is read as the **OR** of its entries' `type` values. That is npm's documented meaning: the package.json docs replace the legacy array `[{"type":"MIT"},{"type":"Apache-2.0"}]` with `(MIT OR Apache-2.0)`. An entry may be an object with `type` or a plain string.
+  - A legacy `license` object (`{"type": "MIT", "url": …}`) is read as its `type`.
+  - The derived expression is then evaluated like a `license` field. If any entry has no usable `type`, the whole form counts as missing.
+  - "Never silently passed" means **visible, not refused**: the listing line shows the derived expression with a `legacy` marker, and the `--report` `license` holds the derived expression.
+  - Consequences: the four real cases (`exit@0.1.2`, `@joplin/fork-uslug@2.0.7`, `format@0.2.2`, `querystring@0.2.0`, all MIT) are `allowed`. A legacy form whose entries are all SSPL-1.0 is `denied`. A legacy `[MIT, SSPL-1.0]` is `allowed` through the OR, exactly as `(MIT OR SSPL-1.0)` would be.
+- **A10. "Upstream's licence header" (check:no-upstream-copy, Interpretation 4): QA's definition is confirmed.**
+  - The header is line 1 of `upstream:LICENSE` at `web.commit` ("All code in this repository is licensed under the AGPL-3.0-or-later License", upstream:LICENSE:1 at v3.7.21).
+  - The copyright line is `Copyright (c) <years> <holder>`, with the holder taken from that file's `Copyright (c) …` line (upstream:LICENSE:29, Laurent Cozic) and **any** single year or range.
+  - Upstream source files have no per-file header, so nothing narrower exists. Our own files must not reuse upstream's line-1 sentence; our AGPL header names this project and its own copyright holder.
+- Verification: M1-AC24 and M1-AC25 as amended in `docs/backlog/M1.md` (M1-S9, amendments of 2026-10-04).

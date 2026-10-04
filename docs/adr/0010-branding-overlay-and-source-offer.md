@@ -68,3 +68,19 @@
 ## Amendments (2026-10-04, M1-S2)
 - **`third-party-notices.txt`: deferral accepted.** M1-S2 did not generate it (worklog deviation 1). Webpack emits only `*.LICENSE.txt` banner extracts, not full licence texts, so the table's "webpack's license output" source is not sufficient: the file is generated from upstream's `yarn.lock` and installed tree at `web.commit` (M1-AC29, in M1-S9). Until then `source.html` links the `*.LICENSE.txt` extracts, and they stay linked afterwards. No artifact is published without the file: M5-AC1 (e) adds it to the pre-publish gate, and `verify` checks it once M1-AC29 lands.
 - **Verification** gains M1-AC29 (generation and `verify` check) and M5-AC1 (e) (pre-publish).
+
+## Amendments (2026-10-04, M1-S9 test plan, finding F2 and Interpretation 3)
+- **Entry precedence in `third-party-notices.txt`.** The first matching rule applies:
+  1. **Upstream workspace without its own licence file** (for example `@joplin/lib`, `@joplin/htmlpack`): listed once as `AGPL-3.0-or-later` with the `source.html` pointer. Upstream's root licence (upstream:LICENSE:1-3 at v3.7.21) makes AGPL the default "unless a directory contains a LICENSE or LICENSE.md file". The entry may mention a differing `package.json` field (htmlpack declares MIT), but `License:` says AGPL-3.0-or-later.
+  2. **Any package with licence files**, including upstream workspaces that carry their own (`fork-*`, `turndown*`, `onenote-converter`, `react-native-alarm-notification`, `react-native-saf-x`): its declared licence and the full text of each file. Listing those workspaces as AGPL would misstate their licence. QA's Interpretation 3 is confirmed.
+  3. **No licence file, but a usable declared licence** (F2: 120 packages at the pin, mostly MIT `expo-*`, `metro-*`, `@react-native/*`): the **standard SPDX text** of every licence ID in the declared expression. The `license` field counts, or the legacy form derived as in ADR-0009 A9. The entry carries:
+     - one marker line: `Licence text: standard SPDX text for <expression>; no licence file in the package`
+     - the package's `author`, `contributors` and `repository` as declared, or "not declared"
+     - the text(s)
+
+     Placeholders such as `<year> <copyright holders>` are left as they are and never invented. "Usable" means a valid SPDX expression whose every ID has a standard text available to the generator.
+  4. **Otherwise** (no field, `UNLICENSED`, `SEE LICENSE IN …`, a non-SPDX string, or an ID without a standard text): an exact-version exception with `noticeText` is required; without one the step fails.
+- **Why rule 3 is acceptable.** These packages declare their licence but ship no text to copy, so the standard text plus the declared author is the most complete notice that exists. Requiring 120 hand-written exceptions, re-reviewed on every bump, would add churn and no information. Exceptions stay for the cases where we would otherwise have to guess.
+- **Where the standard texts come from.** The source must be offline at build time, pinned and reviewed: a subset of SPDX `license-list-data` at a named tag committed under `packages/web-build/`, or an npm data package that passes `check:licenses`. The build never fetches a text from the network. The engineer records the choice in the worklog. If a committed text of 1 KiB or more matches a file in the upstream tree, `check:no-upstream-copy` flags it; in that case use the npm route.
+- Verification: M1-AC29 as amended in `docs/backlog/M1.md` (M1-S9, amendments of 2026-10-04).
+
