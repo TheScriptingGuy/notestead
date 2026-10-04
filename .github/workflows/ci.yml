@@ -65,6 +65,7 @@ jobs:
         run: corepack yarn check:no-upstream-copy
 
       - name: Acceptance suites (M1-S1, M1-S2 default, M1-S3)
+        id: acceptance
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         # Same files and options as `corepack yarn test:acceptance`, plus JUnit. node:test reads reporter options only
         # before the file glob, so they cannot be appended to the yarn script.
@@ -103,7 +104,9 @@ jobs:
 
       - name: Job summary
         if: always()
-        run: node .github/scripts/junit-summary.ts "Acceptance suites (${{ matrix.runner }})" "test-results/junit/acceptance-${RUNNER_ARCH}.xml" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          OUTCOME: ${{ steps.acceptance.outcome }}
+        run: node .github/scripts/junit-summary.ts --outcome "$OUTCOME" "Acceptance suites (${{ matrix.runner }})" "test-results/junit/acceptance-${RUNNER_ARCH}.xml" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test results (JUnit and redacted logs)
         if: always()

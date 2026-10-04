@@ -76,6 +76,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: T90, the full build (M1-AC5 / M1-AC27)
+        id: t90
         # T90 builds into NOTESTEAD_BUILD_OUT, verifies the result and keeps it; that directory is what gets uploaded.
         run: |
           mkdir -p test-results/junit
@@ -115,7 +116,9 @@ jobs:
 
       - name: Job summary
         if: always()
-        run: node .github/scripts/junit-summary.ts "T90 full web build (ubuntu-24.04)" test-results/junit/m1-s2-t90.xml >> "$GITHUB_STEP_SUMMARY"
+        env:
+          OUTCOME: ${{ steps.t90.outcome }}
+        run: node .github/scripts/junit-summary.ts --outcome "$OUTCOME" "T90 full web build (ubuntu-24.04)" test-results/junit/m1-s2-t90.xml >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test results (JUnit and redacted logs)
         if: always()
