@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactName, packageBundle } from './packageBundle.ts';
 import type { BundleManifest } from './packageBundle.ts';
@@ -42,6 +42,19 @@ describe('packageBundle', () => {
 			`${sha256(readFileSync(result.tarball))}  web-bundle-v1.2.3.tar.zst`,
 			'',
 		].join('\n'));
+	});
+
+	test('normalizes file modes to 0644 (0755 when executable), whatever the builder\'s umask left', async () => {
+		const dist = distFixture();
+		chmodSync(join(dist, 'index.html'), 0o600);
+		chmodSync(join(dist, 'app.bundle.js'), 0o660);
+		chmodSync(join(dist, 'environment.js'), 0o700);
+		const { tarball } = await packageBundle(dist, join(tempDir('out'), 'out'), pin, ours);
+		const modes = new Map(tar(['--zstd', '-tvf', tarball]).trim().split('\n').map(line => [line.split(/\s+/).pop(), line.slice(0, 10)]));
+		expect(modes.get('index.html')).toBe('-rw-r--r--');
+		expect(modes.get('app.bundle.js')).toBe('-rw-r--r--');
+		expect(modes.get('environment.js')).toBe('-rwxr-xr-x');
+		expect(new Set(modes.values())).toEqual(new Set(['-rw-r--r--', '-rwxr-xr-x']));
 	});
 
 	test('refuses a missing dist, a dist without index.html and symlinks, writing no tarball', async () => {

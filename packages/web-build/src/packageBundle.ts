@@ -1,6 +1,7 @@
 // Packages a bundle directory into the M1-AC5 artifact (ADR-0001 §2):
 // - web-bundle-<web.tag>.tar.zst: a POSIX tar of the bundle's regular files (paths relative to the bundle root,
-//   numeric owner 0:0, no group/other write bits), compressed with zstd;
+//   numeric owner 0:0, modes 0644/0755 whatever the builder's umask, so a non-root server can read them), compressed
+//   with zstd;
 // - bundle-manifest.json: the upstream repo/tag/commit, our commit and every file with its sha256 and size;
 // - SHA256SUMS: sha256sum(1) lines for the tarball and the manifest.
 // tar is GNU tar (as on the Pi and ubuntu runners); zstd is Node's built-in zlib zstd (no extra binary or package).
@@ -35,7 +36,7 @@ const zstdLevel = 9;
 const tarArgs = (dist: string): string[] => [
 	'--create', '--file=-', `--directory=${dist}`,
 	'--format=posix', '--pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime',
-	'--owner=0', '--group=0', '--numeric-owner', '--mode=go-w',
+	'--owner=0', '--group=0', '--numeric-owner', '--mode=u=rwX,go=rX',
 	'--no-recursion', '--null', '--verbatim-files-from', '--files-from=-',
 ];
 
