@@ -15,6 +15,8 @@
     "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json",
     "test": "jest",
     "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'",
+    "test:optin:real-dist": "node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-real-dist.optin.mts",
+    "test:optin:build": "node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-build.optin.mts",
     "check:pin": "node packages/web-build/bin/check-pin.ts",
     "check:no-upstream-copy": "node packages/web-build/bin/check-no-upstream-copy.ts"
   },

@@ -1,0 +1,23 @@
+/* Notestead overlay (ADR-0010): the AGPL-3.0 section 13 "Source" link added to every page. Small, fixed in the
+   bottom-left corner, keyboard reachable. Its placement is checked against upstream controls by the M2 E2E suite. */
+.notestead-source-link {
+	position: fixed;
+	left: 0;
+	bottom: 0;
+	z-index: 2147483647;
+	padding: 1px 6px;
+	border-top-right-radius: 4px;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	font: 11px/1.4 system-ui, sans-serif;
+	text-decoration: none;
+	opacity: 0.7;
+}
+
+.notestead-source-link:hover,
+.notestead-source-link:focus-visible {
+	opacity: 1;
+	text-decoration: underline;
+	outline: 2px solid #fff;
+	outline-offset: -2px;
+}

@@ -64,3 +64,7 @@
 
 ## Amendments (2026-10-04, gate 1)
 - **Public name decided: Notestead** ("Notestead for Joplin (unofficial)"; artifact names in ADR-0006 and channels.md §5). The overlay's `manifest.json` name and short name are now concrete. The first public release still waits for the user's EUIPO TMview check.
+
+## Amendments (2026-10-04, M1-S2)
+- **`third-party-notices.txt`: deferral accepted.** M1-S2 did not generate it (worklog deviation 1). Webpack emits only `*.LICENSE.txt` banner extracts, not full licence texts, so the table's "webpack's license output" source is not sufficient: the file is generated from upstream's `yarn.lock` and installed tree at `web.commit` (M1-AC29, in M1-S9). Until then `source.html` links the `*.LICENSE.txt` extracts, and they stay linked afterwards. No artifact is published without the file: M5-AC1 (e) adds it to the pre-publish gate, and `verify` checks it once M1-AC29 lands.
+- **Verification** gains M1-AC29 (generation and `verify` check) and M5-AC1 (e) (pre-publish).
