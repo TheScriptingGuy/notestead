@@ -10,6 +10,8 @@ export interface SourceOfferInput {
 	ourDirty: boolean;
 	// Bundle paths of webpack's extracted licence comments (`*.LICENSE.txt`), linked as third-party notices.
 	licenseFiles: string[];
+	// Whether the bundle has third-party-notices.txt (M1-AC29); linked only when present, so no link dangles.
+	thirdPartyNotices?: boolean;
 }
 
 export const productName = 'Notestead for Joplin (unofficial)';
@@ -21,6 +23,9 @@ export const renderSourceOffer = (input: SourceOfferInput): string => {
 	const upstreamRepo = web.repo.replace(/\.git$/, '');
 	const upstreamTree = `${upstreamRepo}/tree/${web.commit}`;
 	const ourTree = `${input.ourRepo}/tree/${input.ourCommit}`;
+	const thirdParty = input.thirdPartyNotices
+		? `\n\t\t\t<p>Third-party licence notices: ${link('./third-party-notices.txt', 'third-party-notices.txt')} lists every third-party package in this build with its licence and licence text.</p>`
+		: '';
 	const notices = input.licenseFiles.length === 0
 		? '<li>webpack emitted no licence files for this build.</li>'
 		: input.licenseFiles.map(path => `<li>${link(`./${path}`, path)}</li>`).join('\n\t\t\t\t');
@@ -66,7 +71,7 @@ export const renderSourceOffer = (input: SourceOfferInput): string => {
 			<h2>Licences</h2>
 			<ul>
 				<li>${link('https://www.gnu.org/licenses/agpl-3.0.html', 'GNU Affero General Public License v3.0 (AGPL-3.0)')}</li>
-			</ul>
+			</ul>${thirdParty}
 			<p>Third-party licence notices extracted by webpack:</p>
 			<ul>
 				${notices}

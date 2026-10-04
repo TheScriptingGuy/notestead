@@ -2,7 +2,8 @@
 // - no file, under any name and at any depth, has the sha256 of an upstream icon
 //   (upstream:packages/app-mobile/web/public/icons/* at the pinned web.commit);
 // - environment.js is the overlay's (React Native dev mode off on every origin);
-// - the CSP <meta> of index.html is byte-identical to upstream's at web.commit.
+// - the CSP <meta> of index.html is byte-identical to upstream's at web.commit;
+// - third-party-notices.txt exists and source.html links it (ADR-0010, M1-AC29).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cspMetas } from './html.ts';
@@ -66,6 +67,14 @@ export const verifyBundle = (input: VerifyInput): string[] => {
 		} else if (ours.length !== 1 || ours[0] !== upstream[0]) {
 			problems.push('index.html: the Content-Security-Policy <meta> differs from upstream\'s at web.commit (it must stay byte-identical)');
 		}
+	}
+	if (!paths.has('third-party-notices.txt')) {
+		problems.push('third-party-notices.txt is missing (`build` writes it with `notices` before the overlay; ADR-0010)');
+	}
+	if (!paths.has('source.html')) {
+		problems.push('source.html is missing (the overlay generates it; ADR-0010)');
+	} else if (!/href\s*=\s*["'](?:\.\/)?third-party-notices\.txt["']/.test(readFileSync(join(input.dist, 'source.html'), 'utf8'))) {
+		problems.push('source.html does not link third-party-notices.txt (run the overlay after `notices`; ADR-0010)');
 	}
 	return problems;
 };

@@ -99,3 +99,9 @@ export const upstreamIconHashes = (): Map<string, string> => {
 	for (const [path, content] of upstreamIcons()) hashes.set(sha256(content), path);
 	return hashes;
 };
+
+// One file of the upstream tree at web.commit (for example `LICENSE`), read through git (blobs fetched lazily).
+export const upstreamFileAt = (path: string): Buffer => {
+	const { web } = readPin();
+	return gitBuffer(upstreamGitDir(), ['cat-file', 'blob', `${web.commit}:${path}`]);
+};

@@ -58,4 +58,9 @@ describe('sourceOffer', () => {
 		expect(html).toContain('v1&lt;b&gt;');
 		expect(html).toContain('https://example.org/us?a=1&amp;b=2');
 	});
+
+	test('links third-party-notices.txt next to the webpack extracts only when the bundle has it', () => {
+		expect(localRefs(renderSourceOffer(input({ thirdPartyNotices: true })))).toEqual(['third-party-notices.txt', 'app.bundle.js.LICENSE.txt', 'chunks/1.bundle.js.LICENSE.txt']);
+		expect(renderSourceOffer(input({ thirdPartyNotices: false }))).not.toContain('third-party-notices.txt');
+	});
 });

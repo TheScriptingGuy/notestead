@@ -3,14 +3,17 @@
 //   verify [--upstream <git-dir>] [--pin <file>] <dist>
 //   package <dist> --out <dir> [--pin <file>]
 //   build --out <dir> [--work <dir>] [--pin <file>]
+//   notices <upstream-tree> --bundle <dist> --out <file> [--exceptions <file>]   (docs/test-plans/M1-S9.md)
 // Each returns the process exit code: 0 success, 1 failure, 2 usage error. Every failure names the offending path.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildUpstreamBundle, childEnv } from './build.ts';
 import type { CommandRunner } from './build.ts';
 import type { Output } from './checkPin.ts';
+import { exceptionsRelativePath, loadExceptions } from './licenseExceptions.ts';
+import { noticesFileName, writeNotices } from './notices.ts';
 import { applyOverlay, loadOverlayConfig } from './overlay.ts';
 import type { OverlayConfig } from './overlay.ts';
 import { packageBundle } from './packageBundle.ts';
@@ -19,6 +22,7 @@ import type { Pin } from './pin.ts';
 import { ourRepoUrl, ourSource } from './provenance.ts';
 import { pinRelativePath } from './repoRoot.ts';
 import { renderSourceOffer } from './sourceOffer.ts';
+import { loadStandardTexts } from './spdxTexts.ts';
 import { listFiles, requireDirectory } from './tree.ts';
 import { defaultCacheDir, ensureUpstreamTree } from './upstreamCopy.ts';
 import { upstreamFile, upstreamIconHashes, upstreamPublicDir, verifyBundle } from './verify.ts';
@@ -37,6 +41,7 @@ const usages: Record<string, string> = {
 	verify: 'verify [--upstream <git-dir>] [--pin <file>] <dist>',
 	package: 'package <dist> --out <dir> [--pin <file>]',
 	build: 'build --out <dir> [--work <dir>] [--pin <file>]',
+	notices: 'notices <upstream-tree> --bundle <dist> --out <file> [--exceptions <file>]',
 };
 
 class UsageError extends Error {}
@@ -65,6 +70,7 @@ const overlaySetup = (repoRoot: string, pin: Pin, env: NodeJS.ProcessEnv): { con
 				ourCommit: ours.commit,
 				ourDirty: ours.dirty,
 				licenseFiles: listFiles(dist).filter(path => path.endsWith('.LICENSE.txt')),
+				thirdPartyNotices: existsSync(join(dist, noticesFileName)),
 			}),
 		},
 	};
@@ -97,6 +103,26 @@ const runVerify = (dist: string, pin: Pin, upstreamDir: string | null, deps: Web
 	deps.out.info(`verify: OK. ${dist}: no file matches the ${iconHashes.size} upstream icons at ${pin.web.tag} (${pin.web.commit}); environment.js is the overlay's; the CSP <meta> equals upstream's.`);
 };
 
+// Writes the third-party notices of the upstream tree `tree` and its built `bundle` to `out` (M1-AC29). Throws, naming
+// every package without a notice, and writes nothing when any is missing.
+const runNotices = (tree: string, bundle: string, out: string, exceptionsPath: string | undefined, deps: WebBuildDeps): void => {
+	requireDirectory(tree, 'upstream tree');
+	requireDirectory(bundle, '--bundle');
+	const exceptionsFile = exceptionsPath ?? join(deps.repoRoot, exceptionsRelativePath);
+	const result = writeNotices({
+		tree,
+		bundle,
+		exceptions: loadExceptions(exceptionsFile),
+		exceptionsLabel: exceptionsFile,
+		texts: loadStandardTexts(webBuildDir(deps.repoRoot)),
+	}, out);
+	for (const note of result.notes) deps.out.info(`notices: note: ${note}`);
+	if (result.problems.length > 0) {
+		throw new Error(`${result.problems.length} package(s) of ${tree} cannot be given a notice; nothing was written to ${out} (ADR-0010; add a reviewed exception with a noticeText only after establishing the licence):\n  - ${result.problems.join('\n  - ')}`);
+	}
+	deps.out.info(`notices: OK. ${result.entries} entries written to ${out}.`);
+};
+
 const runPackage = async (dist: string, outDir: string, pin: Pin, deps: WebBuildDeps): Promise<void> => {
 	requireDirectory(dist, 'dist');
 	const ours = ourSource(deps.repoRoot);
@@ -122,6 +148,7 @@ const runBuild = async (outDir: string, workOption: string | undefined, pin: Pin
 		arch: deps.arch,
 		env: deps.env,
 	});
+	runNotices(work, dist, join(dist, noticesFileName), undefined, deps);
 	runOverlay(dist, pin, deps);
 	runVerify(dist, pin, work, deps);
 	await runPackage(dist, outDir, pin, deps);
@@ -142,21 +169,25 @@ export const runWebBuild = async (argv: string[], deps: WebBuildDeps): Promise<n
 				out: { type: 'string' },
 				work: { type: 'string' },
 				upstream: { type: 'string' },
+				bundle: { type: 'string' },
+				exceptions: { type: 'string' },
 			},
 			strict: true,
 			allowPositionals: true,
 		});
-		const allowed: Record<string, string[]> = { overlay: ['pin'], verify: ['pin', 'upstream'], package: ['pin', 'out'], build: ['pin', 'out', 'work'] };
+		const allowed: Record<string, string[]> = { overlay: ['pin'], verify: ['pin', 'upstream'], package: ['pin', 'out'], build: ['pin', 'out', 'work'], notices: ['bundle', 'out', 'exceptions'] };
 		for (const key of Object.keys(values)) {
 			if (!allowed[command].includes(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
 		}
 		const expectedPositionals = command === 'build' ? 0 : 1;
 		if (positionals.length !== expectedPositionals) throw new UsageError(`expected ${expectedPositionals} positional argument(s), got ${positionals.length}`);
 		if ((command === 'package' || command === 'build') && values.out === undefined) throw new UsageError('--out <dir> is required');
+		if (command === 'notices' && (values.out === undefined || values.bundle === undefined)) throw new UsageError('--bundle <dist> and --out <file> are required');
 
 		const pin = readPin(resolve(values.pin ?? join(deps.repoRoot, pinRelativePath)));
 		const dist = positionals.length === 1 ? resolve(positionals[0]) : '';
-		if (command === 'overlay') runOverlay(dist, pin, deps);
+		if (command === 'notices') runNotices(dist, resolve(values.bundle ?? ''), resolve(values.out ?? ''), values.exceptions === undefined ? undefined : resolve(values.exceptions), deps);
+		else if (command === 'overlay') runOverlay(dist, pin, deps);
 		else if (command === 'verify') runVerify(dist, pin, values.upstream === undefined ? null : resolve(values.upstream), deps);
 		else if (command === 'package') await runPackage(dist, resolve(values.out ?? ''), pin, deps);
 		else await runBuild(resolve(values.out ?? ''), values.work === undefined ? undefined : resolve(values.work), pin, deps);

@@ -9,6 +9,10 @@
     "build": "node bin/web-build.ts build",
     "overlay": "node bin/web-build.ts overlay",
     "package": "node bin/web-build.ts package",
-    "verify": "node bin/web-build.ts verify"
+    "verify": "node bin/web-build.ts verify",
+    "notices": "node bin/web-build.ts notices"
+  },
+  "dependencies": {
+    "spdx-license-list": "6.12.0"
   }
 }

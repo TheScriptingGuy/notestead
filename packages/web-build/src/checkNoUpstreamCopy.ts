@@ -1,8 +1,10 @@
-// `corepack yarn check:no-upstream-copy [--root <dir>] [--upstream <git-dir>] [--pin <file>]` (M1-AC4, ADR-0009).
-// Returns the process exit code.
+// `corepack yarn check:no-upstream-copy [--root <dir>] [--upstream <git-dir>] [--pin <file>]` (M1-AC4, M1-AC25,
+// ADR-0009 A5/A10): verbatim copies of upstream files (tracked files of at least 1 KiB), and tracked files of any
+// size that carry upstream's licence header with upstream's copyright line. Returns the process exit code.
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { Output } from './checkPin.ts';
+import { findLicenceHeaders, upstreamLicence } from './licenceHeader.ts';
 import { readPinFile } from './pin.ts';
 import { pinRelativePath } from './repoRoot.ts';
 import { defaultCacheDir, ensureUpstreamTree, findCopies, minimumSize, upstreamBlobIndex } from './upstreamCopy.ts';
@@ -42,13 +44,22 @@ export const runCheckNoUpstreamCopy = (argv: string[], repoRoot: string, out: Ou
 		if (tree.fetched) out.info(`check:no-upstream-copy: fetched the upstream tree at ${pin.web.commit} (blobless) into ${tree.gitDir}`);
 		const index = upstreamBlobIndex(tree.gitDir, pin.web.commit);
 		const { scanned, copies } = findCopies(root, index);
+		const licence = upstreamLicence(tree.gitDir, pin.web.commit);
+		const headers = findLicenceHeaders(root, licence);
 		if (copies.length > 0) {
 			out.error(`check:no-upstream-copy: ${copies.length} tracked file(s) in ${root} are verbatim copies of upstream files at ${pin.web.tag} (${pin.web.commit}):`);
 			for (const copy of copies) out.error(`  - ${copy.path} is byte-identical to upstream:${copy.upstreamPaths.join(', upstream:')}`);
+		}
+		if (headers.length > 0) {
+			out.error(`check:no-upstream-copy: ${headers.length} tracked file(s) in ${root} carry upstream's licence header (line 1 of upstream:LICENSE) together with a "Copyright (c) <years> ${licence.holder}" line (ADR-0009 A10):`);
+			for (const path of headers) out.error(`  - ${path} carries upstream's licence header and copyright line`);
+		}
+		if (copies.length > 0 || headers.length > 0) {
 			out.error('Consume upstream through its published interfaces instead, or move a required change to patches/ (CLAUDE.md, ADR-0009).');
 			return 1;
 		}
 		out.info(`check:no-upstream-copy: OK. ${scanned} tracked file(s) of at least ${minimumSize} bytes in ${root}; none matches the ${index.size} upstream blobs at ${pin.web.tag} (${pin.web.commit}).`);
+		out.info(`check:no-upstream-copy: OK. No tracked file in ${root} carries upstream's licence header together with its copyright line.`);
 		return 0;
 	} catch (error) {
 		out.error(`check:no-upstream-copy: ${(error as Error).message}`);

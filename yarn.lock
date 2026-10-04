@@ -8709,6 +8709,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"spdx-license-list@npm:6.12.0":
+  version: 6.12.0
+  resolution: "spdx-license-list@npm:6.12.0"
+  checksum: 10c0/e65657a6e4324ab00722dd9bf624a06d498014dee1a1ebdc89bbdd7c9816eee5a401839ef0f8b257f5a8bcb6976cad36937f434fd15ed11cee5f06ead8508926
+  languageName: node
+  linkType: hard
+
 "split-on-first@npm:^1.0.0":
   version: 1.1.0
   resolution: "split-on-first@npm:1.1.0"
@@ -9602,6 +9609,8 @@ __metadata:
 "web-build@workspace:packages/web-build":
   version: 0.0.0-use.local
   resolution: "web-build@workspace:packages/web-build"
+  dependencies:
+    spdx-license-list: "npm:6.12.0"
   languageName: unknown
   linkType: soft
 

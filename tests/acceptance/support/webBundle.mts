@@ -26,12 +26,13 @@ interface Manifest {
 
 // Fails with a contract message (not yarn's "Couldn't find a script") when the workspace script is missing, so a
 // missing script can never satisfy a negative test.
-export const requireWorkspaceScript = (script: string): void => {
+// `contract` names the test plan section that defines the script, so a RED failure points at the right story.
+export const requireWorkspaceScript = (script: string, contract = 'docs/test-plans/M1-S2.md §Command contracts'): void => {
 	const path = join(webBuildDir, 'package.json');
 	assert.ok(existsSync(path), `${relative(repoRoot, path)} does not exist`);
 	const scripts = readJson<Manifest>(path).scripts ?? {};
 	assert.ok(typeof scripts[script] === 'string' && scripts[script].trim() !== '',
-		`M1-S2 contract: packages/web-build/package.json must define the script "${script}" (docs/test-plans/M1-S2.md §Command contracts). Found: ${JSON.stringify(Object.keys(scripts))}`);
+		`Contract (${contract}): packages/web-build/package.json must define the script "${script}". Found: ${JSON.stringify(Object.keys(scripts))}`);
 };
 
 // `corepack yarn workspace web-build <script> …args`. Paths in args must be absolute: yarn runs workspace scripts

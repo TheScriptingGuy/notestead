@@ -26,9 +26,13 @@ describe('verify', () => {
 			upstreamIndexHtml: upstreamFile(upstream.dir, upstream.commit, `${upstreamPublicDir}/index.html`).toString('utf8'),
 		});
 
+		const notices = { 'third-party-notices.txt': 'Package: x@1.0.0\nLicense: MIT\n', 'source.html': '<a href="./third-party-notices.txt">notices</a>' };
 		const clean = distFixture();
-		writeFiles(clean, { 'environment.js': overlayEnvironment(), 'icons/icon-64.png': 'ours', 'icons/icon-vector-large.svg': '<svg>ours</svg>' });
+		writeFiles(clean, { 'environment.js': overlayEnvironment(), 'icons/icon-64.png': 'ours', 'icons/icon-vector-large.svg': '<svg>ours</svg>', ...notices });
 		expect(verifyBundle(input(clean))).toEqual([]);
+
+		writeFiles(clean, { 'source.html': '<a href="./moved.txt">notices</a>' });
+		expect(verifyBundle(input(clean))).toEqual(['source.html does not link third-party-notices.txt (run the overlay after `notices`; ADR-0010)']);
 
 		const dirty = distFixture();
 		writeFiles(dirty, { 'deep/er/copy.bin': publicFiles()['icons/icon-64.png'] });
@@ -39,6 +43,8 @@ describe('verify', () => {
 			expect.stringMatching(/^icons\/icon-vector-large\.svg is byte-identical/),
 			expect.stringMatching(/^environment\.js is not the overlay's/),
 			expect.stringMatching(/^index\.html: the Content-Security-Policy <meta> differs/),
+			expect.stringMatching(/^third-party-notices\.txt is missing/),
+			expect.stringMatching(/^source\.html is missing/),
 		]);
 	});
 });

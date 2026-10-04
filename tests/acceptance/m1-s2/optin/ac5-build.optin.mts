@@ -14,12 +14,13 @@
 // Optional: NOTESTEAD_BUILD_OUT=<dir> keeps the artifact (web-bundle-<tag>.tar.zst, SHA256SUMS, bundle-manifest.json)
 // in <dir> instead of a temp dir that is deleted afterwards, so CI uploads the artifact T90 verified (M1-AC27). The dir
 // must be new or empty.
-// Test plan: docs/test-plans/M1-S2.md.
+// Test plan: docs/test-plans/M1-S2.md; the M1-AC29 assertions at the end: docs/test-plans/M1-S9.md.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
-import { assertExitZero, assertOutputIncludes, makeTempDir, readPin, removeDir } from '../../support/repo.mts';
+import { assertExitZero, assertOutputIncludes, makeTempDir, readPin, removeDir, repoRoot } from '../../support/repo.mts';
+import { noticesCoverage } from '../../support/licenses.mts';
 import { sha256, upstreamIconHashes, upstreamPublicFiles } from '../../support/upstream.mts';
 import {
 	assertArtifact, cspMetas, probeEnvironment, probeOrigins, requireWorkspaceScript, webBuild,
@@ -56,7 +57,7 @@ describe('M1-AC5 build (full upstream recipe; opt-in)', () => {
 
 		const extractInto = join(base, 'extract');
 		mkdirSync(extractInto);
-		const { extracted } = assertArtifact('T90', out, pin, extractInto, null);
+		const { extracted, manifest } = assertArtifact('T90', out, pin, extractInto, null);
 
 		for (const path of ['index.html', 'app.bundle.js', 'serviceWorker.bundle.js', 'environment.js', 'manifest.json', 'source.html']) {
 			assert.ok(extracted.has(path), `the bundle must contain ${path}`);
@@ -82,5 +83,15 @@ describe('M1-AC5 build (full upstream recipe; opt-in)', () => {
 		const environment = extracted.get('environment.js')?.toString('utf8') ?? '';
 		for (const origin of probeOrigins) assert.equal(probeEnvironment(environment, origin).dev, false, `__DEV__ on ${origin}`);
 		assertExitZero(webBuild('T90-verify-extracted', 'verify', [extractInto]));
+
+		// M1-AC29 (CI integration, docs/test-plans/M1-S9.md): build writes third-party-notices.txt before package, so it
+		// is in the tarball and in bundle-manifest.json files, source.html links it, and it covers the app-mobile
+		// closure of the very checkout the bundle was built from (the work dir after the recipe's yarn install).
+		const notices = extracted.get('third-party-notices.txt');
+		assert.ok(notices, 'M1-AC29: the bundle must contain third-party-notices.txt');
+		assert.ok(manifest.files?.some(f => f.path === 'third-party-notices.txt'), 'M1-AC29: bundle-manifest.json files lists third-party-notices.txt');
+		assert.match(extracted.get('source.html')?.toString('utf8') ?? '', /href\s*=\s*["'](?:\.\/)?third-party-notices\.txt["']/, 'M1-AC29: source.html links third-party-notices.txt');
+		const coverage = noticesCoverage(notices.toString('utf8'), work, extractInto, join(repoRoot, 'packages', 'web-build', 'license-exceptions.json'));
+		assert.deepEqual(coverage.problems.slice(0, 50), [], `M1-AC29: ${coverage.problems.length} coverage problem(s) in third-party-notices.txt (first 50 shown)`);
 	});
 });
