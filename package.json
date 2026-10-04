@@ -14,7 +14,8 @@
   "scripts": {
     "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json",
     "test": "jest",
-    "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'"
+    "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'",
+    "check:pin": "node packages/web-build/bin/check-pin.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
