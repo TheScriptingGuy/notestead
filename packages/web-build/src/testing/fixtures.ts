@@ -75,7 +75,7 @@ export const gitRepo = (files: Record<string, string | Buffer>): { dir: string; 
 
 // An upstream-like repository with the public files under packages/app-mobile/web/public.
 export const upstreamRepo = (): { dir: string; url: string; commit: string } => {
-	const files: Record<string, string> = { 'package.json': '{ "private": true }\n' };
+	const files: Record<string, string> = { 'package.json': '{ "private": true }\n', '.gitignore': 'node_modules/\ndist/\n' };
 	for (const [path, content] of Object.entries(publicFiles())) files[`packages/app-mobile/web/public/${path}`] = content;
 	return gitRepo(files);
 };

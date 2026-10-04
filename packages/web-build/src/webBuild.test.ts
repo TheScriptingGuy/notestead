@@ -87,10 +87,29 @@ describe('webBuild', () => {
 		expect(paths.some(path => path.startsWith('screenshots/'))).toBe(false);
 		expect(readFileSync(join(work, 'packages/app-mobile/web/dist/source.html'), 'utf8')).toContain('https://example.org/notestead/tree/');
 
-		// A second build reuses the checkout.
-		const again = await run(['build', '--out', out, '--work', work, '--pin', writePin(upstream.url, upstream.commit)], { runner: fakeRecipe([]) });
+		expect(result.info).toContain('build: the upstream recipe left every tracked file unchanged');
+	});
+
+	test('build restores a reused checkout: local edits and untracked files never reach the artifact', async () => {
+		const upstream = upstreamRepo();
+		const work = join(tempDir('work'), 'joplin');
+		const out = join(tempDir('out'), 'out');
+		const pinPath = writePin(upstream.url, upstream.commit);
+		expect((await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe([]) })).code).toBe(0);
+
+		const publicDir = join(work, 'packages/app-mobile/web/public');
+		writeFileSync(join(publicDir, 'index.html'), `${readFileSync(join(publicDir, 'index.html'), 'utf8')}<!-- LOCALLY MODIFIED -->\n`);
+		writeFiles(publicDir, { 'extra.js': 'untracked local file' });
+		writeFiles(work, { 'node_modules/kept.txt': 'ignored install output' });
+		const again = await run(['build', '--out', out, '--work', work, '--pin', pinPath], { runner: fakeRecipe([]) });
+
+		expect(again.error).toEqual([]);
 		expect(again.code).toBe(0);
-		expect(again.info).toContain(`build: reusing the checkout of ${upstream.commit} in ${work}`);
+		expect(readFileSync(join(work, 'packages/app-mobile/web/dist/index.html'), 'utf8')).not.toContain('LOCALLY MODIFIED');
+		const manifest = JSON.parse(readFileSync(join(out, 'bundle-manifest.json'), 'utf8'));
+		expect(manifest.files.map((file: { path: string }) => file.path)).not.toContain('extra.js');
+		expect(existsSync(join(work, 'node_modules/kept.txt'))).toBe(true);
+		expect(again.info).toContain(`build: reusing the checkout of ${upstream.commit} in ${work}; restoring its tracked files and removing untracked ones (ignored files such as node_modules are kept)`);
 	});
 
 	test('build stops at a failing recipe step and never packages', async () => {

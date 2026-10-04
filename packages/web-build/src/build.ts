@@ -69,25 +69,48 @@ const hasHeadAt = (dir: string, commit: string): boolean => {
 	}
 };
 
-// Ensures `work` is a checkout of `repo` at exactly `commit` (a depth-1 fetch of that commit; reused when present).
+const hasCommitObject = (dir: string, commit: string): boolean => {
+	try {
+		git(dir, ['cat-file', '-e', `${commit}^{commit}`]);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+// Tracked files of `work` that differ from its HEAD (`git status --porcelain` lines, untracked files excluded).
+export const trackedChanges = (work: string): string[] =>
+	git(work, ['status', '--porcelain', '--untracked-files=no']).toString().split('\n').filter(line => line.trim() !== '');
+
+// Ensures `work` is a pristine checkout of `repo` at exactly `commit` (a depth-1 fetch of that commit). An existing
+// checkout is reused, but always restored: tracked files are reset to the commit and untracked, non-ignored files are
+// removed, so a locally edited upstream tree can never be built and labelled as web.commit. Ignored files (the
+// ~11 GB of node_modules and upstream's build outputs) are kept on purpose so a rebuild is incremental; the recipe
+// regenerates the build outputs, and nothing here detects edits inside ignored files (docs/worklog/M1-S2.md).
 export const checkoutPinned = (pin: Pin, work: string, log: (line: string) => void): void => {
 	const { repo, commit } = pin.web;
 	if (repo.startsWith('-')) throw new Error(`web.repo ${repo} is not a repository URL`);
-	if (existsSync(join(work, '.git')) && hasHeadAt(work, commit)) {
-		log(`build: reusing the checkout of ${commit} in ${work}`);
-		return;
+	const reuse = existsSync(join(work, '.git'));
+	const steps: string[][] = [];
+	if (!reuse) {
+		mkdirSync(work, { recursive: true });
+		steps.push(['init', '--quiet']);
 	}
-	mkdirSync(work, { recursive: true });
-	const steps: string[][] = [
-		...(existsSync(join(work, '.git')) ? [] : [['init', '--quiet']]),
-		['fetch', '--quiet', '--depth', '1', '--no-tags', repo, commit],
-		['checkout', '--quiet', '--force', '--detach', commit],
-	];
+	if (reuse && hasCommitObject(work, commit)) {
+		log(`build: reusing the checkout of ${commit} in ${work}; restoring its tracked files and removing untracked ones (ignored files such as node_modules are kept)`);
+	} else {
+		steps.push(['fetch', '--quiet', '--depth', '1', '--no-tags', repo, commit]);
+	}
+	steps.push(['checkout', '--quiet', '--force', '--detach', commit], ['clean', '--quiet', '--force', '-d']);
 	for (const args of steps) {
 		log(`+ (cd ${work} && git ${args.join(' ')})`);
 		git(work, args);
 	}
 	if (!hasHeadAt(work, commit)) throw new Error(`${work} is not at web.commit ${commit} after the checkout`);
+	const changed = trackedChanges(work);
+	if (changed.length > 0) {
+		throw new Error(`${work} still differs from web.commit ${commit} after the checkout; refusing to build a modified upstream tree:\n  ${changed.join('\n  ')}`);
+	}
 };
 
 export interface BuildOptions {
@@ -116,5 +139,10 @@ export const buildUpstreamBundle = (options: BuildOptions): string => {
 		if (code !== 0) throw new Error(`the upstream recipe step \`${spec.command} ${spec.args.join(' ')}\` failed (exit ${code}) in ${spec.cwd}`);
 	}
 	if (!existsSync(join(dist, 'index.html'))) throw new Error(`the upstream recipe finished but ${dist} has no index.html`);
+	// Evidence for the first CI runs: does upstream's own install/build rewrite tracked files (e.g. yarn.lock)?
+	const changed = trackedChanges(options.work);
+	options.log(changed.length === 0
+		? 'build: the upstream recipe left every tracked file unchanged'
+		: `build: note: the upstream recipe changed ${changed.length} tracked file(s): ${changed.map(line => line.slice(3)).join(', ')}`);
 	return dist;
 };
