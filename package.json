@@ -11,6 +11,10 @@
   "workspaces": [
     "packages/*"
   ],
+  "scripts": {
+    "test": "jest",
+    "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'"
+  },
   "devDependencies": {
     "@eslint/js": "9.39.4",
     "@jest/globals": "29.7.0",
