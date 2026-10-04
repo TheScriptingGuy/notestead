@@ -64,3 +64,24 @@
 
 ## Verification
 - M1-AC1 to M1-AC4 (scaffold, lint/test green on the Pi, pin checks, no-upstream-copy check with a negative control: a copied upstream file must fail the check).
+- M1-AC23 (headless image build-script allow-list), M1-AC24 to M1-AC26 (licences, licence header, `headless` manifest pin).
+
+## Amendments (2026-10-04, M1-S1 review)
+These amendments record the architect's verdicts on the deviations in `docs/worklog/M1-S1.md`. The layout, owners and golden rules above are unchanged.
+- **A1. Packages are created lazily: accepted.** A package is created by the first story that puts real code in it: `web` in M1-S4, `data-api-client` in M1-S5 (the internal REST client) or else M3, and `mcp` in M4-S1. An empty package would need placeholder tests, which M1-AC1 rules out. The layout tree above is the target, not a day-one requirement. M1-AC1 ("every package has at least one real unit test") applies to each package from the story that creates it.
+- **A2. The repo-wide check scripts live in `packages/web-build`: accepted.** `check:pin` and `check:no-upstream-copy` share the pin reader and the cached upstream fetch with the bundle build. M1-S9's checks go there too. If a later check needs dependencies the build scripts shouldn't carry (for example image inspection for `check:prepublish`), it may move to a private `tooling` workspace. That move needs no ADR change, because the scripts stay in `packages/**` and run identically on the Pi and in CI.
+- **A3. A smaller ESLint plugin set than upstream: accepted, with these rules.**
+  - Kept: upstream's parser, `@typescript-eslint`, `@stylistic` and `jest` rule choices, plus our test-hygiene rules.
+  - `react-hooks` (upstream uses `@seiyab/eslint-plugin-react-hooks`) is added by the first story that adds React/TSX code. None is planned, since the web UI is upstream's bundle.
+  - `import/prefer-default-export` is **rejected** for this repo: we use named exports.
+  - `eslint-plugin-promise` and `eslint-plugin-github` are optional. Add them when they catch something real.
+  - Upstream's own `joplin/*` rules are internal to upstream. Re-implementing them is out of scope, and copying them is forbidden.
+  - The `() => void` type-arrow spacing (worklog item 4) is accepted, because it matches the committed acceptance suite.
+- **A4. Install scripts stay off by default; `sqlite3` is allow-listed.** Yarn 4.16 doesn't run third-party build scripts unless told to. Upstream sets `enableScripts: true` (`upstream:.yarnrc.yml`, v3.7.21); we don't, for supply-chain safety. As a result `sqlite3@5.1.6` (needed by the CLI), `sharp` and `keytar` were not built.
+  - The headless image installs from **this repo's `yarn.lock`** (a focused, immutable, production install of `packages/headless`). It runs install scripts for an explicit allow-list only, which today is `sqlite3`. The senior engineer picks the mechanism in M1-S5: a per-package yarn setting if yarn 4.16 honours one while `enableScripts` is off, otherwise one explicit Containerfile step that runs `sqlite3`'s own install for that package only. Either way it is recorded in the worklog.
+  - **Rejected:** `npm install joplin@<version>` in the Containerfile (the spike S3 shortcut). npm would resolve its own transitive tree, so the image could run `@joplin/*` versions that `yarn.lock` and `check:pin` never saw (ADR-0005). Also rejected: turning on `enableScripts: true` globally, which would run every dependency's lifecycle scripts.
+  - `sharp` and `keytar` stay unbuilt. If the CLI ever needs either at runtime, the M1-AC16 contract test will fail, and the package then joins the allow-list through an ADR amendment.
+  - Verification: M1-AC23 (binding loads on arm64 and amd64; the installed versions equal the lockfile; NEG: a non-allow-listed `postinstall` doesn't run).
+- **A5. `check:no-upstream-copy` hashes all tracked files of at least 1 KiB, binaries included:** accepted. This is stricter than "text file" and also catches copied upstream icons. The licence-header half of the check runs on files of any size and is scheduled as M1-AC25 (M1-S9).
+- **A6. `check:licenses`.** Yarn 4 has no `yarn licenses` command (checked with yarn 4.16.0: `Couldn't find a script named "licenses"`). The check reads the `license` field of every installed manifest instead and compares it with the allow-list above, plus a reviewed exception list that carries reasons. Scheduled as M1-AC24 (M1-S9). The optional `check:pin` cross-check of the `headless` manifest's `joplin` dependency against `cli.version` is M1-AC26.
+- **Root configuration files** (`jest.config.js`, `playwright.config.ts`, `eslint.config.js`, the tsconfigs) written by the senior engineer in M1-S1: accepted. QA may take over the Jest/Playwright harness config in M1-S6. The ownership table in `CLAUDE.md` is unchanged.

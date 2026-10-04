@@ -1,0 +1,14 @@
+{
+	"//": "Type-checks every workspace package and the Jest/Playwright tests under tests/ in one program (`corepack yarn lint`). The node:test acceptance suite has its own tests/acceptance/tsconfig.json.",
+	"extends": "./tsconfig.base.json",
+	"include": [
+		"packages/*/src/**/*.ts",
+		"packages/*/bin/**/*.ts",
+		"tests/**/*.ts",
+		"*.config.ts"
+	],
+	"exclude": [
+		"**/node_modules/**",
+		"tests/fixtures/**"
+	]
+}

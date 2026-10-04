@@ -115,3 +115,9 @@ A fifth fact since gate 1: 5. **The HTTPS front is Cloudflare Tunnel** (ADR-0006
 - **Cloudflare Tunnel is the HTTPS front.** Added fact 5, the "TLS front" section (what Cloudflare sees, client-IP trust, cloudflared's reach, optional Access on `/mcp`, no challenges on API paths), the tunnel token and Access service token as assets, and the `no-store`/`no-transform` header rule. Evidence: `docs/spikes/S6-cloudflare-tunnel.md`.
 - The gateway's `?token=` form is for LAN clients only; through the tunnel, clients use `Authorization: Bearer`.
 - Q8 resolved: the headless service uses the user's full account; the bot-account mode stays an alternative, not the default.
+
+## Amendments (2026-10-04, MCP exposure)
+- **User decision (L17, STATUS 2026-10-04):** publish `/mcp` through the Cloudflare Tunnel behind Cloudflare Access **plus** the bearer token, so cloud MCP clients (claude.ai connectors) can reach it. The user accepts that Cloudflare can read the MCP bearer token and the decrypted note content MCP returns. This replaces the earlier Q7 default for the user's deployment. **The product default for others stays opt-in** (`MCP_PUBLIC=false`): "MCP exposure" above describes the shipped defaults, and the user's deployment overrides them in its own `.env`.
+- In that deployment, Access is a required outer layer. The bearer token, the Origin allow-list, the rate limits, the trash-by-default rule and the `POST /notes` guards stay mandatory and unchanged.
+- **Open (O4):** if claude.ai connectors can only authenticate through OAuth (Access as the authorization server) and can't send our static bearer token, accepting a validated Access JWT in place of the bearer token on the tunnel path is a relaxation of this ADR. It needs the user's explicit approval and a further amendment, and is not assumed here.
+- Verification: M4-AC18, M5-AC14, M5-AC11 step 5 (all with negative controls).

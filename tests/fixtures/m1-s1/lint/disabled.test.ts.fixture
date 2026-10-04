@@ -1,0 +1,6 @@
+// M1-AC1 NEG fixture (ADR-0009): `corepack yarn lint` must reject it with jest/no-disabled-tests.
+import { expect, test } from '@jest/globals';
+
+test.skip('a skipped Jest test must be rejected by lint', () => {
+	expect(1 + 1).toBe(2);
+});

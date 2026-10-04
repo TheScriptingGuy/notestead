@@ -1,0 +1,38 @@
+{
+  "name": "notestead",
+  "private": true,
+  "description": "Notestead for Joplin (unofficial): self-hosted web app, headless Data API and MCP server built from upstream Joplin components",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "packageManager": "yarn@4.16.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json",
+    "test": "jest",
+    "test:acceptance": "node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/**/*.test.mts'",
+    "check:pin": "node packages/web-build/bin/check-pin.ts",
+    "check:no-upstream-copy": "node packages/web-build/bin/check-no-upstream-copy.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@jest/globals": "29.7.0",
+    "@playwright/test": "1.59.1",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@types/jest": "29.5.14",
+    "@types/node": "22.20.4",
+    "@typescript-eslint/eslint-plugin": "8.60.0",
+    "@typescript-eslint/parser": "8.60.0",
+    "eslint": "9.39.4",
+    "eslint-plugin-jest": "29.15.2",
+    "eslint-plugin-playwright": "2.12.0",
+    "globals": "17.6.0",
+    "jest": "29.7.0",
+    "ts-jest": "29.4.6",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,2 @@
+// M1-AC1 NEG fixture: `corepack yarn lint` includes `tsc --noEmit` (ADR-0009) and must report TS2322 here.
+export const notANumber: number = 'M1-AC1 NEG: lint must type-check workspace sources';

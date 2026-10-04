@@ -1,0 +1,17 @@
+{
+	"minor": "3.7",
+	"web": {
+		"repo": "https://github.com/laurent22/joplin.git",
+		"branch": "release-3.7",
+		"tag": "v3.7.21"
+	},
+	"cli": {
+		"npm": "joplin",
+		"version": "3.7.1"
+	},
+	"server": {
+		"image": "docker.io/joplin/server",
+		"tag": "3.7.2"
+	},
+	"syncVersion": 3
+}

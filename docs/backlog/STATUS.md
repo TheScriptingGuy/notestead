@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | stories M1-S1…S8 |
+| M1 Walking skeleton + test harness | in progress | M1-S1: QA RED done (`9b0fb8e`), engineer implementing |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -39,6 +39,8 @@ The orchestrator (main Claude session) maintains this file.
     - Q11: upstream security reports go privately.
     - Q12: no swap change.
   - **Still requires separate, one-at-a-time approval:** the repo rename (Playwright), the first push, and each first publish per channel.
+
+- 2026-10-04 **MCP exposure (L17):** the user chose to **publish MCP through the Cloudflare Tunnel behind Cloudflare Access plus the bearer token**. They accept that Cloudflare can read the decrypted note content MCP returns, so cloud clients such as claude.ai connectors can reach it. This replaces the earlier default (Q7). The architect records it in ARCHITECTURE §14 and the M4/M5 acceptance criteria. The product default for other users stays opt-in.
 
 ## Open items for the user
 - EUIPO TMview check for "Notestead" before the first public release (user).

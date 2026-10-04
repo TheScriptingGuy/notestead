@@ -32,7 +32,7 @@ Facts that constrain the policy (all verified in the reference clone):
    }
    ```
    - Build scripts, Containerfiles, CI and test fixtures read this file and hard-code nothing.
-   - `packages/headless/package.json` depends on `"joplin": "3.7.1"` exactly. Our `yarn.lock` pins the transitive `@joplin/*` versions, and a CI check fails if the lockfile's `@joplin/lib` minor differs from `minor`.
+   - `packages/headless/package.json` depends on `"joplin": "3.7.1"` exactly. Our `yarn.lock` pins the transitive `@joplin/*` versions, and `check:pin` fails if any lockstep `@joplin/*` package (`@joplin/lib`, `@joplin/renderer`, `@joplin/utils`, …) resolves outside `minor`. `@joplin/fork-*` and `@joplin/turndown*` are exempt because upstream versions them separately; `yarn.lock` still pins them exactly (M1-AC3).
 2. **Skew policy.**
    - All three artifacts stay on the **same minor** as the user's Joplin Server and clients (3.7 today).
    - Within that minor, patches may differ (web 3.7.21 vs CLI 3.7.1 is allowed).
@@ -76,3 +76,6 @@ This ADR *is* the upgrade policy. Each bump PR updates `upstream/joplin-version.
 ## Amendments (2026-10-04, gate 1)
 - **Versioning rule D7** (user decision, channels.md §6): Joplin minor upgrade = our MAJOR (MINOR while 0.x), plus a floating `joplin<minor>` image tag. Added to the upgrade policy; the tag scheme itself lives in ADR-0006.
 - **User's versions confirmed:** server and all clients on 3.7.x, so the same-minor skew policy holds with the current pins (S5 conditions resolved).
+
+## Amendments (2026-10-04, M1-S1)
+- **Same-minor lockfile rule, made precise.** `@joplin/lib@3.7.1` depends on `@joplin/fork-*` (4.1.64, 1.2.68, 2.0.7) and `@joplin/turndown*` (4.0.86, 1.0.68), which upstream versions on their own lines. The rule therefore applies to the lockstep `@joplin/*` packages only, and fails closed for unknown ones. The exempt packages are covered by the exact `joplin` pin plus `yarn.lock`, and their upgrades show up in the bump PR's lockfile diff. M1-AC3 is amended to match.
