@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3; M1-AC5 PENDING-CI until M1-AC27) |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); next: M1-S9, then the first push |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -42,7 +42,17 @@ The orchestrator (main Claude session) maintains this file.
 
 - 2026-10-04 **MCP exposure (L17):** the user chose to **publish MCP through the Cloudflare Tunnel behind Cloudflare Access plus the bearer token**. They accept that Cloudflare can read the decrypted note content MCP returns, so cloud clients such as claude.ai connectors can reach it. This replaces the earlier default (Q7). The architect records it in ARCHITECTURE §14 and the M4/M5 acceptance criteria. The product default for other users stays opt-in.
 
+## Pending CI verification (closes on the first green run after the user-approved push; QA's V1–V8 in docs/test-plans/M1-S3.md)
+- M1-AC8 (x64), M1-AC9, M1-AC27, and through M1-AC27: **M1-AC5** (full web build on x64).
+- If the first run fails, fixes go on a `fix/M1-S3-*` branch, not the merged story branch.
+
 ## Follow-ups from reviews (route into the named story when it starts)
+- **M1-S8 (or earlier):** `check:workflows` gaps from review M1-S3:
+  - C1: YAML aliases bypass the pin and permission checks.
+  - C2: ban `pull_request_target` outright.
+  - C3: also check local actions outside `.github/actions/`.
+  - C4/C5 (nits): verify the sha256 of a cached tool binary, and add a download timeout.
+- **Architect (with M1-S9):** an ADR-0009 amendment allowing pipeline-only tooling in `.github/scripts/` (review M1-S3 P1), and an M1.md fix: post-merge CI fixes go on `fix/M1-S3-*`.
 - **M1-S9 / M1-AC26:** `check:pin` must also check the *source* of `joplin`/`@joplin/*` in the lockfile: require `npm:` resolutions, reject git or local patches (review M1-S1 C1).
 - **M1-S9 `check:licenses`:** exception list with reasons for 5 transitive packages of `joplin@3.7.1` (one LGPL-3.0, one MPL-2.0-no-copyleft-exception, one AFL/BSD, two with no licence field) (review M1-S1).
 - **M1-S6:** the lint ban on fixed sleeps should also catch `setTimeout`-based sleeps in tests (C2). Playwright Chromium revision mismatch (expects r1217, the Pi has r1223): pin to the installed browser or ask the user before downloading. Fixture log attachments and the CI report format.
