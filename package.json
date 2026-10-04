@@ -19,6 +19,7 @@
     "test:optin:build": "node --test --test-reporter=spec tests/acceptance/m1-s2/optin/ac5-build.optin.mts",
     "check:pin": "node packages/web-build/bin/check-pin.ts",
     "check:no-upstream-copy": "node packages/web-build/bin/check-no-upstream-copy.ts",
+    "check:licenses": "node packages/web-build/bin/check-licenses.ts",
     "check:workflows": "node .github/scripts/check-workflows.ts"
   },
   "devDependencies": {
