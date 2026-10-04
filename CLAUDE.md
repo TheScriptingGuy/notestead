@@ -1,4 +1,6 @@
-# Joplin Web App: project conventions
+# Notestead for Joplin (unofficial): project conventions
+
+The public name is **Notestead**, decided by the user on 2026-10-04. The GitHub repo `TheScriptingGuy/Joplin-Web-App` will be renamed before the first push.
 
 A self-hosted companion stack for Joplin, built from **existing upstream Joplin components**:
 1. **Web UI.** Upstream's official react-native-web build of the Joplin mobile app (`packages/app-mobile`, `yarn web`), served as static files. It syncs with the user's existing self-hosted Joplin Server through a same-origin reverse proxy.
@@ -71,11 +73,12 @@ The main Claude session is the **only orchestrator**. It dispatches one agent at
 - QA has signed off and the lead has approved.
 
 ## Commits
-- Use small, focused commits with an imperative subject.
+- Use small, focused commits with a **Conventional Commits** subject, because release-please drives versioning. Examples: `feat(mcp): add set_alarm tool`, `fix(web): …`, `test(e2e): …`, `ci: …`, `docs: …`, `chore: …`. Mark a breaking change with `!` or a `BREAKING CHANGE:` footer.
 - Every commit message ends with a trailer naming the agent, then the attribution line:
   ```
   Agent: <architect|qa-specialist|senior-engineer|ci-cd-specialist|lead-engineer|orchestrator>
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+  Claude-Session: <the session URL given in the orchestrator's dispatch, if any>
   ```
 - **Never push, open PRs or publish images** unless the user explicitly approves it.
 - Never commit secrets, tokens or real note content.
