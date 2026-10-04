@@ -1,0 +1,12 @@
+# M1-S3 fixture (M1-AC8): the local composite action the valid workflow uses (`uses: ./.github/actions/setup`).
+# Never run: the tests copy it to <temp>/.github/actions/setup/action.yml.
+name: setup
+description: Fixture composite action for the M1-S3 workflow checks.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - run: corepack enable
+      shell: bash

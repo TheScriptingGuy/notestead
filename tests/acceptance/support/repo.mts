@@ -124,15 +124,16 @@ export const rootManifest = (): RootManifest => {
 	return readJson<RootManifest>(path);
 };
 
-export const requireRootScript = (name: string): void => {
+// `contract` names the test plan section that defines the script, so a RED failure points at the right story.
+export const requireRootScript = (name: string, contract = 'docs/test-plans/M1-S1.md §Command contracts'): void => {
 	const scripts = rootManifest().scripts ?? {};
 	assert.ok(typeof scripts[name] === 'string' && scripts[name].trim() !== '',
-		`M1-S1 contract: the root package.json must define the script "${name}" (docs/test-plans/M1-S1.md §Command contracts). Found: ${JSON.stringify(Object.keys(scripts))}`);
+		`Contract (${contract}): the root package.json must define the script "${name}". Found: ${JSON.stringify(Object.keys(scripts))}`);
 };
 
 // Runs `corepack yarn <script> …args` after checking the script exists, so a missing script can never satisfy a negative test.
-export const yarnScript = (story: string, label: string, script: string, args: string[] = [], opts: RunOptions = {}): RunResult => {
-	requireRootScript(script);
+export const yarnScript = (story: string, label: string, script: string, args: string[] = [], opts: RunOptions = {}, contract?: string): RunResult => {
+	requireRootScript(script, contract);
 	return yarn(story, label, [script, ...args], opts);
 };
 

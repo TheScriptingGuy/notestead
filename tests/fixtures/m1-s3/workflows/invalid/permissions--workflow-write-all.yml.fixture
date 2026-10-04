@@ -1,0 +1,45 @@
+# M1-S3 fixture (M1-AC8): a workflow that `check:workflows` must accept. Never run: the tests copy it into a
+# temp .github/workflows/ tree. The invalid/ cases are this file with the edits listed in
+# tests/acceptance/support/workflows.mts.
+name: fixture-valid
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions: write-all
+jobs:
+  build-job:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Container action pinned by digest
+        uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        with:
+          args: echo ok
+      - run: echo "built on ${RUNNER_OS}"
+      - name: Quoted uses value
+        uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' # v4.6.2
+        with:
+          name: fixture
+          path: out/
+  arm-job:
+    needs: build-job
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: echo "tested"
+  shared-job:
+    needs: arm-job
+    permissions:
+      contents: read
+    uses: octo-org/shared/.github/workflows/build.yml@0123456789abcdef0123456789abcdef01234567
