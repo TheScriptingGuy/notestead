@@ -1,7 +1,7 @@
 # ADR-0005: One version pin, same-minor skew policy, upgrade and rollback rules
 
 ## Status
-Proposed (Phase A, 2026-10-03). Becomes Accepted when the user approves the plan (`plan-approved-v1`).
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day (see Amendments). Proposed in Phase A (2026-10-03).
 
 ## Context
 We consume three upstream artifacts, each released on its own schedule:
@@ -40,6 +40,7 @@ Facts that constrain the policy (all verified in the reference clone):
 3. **Upgrade policy.**
    - **Patch bumps** within the minor are proposed automatically by a scheduled workflow (M6). They merge only when the full suite is green on x64 and arm64.
    - **Minor bumps** (3.7 → 3.8) are proposed only after the user confirms that their server and their desktop/mobile clients are on the new minor. They need a written ADR amendment and the user's approval.
+   - **How bumps show in our version (D7, gate 1; ADR-0006):** an upstream patch bump is our PATCH; a Joplin minor bump is our **MAJOR** (our MINOR while we are on 0.x) and moves the floating `joplin<minor>` image tag to the new minor. Users pinned to `joplin3.7` or to our previous MAJOR are never moved across a Joplin minor.
    - **Automation never runs `joplin sync --upgrade`**, and never points a newer-`syncVersion` client at the user's server. The supervisor refuses to start if the CLI's `syncVersion` differs from the pin (M3).
 4. **Rollback policy.**
    - **Images:** every release is an immutable image digest, so rolling back means redeploying the previous digest.
@@ -70,3 +71,8 @@ This ADR *is* the upgrade policy. Each bump PR updates `upstream/joplin-version.
 - **M3-AC9:** the supervisor refuses a CLI whose `syncVersion` ≠ pin (integration, with a negative control).
 - **M6-AC2:** the bump PR fails when the `syncVersion` constant changes (contract test against a patched fixture).
 - **M5-AC9:** the rollback runbook is exercised once on the Pi (manual, recorded).
+- **M5-AC12:** release tags follow the D7 rule (CI, with a negative control).
+
+## Amendments (2026-10-04, gate 1)
+- **Versioning rule D7** (user decision, channels.md §6): Joplin minor upgrade = our MAJOR (MINOR while 0.x), plus a floating `joplin<minor>` image tag. Added to the upgrade policy; the tag scheme itself lives in ADR-0006.
+- **User's versions confirmed:** server and all clients on 3.7.x, so the same-minor skew policy holds with the current pins (S5 conditions resolved).

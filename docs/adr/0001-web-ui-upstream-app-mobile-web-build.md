@@ -1,7 +1,7 @@
 # ADR-0001: The web UI is upstream's app-mobile web build, built from a pinned ref on x64 CI, consumed as an architecture-neutral artifact
 
 ## Status
-Proposed (Phase A, 2026-10-03). Spike S1:
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`). Proposed in Phase A (2026-10-03). Spike S1:
 - Native arm64 build: **GO-WITH-CONDITIONS** as a local fallback (43 min, 7.0 GiB peak with swap full, ~13 GB of disk).
 - x64 CI artifact path: **GO**.
 

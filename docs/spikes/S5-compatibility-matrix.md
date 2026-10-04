@@ -65,13 +65,25 @@ git show server-v3.7.2:packages/server/src/middleware/apiVersionHandler.ts
 - The pins (web `v3.7.21`, CLI `3.7.1` + lockfile, server `3.7.2`) are mutually compatible: same minor, the same `syncVersion` 3, and runtime sync proven in S3/S4.
 - The web/CLI skew (3.7.21 vs 3.7.1) only touches local DB migrations (each client has its own database) and MCP notification status codes (which our design never forwards).
 
-**Conditions, which depend on the user's answers** (open questions Q3/Q4 in ARCHITECTURE.md):
+**Conditions, which depended on the user's answers** (Q3/Q4; all resolved at gate 1, see below):
 1. The user's Joplin Server runs 3.x (≥ 2.6 works technically; same minor 3.7 is the policy) and its sync target reports `info.json` `version: 3`.
 2. The user's desktop and mobile clients are 3.x. Older 2.x clients also have `syncVersion` 3, but they are outside the tested matrix.
 3. **All E2EE master keys on the account can be unlocked with one master password.** Older accounts can have keys with different passwords. The headless service uses `encryption.masterPassword` only (`upstream:packages/lib/services/e2ee/utils.ts:142-153`), so items under other keys would stay encrypted (reported as `degraded`, M3-AC5).
 4. The user's front proxy (if any) allows request bodies up to the attachment sizes they use, and forwards the client IP (S2 condition 2).
 
-## Follow-ups (what we need from the user)
+## Resolution at gate 1 (2026-10-04)
+The user answered Q3/Q4 at gate 1. The result becomes **GO** for the pinned set.
+
+| Condition | Resolution |
+|---|---|
+| 1. Server on 3.x, sync target at version 3 | **Resolved:** the server is on 3.7.x (same minor as the pins). The target's `info.json` `version: 3` is still asserted before and after the user's smoke test (M5-AC11 NEG). |
+| 2. Clients on 3.x | **Resolved:** all desktop and mobile clients are on 3.7.x. |
+| 3. One master password unlocks all E2EE keys | **Resolved:** confirmed by the user. The `degraded` path (M3-AC5) stays as a guard. |
+| 4. Front allows the needed body sizes and forwards the client IP | **Resolved by design:** the front is Cloudflare Tunnel; client IP from `CF-Connecting-IP` (ADR-0002 rule 4); the body limit is documented as L16 (`docs/spikes/S6-cloudflare-tunnel.md`). |
+
+The remaining server details (`APP_BASE_URL`, a direct `JOPLIN_SERVER_URL`, `USER_CONTENT_BASE_URL`, the Cloudflare plan) are deploy-time configuration, collected in M5-S4 (M5-S6 prerequisites), not design questions.
+
+## Follow-ups (original list; answered at gate 1 except where M5-S4 collects deploy details)
 - **Joplin Server:** its version (admin UI footer, or `podman/docker image inspect`), its `APP_BASE_URL`, how it is fronted (proxy or tunnel, upload limit, whether it sets `X-Real-IP`/`X-Forwarded-For`), and whether `USER_CONTENT_BASE_URL` is set.
 - **Clients:** desktop and mobile versions (Help → About), and confirmation that they are 3.7.x.
 - **E2EE:** in desktop Settings → Encryption, do all master keys show as decryptable with the master password? An approximate number of notes and attachments and the total size, to size the headless volume and initial sync.

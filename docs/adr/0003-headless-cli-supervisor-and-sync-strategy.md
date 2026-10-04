@@ -1,7 +1,7 @@
 # ADR-0003: Headless Data API = pinned `joplin` CLI under a Node supervisor, with a pluggable `SyncStrategy` (default: stop-the-world)
 
 ## Status
-Proposed (Phase A, 2026-10-03).
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`). Proposed in Phase A (2026-10-03).
 
 Spike S3 (`docs/spikes/S3-headless-sync-strategy.md`):
 - Stop-the-world: **GO-WITH-CONDITIONS**, ~16–19 s outage per cycle on the Pi.

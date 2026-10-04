@@ -1,0 +1,40 @@
+# S6 throwaway Caddy: models the web container's client-IP rule and headers behind cloudflared.
+# Not production config (that belongs to deploy/**). No Joplin data is involved.
+{
+	admin off
+	servers {
+		# Only cloudflared's fixed address may supply the client IP, and only through CF-Connecting-IP.
+		trusted_proxies static 10.89.66.10/32
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+:8080 {
+	header {
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "credentialless"
+		Cross-Origin-Resource-Policy "same-origin"
+	}
+	handle /echo {
+		respond "remote={remote_host} client={client_ip} cfci={header.CF-Connecting-IP} xff={header.X-Forwarded-For} xri={header.X-Real-IP}"
+	}
+	handle /upload {
+		request_body {
+			max_size 300MB
+		}
+		respond "ok {header.Content-Length}"
+	}
+	handle /html-notransform {
+		header Content-Type "text/html; charset=utf-8"
+		header Cache-Control "no-cache, no-transform"
+		respond "<!DOCTYPE html><html><body><p>contact s6@example.com</p></body></html>"
+	}
+	handle /html-plain {
+		header Content-Type "text/html; charset=utf-8"
+		respond "<!DOCTYPE html><html><body><p>contact s6@example.com</p></body></html>"
+	}
+	handle /app.bundle.js {
+		header Content-Type "text/javascript"
+		respond "console.log('v1');"
+	}
+}

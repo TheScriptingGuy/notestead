@@ -1,7 +1,7 @@
 # ADR-0009: Repository layout and tooling
 
 ## Status
-Proposed (Phase A, 2026-10-03).
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`). Proposed in Phase A (2026-10-03).
 
 ## Context
 - `CLAUDE.md` requires the same language and tooling as upstream: TypeScript, yarn 4 via corepack, Jest, Playwright, and eslint modelled on Joplin's.

@@ -1,7 +1,7 @@
 # ADR-0004: MCP server: our own endpoint over the REST Data API, with an allow-listed passthrough to upstream `/mcp`
 
 ## Status
-Proposed (Phase A, 2026-10-03). Spike S4 part C: **GO-WITH-CONDITIONS**. Upstream `/mcp` works in the headless CLI 3.7.1 once enabled through `config --import`; see `docs/spikes/S4-browser-and-mcp.md` §C.
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day (see Amendments). Proposed in Phase A (2026-10-03). Spike S4 part C: **GO-WITH-CONDITIONS**. Upstream `/mcp` works in the headless CLI 3.7.1 once enabled through `config --import`; see `docs/spikes/S4-browser-and-mcp.md` §C.
 
 ## Context
 - **Upstream's MCP (3.7, beta) is served at `POST /mcp`** on the Data API port.
@@ -29,7 +29,7 @@ Proposed (Phase A, 2026-10-03). Spike S4 part C: **GO-WITH-CONDITIONS**. Upstrea
   - `GET /revisions` (raw diff objects only)
 - **The npm CLI (3.7.1) predates fix #16473** ("Return 202 for MCP notification requests"). That only matters to a client that forwards notifications. We don't.
 - **ADR-0008** requires that untrusted bodies never reach `POST /notes`.
-- **Public distribution** (`docs/delivery/channels.md`, pending) makes a stand-alone stdio MCP package valuable. Such a package works against any Joplin Data API: desktop, or our headless gateway.
+- **Public distribution** (`docs/delivery/channels.md`, approved at gate 1) makes a stand-alone stdio MCP package valuable. It is published as npm `notestead-mcp` and listed in the MCP Registry as `io.github.thescriptingguy/notestead`. Such a package works against any Joplin Data API: desktop, or our headless gateway.
 
 ## Decision
 1. **We own the MCP endpoint** (`packages/mcp`, built on `@modelcontextprotocol/sdk`, MIT).
@@ -63,7 +63,7 @@ Proposed (Phase A, 2026-10-03). Spike S4 part C: **GO-WITH-CONDITIONS**. Upstrea
    | `list_trash` | `GET /notes?include_deleted=1`, `GET /folders?include_deleted=1` (paginated, filter `deleted_time>0`) | |
    | `restore_from_trash` {id} | `PUT /notes/:id {deleted_time:0}` (+ parent folders if deleted) | mirrors upstream behaviour where possible. Edge cases are documented and tested. |
    | `list_note_revisions` {note_id} | `GET /revisions` (filter `item_id`) | metadata only. Restore is **deferred to upstream** (needs a REST endpoint that reconstructs a revision). |
-   | `sync_now` {wait?} | supervisor `SyncStrategy.requestSync()` | coalesces with a running cycle |
+   | `sync_now` {wait?} | supervisor `SyncStrategy.requestSync()` | coalesces with a running cycle; `wait` returns after the cycle or after at most `MCP_SYNC_WAIT_MAX` (default and maximum 90 s) with `{state:"running"}`, so a response always beats the front's 125 s timeout (ADR-0006) |
    | `sync_status` | supervisor | last result, last success, next run, queued writes |
 
 4. **Write semantics:**
@@ -99,3 +99,8 @@ Proposed (Phase A, 2026-10-03). Spike S4 part C: **GO-WITH-CONDITIONS**. Upstrea
   - M4-AC5–AC14 (gap tools)
   - M4-AC7 (sanitizer and the file:// negative test)
   - M4-AC15–AC16 (cross-surface E2E)
+
+## Amendments (2026-10-04, gate 1)
+- **`sync_now {wait:true}` is capped at 90 s** (`MCP_SYNC_WAIT_MAX`), then reports the cycle as running; clients poll `sync_status`. Reason: the Cloudflare Tunnel front answers 524 after 125 s without response headers (ADR-0006, S6). Test: M4-AC14.
+- With the tunnel, the `Origin` allow-list (`MCP_ALLOWED_ORIGINS`) contains the tunnel hostname, and Cloudflare Access with a service token can optionally sit in front of `/mcp` (ADR-0006/0008). The bearer token stays mandatory.
+- Package names: npm `notestead-mcp`, MCP Registry `io.github.thescriptingguy/notestead`.
