@@ -1,8 +1,9 @@
-// M1-AC29: third-party-notices.txt.
+// M1-AC29 (as amended: ADR-0010 notices precedence, ADR-0009 A9): third-party-notices.txt.
 // - `corepack yarn workspace web-build notices <upstream-tree> --bundle <dist> --out <file> [--exceptions <file>]`
 //   (the seam `build` uses) writes the notices for the transitive `dependencies` closure of upstream's
 //   packages/app-mobile (resolved from the tree's yarn.lock) plus every package a bundle *.LICENSE.txt banner names,
-//   with each package's full licence file text; a package without a licence file fails unless excepted.
+//   with each package's full licence file text, or the standard SPDX text for a usable declared licence when the
+//   package ships no file; anything else without a licence file fails unless excepted.
 // - `overlay` links the file from source.html (next to the *.LICENSE.txt links) and `verify` fails without it.
 // Fixtures: a synthetic upstream tree (our own manifests and texts, generated at test time) and F2 for verify.
 // Test plan: docs/test-plans/M1-S9.md.
@@ -15,9 +16,9 @@ import {
 } from '../support/repo.mts';
 import type { RunOptions, RunResult } from '../support/repo.mts';
 import {
-	bodyHasText, dependencyClosure, fixtureLicenceText, manifest, mit, noticesNamed, parseNotices, writeFiles, writeUpstreamFixture,
+	bodyHasText, dependencyClosure, fixtureLicenceText, hasPhrase, manifest, noticesNamed, parseNotices, writeFiles, writeUpstreamFixture,
 } from '../support/licenses.mts';
-import type { UpstreamFixtureExtra } from '../support/licenses.mts';
+import type { NoticeEntry, UpstreamFixtureExtra } from '../support/licenses.mts';
 import {
 	attempt, materialize, readTree, requireWorkspaceScript, settled, syntheticBundle, upstreamPublicBundle, writeTree,
 } from '../support/webBundle.mts';
@@ -43,6 +44,14 @@ const tempDir = (prefix: string): string => {
 };
 
 const lineWith = (r: RunResult, needles: string[]): boolean => r.output.split('\n').some(line => needles.every(n => line.includes(n)));
+
+const lockEntry = (name: string, version: string): string =>
+	`"${name}@npm:${version}":\n  version: ${version}\n  resolution: "${name}@npm:${version}"\n  checksum: 10c0/0000\n  languageName: node\n  linkType: hard\n`;
+
+// Distinctive phrases of the standard SPDX texts (short quotations, enough to tell the texts apart).
+const mitPhrases = ['Permission is hereby granted, free of charge, to any person obtaining a copy', 'THE SOFTWARE IS PROVIDED "AS IS"'];
+const apachePhrases = ['Apache License', 'TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION'];
+const iscPhrase = 'Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted';
 
 const text = fixtureLicenceText;
 
@@ -122,10 +131,10 @@ describe('M1-AC29 notices seam on a synthetic upstream tree', () => {
 		assert.ok(lib[0].body.includes('source.html'), '@joplin/lib points at source.html for its source and licence');
 	});
 
-	it('M1-S9-T401 (AC NEG) a package with no licence file (and no licence field) and no exception fails, naming it and its version; no file is written', () => {
+	it('M1-S9-T401 (AC NEG) a package with no licence file, no licence field and no exception fails, naming it and its version; no file is written', () => {
 		const tree = upstreamTree('notices-nofile', {
 			appDeps: { 'no-licence-file': '0.1.0' },
-			lockEntries: ['"no-licence-file@npm:0.1.0":\n  version: 0.1.0\n  resolution: "no-licence-file@npm:0.1.0"\n  checksum: 10c0/0000\n  languageName: node\n  linkType: hard\n'],
+			lockEntries: [lockEntry('no-licence-file', '0.1.0')],
 			packages: [{ dir: 'packages/app-mobile/node_modules/no-licence-file', manifest: manifest('no-licence-file', '0.1.0'), files: { 'README.md': '# no-licence-file (fixture)\n' } }],
 		});
 		const out = join(tempDir('notices-nofile-out'), noticesName);
@@ -135,22 +144,70 @@ describe('M1-AC29 notices seam on a synthetic upstream tree', () => {
 		assert.ok(!existsSync(out), `${noticesName} must not be written when the step fails`);
 	});
 
-	it('M1-S9-T402 NEG: a package that declares a licence but ships no licence file fails too (AC29 as written: "a package without a licence file")', () => {
+	// ADR-0010 amendment (F2): no licence file but a usable declared licence → the standard SPDX text, marked as such.
+	it('M1-S9-T402 positive control (F2): packages that declare a usable licence but ship no file get the standard SPDX text, a marker line and their declared author/repository', () => {
+		const pkgs: { name: string; version: string; fields: Record<string, unknown> }[] = [
+			{ name: 'declared-no-file', version: '0.2.0', fields: { license: 'MIT', author: 'Fixture Author <author@example.invalid>', repository: 'https://example.invalid/declared-no-file.git' } },
+			{ name: 'declared-or-no-file', version: '0.4.0', fields: { license: '(MIT OR Apache-2.0)', author: { name: 'Fixture Org' } } },
+			{ name: 'legacy-no-file', version: '0.5.0', fields: { licenses: [{ type: 'ISC', url: 'https://example.invalid/LICENSE' }] } },
+		];
 		const tree = upstreamTree('notices-declared-nofile', {
-			appDeps: { 'declared-no-file': '0.2.0' },
-			lockEntries: ['"declared-no-file@npm:0.2.0":\n  version: 0.2.0\n  resolution: "declared-no-file@npm:0.2.0"\n  checksum: 10c0/0000\n  languageName: node\n  linkType: hard\n'],
-			packages: [{ dir: 'packages/app-mobile/node_modules/declared-no-file', manifest: manifest('declared-no-file', '0.2.0', mit) }],
+			appDeps: Object.fromEntries(pkgs.map(p => [p.name, p.version])),
+			lockEntries: pkgs.map(p => lockEntry(p.name, p.version)),
+			packages: pkgs.map(p => ({ dir: `packages/app-mobile/node_modules/${p.name}`, manifest: manifest(p.name, p.version, p.fields), files: { 'README.md': `# ${p.name} (fixture, no licence file)\n` } })),
 		});
 		const out = join(tempDir('notices-declared-out'), noticesName);
 		const r = notices('T402-notices-declared-no-file', tree, out, exceptionsFile(tempDir('exc-empty'), []));
+		assertExitZero(r);
+		const parsed = parseNotices(readFileSync(out, 'utf8'));
+		const entry = (key: string): NoticeEntry => {
+			const e = parsed.get(key);
+			assert.ok(e, `${noticesName} lists ${key}`);
+			return e;
+		};
+
+		const mitEntry = entry('declared-no-file@0.2.0');
+		assert.equal(mitEntry.license, 'MIT', 'License: gives the declared licence');
+		assert.ok(mitEntry.body.split('\n').some(l => l.trim() === 'Licence text: standard SPDX text for MIT; no licence file in the package'), `the entry has the marker line. Body: ${mitEntry.body.slice(0, 400)}`);
+		for (const phrase of mitPhrases) assert.ok(hasPhrase(mitEntry.body, phrase), `the entry has the standard MIT text (${JSON.stringify(phrase)})`);
+		assert.ok(mitEntry.body.includes('Fixture Author'), 'the entry gives the declared author');
+		assert.ok(mitEntry.body.includes('https://example.invalid/declared-no-file.git'), 'the entry gives the declared repository');
+		assert.match(mitEntry.body, /not declared/i, 'undeclared contributors are stated as "not declared"');
+
+		const orEntry = entry('declared-or-no-file@0.4.0');
+		assert.ok(orEntry.body.split('\n').some(l => /^Licence text: standard SPDX text for .*MIT.*Apache-2\.0.*; no licence file in the package$/.test(l.trim())), 'the marker line names the declared expression');
+		for (const phrase of [...mitPhrases, ...apachePhrases]) assert.ok(hasPhrase(orEntry.body, phrase), `every ID of the expression gets its standard text (${JSON.stringify(phrase)})`);
+		assert.ok(orEntry.body.includes('Fixture Org'), 'an author object is given by its name');
+
+		const legacyEntry = entry('legacy-no-file@0.5.0');
+		assert.ok(legacyEntry.body.split('\n').some(l => l.trim() === 'Licence text: standard SPDX text for ISC; no licence file in the package'), 'a legacy form derives the expression (ADR-0009 A9) for the fallback');
+		assert.ok(hasPhrase(legacyEntry.body, iscPhrase), 'the entry has the standard ISC text');
+	});
+
+	it('M1-S9-T404 NEG: no licence file and no usable declared licence (UNLICENSED, SEE LICENSE IN, non-SPDX, LicenseRef) without an exception fails, naming each package and version', () => {
+		const pkgs: { name: string; version: string; license: string }[] = [
+			{ name: 'unlicensed-no-file', version: '1.0.0', license: 'UNLICENSED' },
+			{ name: 'see-file-no-file', version: '1.1.0', license: 'SEE LICENSE IN LICENSE.txt' },
+			{ name: 'non-spdx-no-file', version: '1.2.0', license: 'Apache 2' },
+			{ name: 'licenseref-no-file', version: '1.3.0', license: 'LicenseRef-Fixture-Proprietary' },
+		];
+		const tree = upstreamTree('notices-unusable', {
+			appDeps: Object.fromEntries(pkgs.map(p => [p.name, p.version])),
+			lockEntries: pkgs.map(p => lockEntry(p.name, p.version)),
+			packages: pkgs.map(p => ({ dir: `packages/app-mobile/node_modules/${p.name}`, manifest: manifest(p.name, p.version, { license: p.license }) })),
+		});
+		const out = join(tempDir('notices-unusable-out'), noticesName);
+		const r = notices('T404-notices-unusable', tree, out, exceptionsFile(tempDir('exc-empty'), []));
 		assertExitNonZero(r);
-		assert.ok(lineWith(r, ['declared-no-file', '0.2.0']), `the failure names the package and its version on one line. ${describeRun(r)}`);
+		const unnamed = pkgs.filter(p => !lineWith(r, [p.name, p.version])).map(p => `${p.name}@${p.version}`);
+		assert.deepEqual(unnamed, [], `each package without a usable licence is named with its version on one line. ${describeRun(r)}`);
+		assert.ok(!existsSync(out), `${noticesName} must not be written when the step fails`);
 	});
 
 	it('M1-S9-T403 positive control: the same package with a reviewed exception passes, and the entry uses the exception\'s text and reason', () => {
 		const tree = upstreamTree('notices-excepted', {
 			appDeps: { 'no-licence-file': '0.1.0' },
-			lockEntries: ['"no-licence-file@npm:0.1.0":\n  version: 0.1.0\n  resolution: "no-licence-file@npm:0.1.0"\n  checksum: 10c0/0000\n  languageName: node\n  linkType: hard\n'],
+			lockEntries: [lockEntry('no-licence-file', '0.1.0')],
 			packages: [{ dir: 'packages/app-mobile/node_modules/no-licence-file', manifest: manifest('no-licence-file', '0.1.0'), files: { 'README.md': '# no-licence-file (fixture)\n' } }],
 		});
 		const noticeText = 'MIT License (fixture). Copyright (c) Fixture Author. Text established from the fixture repository at tag v0.1.0.';

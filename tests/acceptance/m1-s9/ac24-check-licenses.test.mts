@@ -1,4 +1,4 @@
-// M1-AC24: `corepack yarn check:licenses [--root <dir>] [--exceptions <file>] [--report <file>]` lists the declared
+// M1-AC24 (as amended: ADR-0009 A8 allow-list additions, A9 legacy forms): `corepack yarn check:licenses [--root <dir>] [--exceptions <file>] [--report <file>]` lists the declared
 // licence of every installed package and exits 0 only when each licence (SPDX expression) is on ADR-0009's
 // allow-list or covered by a reviewed exception (exact version, licence, evidence, reason).
 // Fixture trees are synthetic (our own manifests, generated at test time). The real-tree tests run on this repo.
@@ -90,7 +90,25 @@ const allowedSpecs: PackageSpec[] = [
 	{ dir: 'packages/ws-a/node_modules/@fx/ws-dep', manifest: manifest('@fx/ws-dep', '4.5.6', lic('Apache-2.0')) },
 	// A nested manifest inside a package is not a package: it must not be reported as one without a licence.
 	{ dir: 'node_modules/fx-esm', manifest: manifest('fx-esm', '1.0.0', lic('MIT')), files: { 'dist/package.json': '{ "type": "module" }\n' } },
+	// ADR-0009 A8 additions (the argparse, markdown-it-anchor/tweetnacl, pako and caniuse-lite cases).
+	{ dir: 'node_modules/fx-python', manifest: manifest('fx-python', '2.0.1', lic('Python-2.0')) },
+	{ dir: 'node_modules/fx-unlicense', manifest: manifest('fx-unlicense', '5.3.0', lic('Unlicense')) },
+	{ dir: 'node_modules/fx-zlib', manifest: manifest('fx-zlib', '1.0.11', lic('(MIT AND Zlib)')) },
+	{ dir: 'node_modules/fx-ccby', manifest: manifest('fx-ccby', '1.0.30001812', lic('CC-BY-4.0')) },
+	// ADR-0009 A9 legacy forms: an array is the OR of its types (objects or plain strings), an object is its type.
+	{ dir: 'node_modules/fx-legacy-mit', manifest: manifest('fx-legacy-mit', '0.1.2', { licenses: [{ type: 'MIT', url: 'https://example.invalid/LICENSE-MIT' }] }) },
+	{ dir: 'node_modules/fx-legacy-strings', manifest: manifest('fx-legacy-strings', '0.2.0', { licenses: ['MIT', 'Apache-2.0'] }) },
+	{ dir: 'node_modules/fx-legacy-or', manifest: manifest('fx-legacy-or', '0.2.1', { licenses: [{ type: 'MIT' }, { type: 'SSPL-1.0' }] }) },
+	{ dir: 'node_modules/fx-legacy-obj-isc', manifest: manifest('fx-legacy-obj-isc', '0.3.0', { license: { type: 'ISC', url: 'https://example.invalid/LICENSE' } }) },
 ];
+
+// The SPDX IDs each legacy fixture derives to (ADR-0009 A9); the listing marks them `legacy`.
+const legacyIds: Record<string, string[]> = {
+	'fx-legacy-mit@0.1.2': ['MIT'],
+	'fx-legacy-strings@0.2.0': ['MIT', 'Apache-2.0'],
+	'fx-legacy-or@0.2.1': ['MIT', 'SSPL-1.0'],
+	'fx-legacy-obj-isc@0.3.0': ['ISC'],
+};
 
 const rootFiles = {
 	'package.json': `${JSON.stringify({ name: 'fixture-root', private: true, license: 'AGPL-3.0-or-later', workspaces: ['packages/*'] }, null, 2)}\n`,
@@ -141,11 +159,21 @@ describe('M1-AC24 check:licenses on fixture trees', () => {
 		assertExitZero(r);
 		const walked = installedPackages(root).filter(p => p.name !== '');
 		assert.equal(walked.length, allowedSpecs.length, 'fixture sanity: the independent walker finds exactly the fixture packages');
-		for (const p of walked) assertLine(r, 'the listing names every package with its declared licence', keyOf(p.name, p.version), String(p.manifest.license));
+		for (const p of walked) {
+			const key = keyOf(p.name, p.version);
+			if (legacyIds[key]) assertLine(r, 'a legacy form is listed with its derived expression and a legacy marker', key, ...legacyIds[key], /legacy/i);
+			else assertLine(r, 'the listing names every package with its declared licence', key, String(p.manifest.license));
+		}
 		const report = readReport(reportPath, r);
 		assert.deepEqual(report.map(p => keyOf(p.name, p.version)).sort(), walked.map(p => keyOf(p.name, p.version)).sort(),
 			'the report lists exactly the installed packages (root, nested and workspace node_modules; no nested non-package manifests)');
 		for (const p of report) assert.equal(p.status, 'allowed', `${keyOf(p.name, p.version)} must pass by the allow-list, not by an exception`);
+		for (const [key, ids] of Object.entries(legacyIds)) {
+			const license = report.find(p => keyOf(p.name, p.version) === key)?.license ?? '';
+			for (const id of ids) assert.ok(license.includes(id), `${key}: the report's license is the derived expression (expected ${ids.join(' OR ')}, got ${JSON.stringify(license)})`);
+			if (ids.length > 1) assert.match(license, /\bOR\b/, `${key}: a legacy array derives to an OR`);
+		}
+		assert.equal(report.find(p => p.name === 'fx-legacy-mit')?.license, 'MIT', 'a single-entry legacy array derives to exactly its type');
 	});
 
 	it('M1-S9-T101 (AC NEG) a SSPL-1.0 package and a package with no licence field fail, and both are named', () => {
@@ -166,8 +194,9 @@ describe('M1-AC24 check:licenses on fixture trees', () => {
 		{ id: 'T103', spec: { dir: 'node_modules/fx-or-denied', manifest: manifest('fx-or-denied', '1.0.0', lic('(SSPL-1.0 OR CC-BY-NC-4.0)')) }, needles: ['fx-or-denied', '1.0.0', 'SSPL-1.0'], why: 'an OR with no allowed branch fails' },
 		{ id: 'T104', spec: { dir: 'node_modules/fx-gpl2', manifest: manifest('fx-gpl2', '1.0.0', lic('GPL-2.0-only')) }, needles: ['fx-gpl2', '1.0.0', 'GPL-2.0-only'], why: 'GPL-2.0-only is not a variant of an allow-listed licence' },
 		{ id: 'T105', spec: { dir: 'node_modules/fx-no-copyleft-exc', manifest: manifest('fx-no-copyleft-exc', '3.7.1', lic('MPL-2.0-no-copyleft-exception')) }, needles: ['fx-no-copyleft-exc', '3.7.1', 'MPL-2.0-no-copyleft-exception'], why: 'MPL-2.0-no-copyleft-exception is a different SPDX ID from MPL-2.0 and needs an exception' },
-		{ id: 'T106', spec: { dir: 'node_modules/fx-legacy-array', manifest: manifest('fx-legacy-array', '0.1.2', { licenses: [{ type: 'SSPL-1.0', url: 'https://example.invalid/LICENSE' }] }) }, needles: ['fx-legacy-array', '0.1.2'], why: 'a legacy `licenses` array is never silently passed' },
-		{ id: 'T107', spec: { dir: 'node_modules/fx-legacy-object', manifest: manifest('fx-legacy-object', '0.1.3', { license: { type: 'SSPL-1.0', url: 'https://example.invalid/LICENSE' } }) }, needles: ['fx-legacy-object', '0.1.3'], why: 'a legacy `license` object is never silently passed' },
+		{ id: 'T106', spec: { dir: 'node_modules/fx-legacy-array', manifest: manifest('fx-legacy-array', '0.1.2', { licenses: [{ type: 'SSPL-1.0', url: 'https://example.invalid/LICENSE' }] }) }, needles: ['fx-legacy-array', '0.1.2', 'SSPL-1.0'], why: 'a legacy `licenses` array whose only type is SSPL-1.0 fails' },
+		{ id: 'T107', spec: { dir: 'node_modules/fx-legacy-object', manifest: manifest('fx-legacy-object', '0.1.3', { license: { type: 'SSPL-1.0', url: 'https://example.invalid/LICENSE' } }) }, needles: ['fx-legacy-object', '0.1.3', 'SSPL-1.0'], why: 'a legacy `license` object of type SSPL-1.0 fails' },
+		{ id: 'T106b', spec: { dir: 'node_modules/fx-legacy-notype', manifest: manifest('fx-legacy-notype', '0.1.4', { licenses: [{ type: 'MIT' }, { url: 'https://example.invalid/LICENSE' }] }) }, needles: ['fx-legacy-notype', '0.1.4', noLicenceMarker], why: 'a legacy array with an entry without a usable type counts as missing' },
 		{ id: 'T108', spec: { dir: 'node_modules/fx-see-file', manifest: manifest('fx-see-file', '2.0.0', lic('SEE LICENSE IN LICENSE.txt')) }, needles: ['fx-see-file', '2.0.0', 'SEE LICENSE IN'], why: 'a non-SPDX pointer is not an allowed licence' },
 		{ id: 'T109', spec: { dir: 'node_modules/fx-unlicensed', manifest: manifest('fx-unlicensed', '1.0.0', lic('UNLICENSED')) }, needles: ['fx-unlicensed', '1.0.0', 'UNLICENSED'], why: 'UNLICENSED (proprietary) fails' },
 	];
@@ -231,6 +260,10 @@ describe('M1-AC24 reviewed exceptions', () => {
 	}
 });
 
+// The real tree's legacy MIT forms (ADR-0009 A9) and A8 allow-list additions (caniuse-lite: any version, below).
+const legacyMit = ['exit@0.1.2', '@joplin/fork-uslug@2.0.7', 'format@0.2.2', 'querystring@0.2.0'];
+const allowListed = ['argparse@2.0.1', 'markdown-it-anchor@5.3.0', 'tweetnacl@0.14.5', 'pako@1.0.11'];
+
 describe('M1-AC24 the real installed tree (integration)', () => {
 	it('M1-S9-T120 `corepack yarn check:licenses` passes on this repo, lists every installed package and applies the architect\'s dispositions', () => {
 		const reportPath = join(makeTempDir('m1s9-real'), 'report.json');
@@ -261,6 +294,16 @@ describe('M1-AC24 the real installed tree (integration)', () => {
 			assert.equal(p.status, 'allowed', `${keyOf(p.name, p.version)} passes by the LGPL-3.0 family (-or-later), with no exception`);
 		}
 		assert.equal(reported.get('json-schema@0.4.0')?.status, 'allowed', 'json-schema@0.4.0 (AFL-2.1 OR BSD-3-Clause) passes through the OR rule');
+		// ADR-0009 A9: the four legacy MIT forms are evaluated (OR of their types) and allowed, with the derived expression.
+		for (const k of legacyMit) {
+			assert.equal(reported.get(k)?.status, 'allowed', `${k} (legacy licences array, MIT) is allowed without an exception`);
+			assert.equal(reported.get(k)?.license, 'MIT', `${k}: the report's license is the derived expression`);
+		}
+		// ADR-0009 A8: the allow-list additions.
+		for (const k of allowListed) assert.equal(reported.get(k)?.status, 'allowed', `${k} is allowed by the A8 allow-list, with no exception`);
+		const caniuse = report.filter(p => p.name === 'caniuse-lite');
+		assert.ok(caniuse.length > 0, 'fixture sanity: caniuse-lite is installed (browserslist)');
+		for (const p of caniuse) assert.equal(p.status, 'allowed', `${keyOf(p.name, p.version)} (CC-BY-4.0, any version) is allowed with no exception`);
 		for (const k of ['@joplin/onenote-converter@3.7.1', 'node-bitmap@0.0.1', 'tkwidgets@0.5.27']) {
 			assert.equal(reported.get(k)?.status, 'exception', `${k} passes only by a reviewed exception`);
 		}
@@ -278,8 +321,9 @@ describe('M1-AC24 the real installed tree (integration)', () => {
 		}
 		const listed = new Set(list.exceptions.map(e => `${String(e.name)}@${String(e.version)}`));
 		for (const k of ['@joplin/onenote-converter@3.7.1', 'node-bitmap@0.0.1', 'tkwidgets@0.5.27']) assert.ok(listed.has(k), `license-exceptions.json must have an entry for ${k}`);
+		const noException = new Set(['json-schema', 'caniuse-lite', ...[...legacyMit, ...allowListed].map(k => k.slice(0, k.lastIndexOf('@')))]);
 		for (const e of list.exceptions) {
-			assert.ok(!String(e.name).startsWith('@img/sharp-libvips-') && e.name !== 'json-schema', `${String(e.name)} needs no exception (allow-list), so it must not have one`);
+			assert.ok(!String(e.name).startsWith('@img/sharp-libvips-') && !noException.has(String(e.name)), `${String(e.name)} needs no exception (allow-list, ADR-0009 A8/A9), so it must not have one`);
 		}
 	});
 });

@@ -286,6 +286,31 @@ const normalizeText = (s: string): string => s.replace(/^\uFEFF/, '').replace(/\
 // The body must contain the licence file's full text.
 export const bodyHasText = (entry: NoticeEntry, text: string): boolean => normalizeText(entry.body).includes(normalizeText(text));
 
+// A phrase of a standard licence text, independent of how the text is line-wrapped.
+const collapse = (s: string): string => s.replace(/\s+/g, ' ');
+export const hasPhrase = (body: string, phrase: string): boolean => collapse(body).includes(collapse(phrase));
+
+// The ADR-0010 fallback marker for a package that declares a usable licence but ships no licence file.
+export const fallbackMarker = /^Licence text: standard SPDX text for (.+); no licence file in the package$/;
+
+// The licence a manifest declares: the `license` string, or the legacy form read as in ADR-0009 A9 (an array is the
+// OR of its types, an object is its type). null when nothing usable is declared.
+export const declaredLicence = (m: Record<string, unknown>): string | null => {
+	const typeOf = (v: unknown): string | null => typeof v === 'string' ? v : (v && typeof v === 'object' && typeof (v as { type?: unknown }).type === 'string' ? (v as { type: string }).type : null);
+	if (typeof m.license === 'string') return m.license;
+	if (m.license !== undefined) return typeOf(m.license);
+	if (Array.isArray(m.licenses) && m.licenses.length > 0) {
+		const types = m.licenses.map(typeOf);
+		if (types.some(x => x === null)) return null;
+		return types.length === 1 ? types[0] : `(${types.join(' OR ')})`;
+	}
+	return null;
+};
+
+// Declared licences that can never take the standard-text fallback (an exception is required instead).
+export const unusableForFallback = (licence: string | null): boolean =>
+	licence === null || /^(UNLICENSED|SEE LICEN[CS]E IN\b)/i.test(licence.trim()) || /LicenseRef-/.test(licence);
+
 // ---- Coverage of a real upstream tree (M1-AC29 integration: the S1 tree on the Pi, T90 in CI) ----
 
 // Banner text in the bundle's *.LICENSE.txt extracts at web.commit → the package it identifies. A marker that is not
@@ -342,8 +367,20 @@ export const noticesCoverage = (noticesText: string, tree: string, dist: string,
 			return;
 		}
 		const exc = exceptions.get(key);
-		if (!exc || typeof exc.noticeText !== 'string' || exc.noticeText.trim() === '') problems.push(`${key}: no licence file installed (${copies[0].rel}) and no exception with a noticeText`);
-		else if (!entry.body.includes(exc.noticeText.trim())) problems.push(`${key}: the entry lacks its exception's noticeText`);
+		if (exc && typeof exc.noticeText === 'string' && exc.noticeText.trim() !== '') {
+			if (!entry.body.includes(exc.noticeText.trim())) problems.push(`${key}: the entry lacks its exception's noticeText`);
+			return;
+		}
+		// ADR-0010 amendment (F2): a usable declared licence without a file gets the standard text, marked as such.
+		const declared = declaredLicence(copies[0].manifest);
+		const marker = entry.body.split('\n').map(l => fallbackMarker.exec(l.trim())).find(m => m !== null);
+		if (unusableForFallback(declared)) {
+			problems.push(`${key}: no licence file installed (${copies[0].rel}), no usable declared licence (${JSON.stringify(declared)}) and no exception with a noticeText`);
+		} else if (!marker) {
+			problems.push(`${key}: no licence file installed (${copies[0].rel}); the entry needs the standard SPDX text with the marker line "Licence text: standard SPDX text for ${declared}; no licence file in the package"`);
+		} else if (entry.license.trim() === '' || entry.license === 'UNKNOWN') {
+			problems.push(`${key}: a fallback entry gives the declared licence on its License: line (${JSON.stringify(declared)})`);
+		}
 	};
 
 	for (const [key, node] of closure) {
