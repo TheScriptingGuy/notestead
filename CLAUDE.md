@@ -80,7 +80,10 @@ The main Claude session is the **only orchestrator**. It dispatches one agent at
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: <the session URL given in the orchestrator's dispatch, if any>
   ```
-- **Never push, open PRs or publish images** unless the user explicitly approves it.
+- **Pushing:** the user gave a standing approval on 2026-10-05. The orchestrator fast-forward-pushes `main`, plus story tags, to `origin` (`git@github-notestead:TheScriptingGuy/notestead.git`) after each lead-approved merge, so CI runs on it.
+  - Never force-push.
+  - Releases, publishing (images, npm, registries), repo or account settings, and PRs still need the user's explicit approval, one action at a time.
+  - Agents never push.
 - Never commit secrets, tokens or real note content.
 
 ## Testing conventions
