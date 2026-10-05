@@ -1,0 +1,128 @@
+# Notestead `web` container: the overlaid upstream web bundle and the same-origin proxy to the user's Joplin Server
+# (ADR-0002 rules 1-8, ADR-0006, ADR-0008 §Web origin).
+#   :8080  public: the bundle at /, the proxy under /joplin-server/api/*, published-note redirects
+#   :8089  internal (backend network): /joplin-server/api/* only, for the headless container's sync
+# The entrypoint (notestead-web-entrypoint) checks these variables and fills in the defaults before Caddy reads them:
+#   JOPLIN_SERVER_URL         the server's direct address that Caddy dials (scheme://host[:port])
+#   JOPLIN_SERVER_PUBLIC_URL  the server's APP_BASE_URL; /joplin-server/shares/<id> redirects there
+#   JOPLIN_SERVER_HOST        the Host sent upstream; default: the host of JOPLIN_SERVER_PUBLIC_URL
+#   COEP                      Cross-Origin-Embedder-Policy: credentialless (default) or require-corp
+#   TRUSTED_PROXIES           peers allowed to name the client IP (default: none; tunnel: cloudflared's address/32)
+#   CLIENT_IP_HEADER          the one header those peers set (tunnel: CF-Connecting-IP)
+{
+	admin off
+	persist_config off
+	auto_https off
+	servers {
+		# Rule 4: the client IP comes from CLIENT_IP_HEADER only when the TCP peer is in TRUSTED_PROXIES, otherwise
+		# from the TCP peer. Strict mode reads a list right to left, so a client-supplied left part is never used.
+		trusted_proxies static {$TRUSTED_PROXIES}
+		trusted_proxies_strict
+		client_ip_headers {$CLIENT_IP_HEADER}
+	}
+	# Rule 7 for Caddy's own error entries (they carry the request too).
+	log default {
+		output stderr
+		format filter {
+			request>uri query {
+				replace token REDACTED
+			}
+			request>headers>X-Api-Auth replace REDACTED
+			request>headers>Authorization replace REDACTED
+			request>headers>Cookie replace REDACTED
+			request>headers>Cf-Access-Jwt-Assertion replace REDACTED
+			request>headers>Cf-Access-Client-Secret replace REDACTED
+		}
+	}
+}
+
+# Rule 7: access log on stdout without credentials.
+(access_log) {
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				replace token REDACTED
+			}
+			request>headers>X-Api-Auth replace REDACTED
+			request>headers>Authorization replace REDACTED
+			request>headers>Cookie replace REDACTED
+			request>headers>Cf-Access-Jwt-Assertion replace REDACTED
+			request>headers>Cf-Access-Client-Secret replace REDACTED
+		}
+	}
+}
+
+# Rules 1, 3, 4, 5 and 8 for /joplin-server/api/* (prefix already stripped), on both listeners.
+(joplin_server_proxy) {
+	reverse_proxy {$JOPLIN_SERVER_URL} {
+		header_up Host {$JOPLIN_SERVER_HOST}
+		header_up X-Real-IP {client_ip}
+		header_up -Origin
+		header_up -Referer
+		header_up -Cookie
+		header_up -Cf-Access-Jwt-Assertion
+		header_up -Cf-Access-Authenticated-User-Email
+		header_down -Set-Cookie
+		# The route sets Cache-Control: no-store, no-transform; the upstream's own value must not be added to it.
+		header_down -Cache-Control
+		flush_interval -1
+	}
+}
+
+:8080 {
+	import access_log
+	header {
+		Cross-Origin-Opener-Policy same-origin
+		Cross-Origin-Embedder-Policy {$COEP:credentialless}
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	handle_path /joplin-server/* {
+		header Cache-Control "no-store, no-transform"
+		# Rule 6: published notes are rendered by the server on its own origin, never on this one.
+		@share path_regexp share ^/shares/([A-Za-z0-9]+)$
+		handle @share {
+			redir {$JOPLIN_SERVER_PUBLIC_URL}/shares/{re.share.1} 302
+		}
+		handle /api/* {
+			import joplin_server_proxy
+		}
+		# Rule 2: the server's own pages (login, admin, ...) are not re-published.
+		handle {
+			respond 404
+		}
+	}
+
+	handle {
+		root * /srv/www
+		# Upstream's bundle files are not content-hashed: revalidate by ETag, and no front may transform them.
+		# Deferred, because `encode` does not compress a response that already says no-transform.
+		header {
+			defer
+			Cache-Control "no-cache, no-transform"
+		}
+		@wasm path *.wasm
+		header @wasm Content-Type application/wasm
+		encode zstd gzip
+		file_server
+	}
+}
+
+:8089 {
+	import access_log
+	handle_path /joplin-server/* {
+		header Cache-Control "no-store, no-transform"
+		handle /api/* {
+			import joplin_server_proxy
+		}
+		handle {
+			respond 404
+		}
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,4 +1,4 @@
-// Entry point for the `web-build` workspace scripts `overlay`, `verify`, `package`, `build` and `notices`
+// Entry point for the `web-build` workspace scripts `overlay`, `verify`, `package`, `build`, `notices` and `import`
 // (`corepack yarn workspace web-build <command> …`). Run by Node's built-in type stripping (no build step).
 import { findRepoRoot } from '../src/repoRoot.ts';
 import { runWebBuild } from '../src/webBuild.ts';

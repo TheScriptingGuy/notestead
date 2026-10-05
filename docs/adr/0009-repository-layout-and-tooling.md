@@ -21,12 +21,12 @@
   patches/                       empty; README with the patch policy (justification + upstream PR link)
   packages/
     web-build/      scripts: build the pinned upstream bundle (CI), apply the overlay, verify, package the artifact
-    web/            Containerfile + Caddyfile template for the `web` image (consumes the web-build artifact)
     data-api-client/ typed REST Data API client (fetch), with guards (no body on POST /notes); used by mcp, headless, tests
     mcp/            MCP server library (tools, sanitizer, auth) + stdio bin (works against a desktop Joplin too);
                     publishable on its own (npm/MCP Registry candidate, see docs/delivery/channels.md)
     headless/       supervisor: CLI child-process manager, SyncStrategy, /healthz, /status, hosts mcp over HTTP, opt-in Data API gateway; Containerfile
   deploy/           compose.yaml (podman + docker), .env.example, secrets examples, TLS examples
+    web/            Containerfile, Caddyfile, entrypoint, README for the `web` image (consumes the web-build artifact; A11)
   .github/          CI, web-bundle, images, e2e, release, upstream-bump workflows (ci-cd-specialist)
   packaging/        channel manifests, e.g. MCP Registry server.json (ci-cd-specialist)
   tests/            QA-owned: unit mocks, integration, contract, e2e, fixtures, stack helpers
@@ -115,3 +115,12 @@ These amendments record the architect's verdicts on the deviations in `docs/work
   - The copyright line is `Copyright (c) <years> <holder>`, with the holder taken from that file's `Copyright (c) …` line (upstream:LICENSE:29, Laurent Cozic) and **any** single year or range.
   - Upstream source files have no per-file header, so nothing narrower exists. Our own files must not reuse upstream's line-1 sentence; our AGPL header names this project and its own copyright holder.
 - Verification: M1-AC24 and M1-AC25 as amended in `docs/backlog/M1.md` (M1-S9, amendments of 2026-10-04).
+
+## Amendments (2026-10-05, M1-S4 review)
+- **A11. The `web` image files live in `deploy/web/`, not `packages/web/`: accepted** (worklog M1-S4, ADR deviation 1). The layout tree above is updated.
+  - The image is configuration (Containerfile, Caddyfile, a POSIX-sh entrypoint, README). It has no TypeScript, no unit tests and no npm dependencies, so a workspace package would only carry placeholder tests, which M1-AC1 rules out (A1).
+  - The senior engineer owns both `packages/**` and `deploy/**` (`CLAUDE.md`), so ownership doesn't change. The image contract in `docs/test-plans/M1-S4.md` (build file `deploy/web/Containerfile`, context `deploy/web`, named context `dist`) is binding as written; nothing moves.
+  - A1's "`web` in M1-S4" no longer applies: no `packages/web` workspace is created. Build logic stays in `packages/web-build` (`package`, `import`, `verify`), and the Containerfile only copies the imported `dist/`.
+  - The `headless` image keeps its Containerfile in `packages/headless/` as planned, because that image installs the workspace's own code from `yarn.lock` (A4).
+  - Verification: M1-AC10 to M1-AC13 and M1-AC28 build the image from `deploy/web/` (QA results, `docs/test-plans/M1-S4.md`).
+

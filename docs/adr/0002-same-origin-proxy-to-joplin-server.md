@@ -26,7 +26,7 @@ https://<web-host>/joplin-server/*        → 404 (server login/admin UI is not 
 The user enters `https://<web-host>/joplin-server` as the Joplin Server URL in the web app's sync settings.
 
 **Proxy rules** (each one has a contract test from S2):
-1. **Host rewrite:** `header_up Host {JOPLIN_SERVER_HOST}`. It defaults to the host of `JOPLIN_SERVER_PUBLIC_URL`, which must equal the server's `APP_BASE_URL`. *(C1; negative control C1-neg: without it the server answers `404 Invalid origin`.)*
+1. **Host rewrite:** `header_up Host {JOPLIN_SERVER_HOST}`. It defaults to the host of `JOPLIN_SERVER_PUBLIC_URL`, which must equal the server's `APP_BASE_URL`. *(C1, run with the override unset so the default is under test; negative control C1-neg: a wrong Host, such as the web app's own host that the server would see without the rewrite, gets `404 Invalid origin`. Wording clarified 2026-10-05, M1-S4.)*
 2. **Prefix strip** via `handle_path /joplin-server/*`. Only `/api/*` is forwarded. *(C1, C3, C4.)*
 3. **Strip `Origin`, `Referer` and `Cookie`** upstream, and `Set-Cookie` downstream. Same-origin requests don't need CORS. Stripping keeps the server's CORS layer from echoing `https://joplinapp.org` and keeps browser cookies away from the server. Also strip the Cloudflare Access credentials `Cf-Access-Jwt-Assertion` and `Cf-Access-Authenticated-User-Email` upstream (gate 1). *(C2, C9.)*
 4. **Overwrite `X-Real-IP`** with Caddy's `{client_ip}`, which comes from exactly one source:

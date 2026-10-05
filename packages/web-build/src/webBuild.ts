@@ -4,12 +4,14 @@
 //   package <dist> --out <dir> [--pin <file>]
 //   build --out <dir> [--work <dir>] [--pin <file>]
 //   notices <upstream-tree> --bundle <dist> --out <file> [--exceptions <file>]   (docs/test-plans/M1-S9.md)
+//   import <artifact-dir> --out <dist> [--pin <file>] [--upstream <git-dir>]      (docs/test-plans/M1-S4.md)
 // Each returns the process exit code: 0 success, 1 failure, 2 usage error. Every failure names the offending path.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildUpstreamBundle, childEnv } from './build.ts';
+import { importBundle } from './importBundle.ts';
 import type { CommandRunner } from './build.ts';
 import type { Output } from './checkPin.ts';
 import { exceptionsRelativePath, loadExceptions } from './licenseExceptions.ts';
@@ -42,6 +44,7 @@ const usages: Record<string, string> = {
 	package: 'package <dist> --out <dir> [--pin <file>]',
 	build: 'build --out <dir> [--work <dir>] [--pin <file>]',
 	notices: 'notices <upstream-tree> --bundle <dist> --out <file> [--exceptions <file>]',
+	import: 'import <artifact-dir> --out <dist> [--pin <file>] [--upstream <git-dir>]',
 };
 
 class UsageError extends Error {}
@@ -131,6 +134,12 @@ const runPackage = async (dist: string, outDir: string, pin: Pin, deps: WebBuild
 	if (ours.dirty) deps.out.info(`package: note: the working tree of ${deps.repoRoot} has uncommitted changes (bundle-manifest.json notestead.dirty = true).`);
 };
 
+// Installs a packaged artifact as a dist/ (M1-AC28); verify runs on the extracted bundle before it is installed.
+const runImport = (artifactDir: string, out: string, pin: Pin, pinLabel: string, upstreamDir: string | null, deps: WebBuildDeps): void => {
+	const result = importBundle({ artifactDir, out, pin, pinLabel, verify: dist => runVerify(dist, pin, upstreamDir, deps) });
+	deps.out.info(`import: OK. ${result.files} files (${result.bytes} bytes) from ${result.tarball} installed in ${out} (upstream ${pin.web.tag}, ${pin.web.commit}).`);
+};
+
 const defaultRunner: CommandRunner = spec => {
 	const result = spawnSync(spec.command, spec.args, { cwd: spec.cwd, env: childEnv(process.env, spec.env), stdio: 'inherit' });
 	if (result.error) throw new Error(`${spec.command} could not run in ${spec.cwd}: ${result.error.message}`);
@@ -175,21 +184,25 @@ export const runWebBuild = async (argv: string[], deps: WebBuildDeps): Promise<n
 			strict: true,
 			allowPositionals: true,
 		});
-		const allowed: Record<string, string[]> = { overlay: ['pin'], verify: ['pin', 'upstream'], package: ['pin', 'out'], build: ['pin', 'out', 'work'], notices: ['bundle', 'out', 'exceptions'] };
+		const allowed: Record<string, string[]> = {
+			overlay: ['pin'], verify: ['pin', 'upstream'], package: ['pin', 'out'], build: ['pin', 'out', 'work'], notices: ['bundle', 'out', 'exceptions'], import: ['pin', 'out', 'upstream'],
+		};
 		for (const key of Object.keys(values)) {
 			if (!allowed[command].includes(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
 		}
 		const expectedPositionals = command === 'build' ? 0 : 1;
 		if (positionals.length !== expectedPositionals) throw new UsageError(`expected ${expectedPositionals} positional argument(s), got ${positionals.length}`);
-		if ((command === 'package' || command === 'build') && values.out === undefined) throw new UsageError('--out <dir> is required');
+		if ((command === 'package' || command === 'build' || command === 'import') && values.out === undefined) throw new UsageError('--out <dir> is required');
 		if (command === 'notices' && (values.out === undefined || values.bundle === undefined)) throw new UsageError('--bundle <dist> and --out <file> are required');
 
-		const pin = readPin(resolve(values.pin ?? join(deps.repoRoot, pinRelativePath)));
+		const pinPath = resolve(values.pin ?? join(deps.repoRoot, pinRelativePath));
+		const pin = readPin(pinPath);
 		const dist = positionals.length === 1 ? resolve(positionals[0]) : '';
 		if (command === 'notices') runNotices(dist, resolve(values.bundle ?? ''), resolve(values.out ?? ''), values.exceptions === undefined ? undefined : resolve(values.exceptions), deps);
 		else if (command === 'overlay') runOverlay(dist, pin, deps);
 		else if (command === 'verify') runVerify(dist, pin, values.upstream === undefined ? null : resolve(values.upstream), deps);
 		else if (command === 'package') await runPackage(dist, resolve(values.out ?? ''), pin, deps);
+		else if (command === 'import') runImport(dist, resolve(values.out ?? ''), pin, pinPath, values.upstream === undefined ? null : resolve(values.upstream), deps);
 		else await runBuild(resolve(values.out ?? ''), values.work === undefined ? undefined : resolve(values.work), pin, deps);
 		return 0;
 	} catch (error) {
