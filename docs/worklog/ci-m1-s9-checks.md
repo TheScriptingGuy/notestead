@@ -47,6 +47,14 @@ x64 is PENDING-CI: the first run after the push (M1-AC9, V1–V2).
 - 2026-10-05 03:41 (Pi time): opened `https://github.com/TheScriptingGuy/Joplin-Web-App/settings`. Result: HTTP 404, and the header shows "Sign in" / "Sign up". The browser profile is **not logged in to GitHub**, and GitHub serves a private repo as 404 to anonymous visitors.
   - Evidence: `test-results/evidence/ci-m1-s9/00-settings-logged-out-404.png` (gitignored).
 - I opened `https://github.com/login?return_to=…/Joplin-Web-App/settings` for the user and stopped. The user logs in themselves (HANDOFF). **Status: pending.**
+- 04:37: the user reported a login, but the Playwright-driven page still shows the settings URL as 404 with "Sign in" in the header, and `https://github.com/` shows the logged-out landing page.
+  - The Playwright MCP attaches over CDP (`localhost:9222`) to the Chromium started with `--user-data-dir=/home/wessell/.chromium-debug`. That process has been up about 16.5 h, so it wasn't restarted.
+  - `GET localhost:9222/json/list` shows exactly **one** page, the Playwright tab.
+  - So the login went into another browser window or profile, not this Chromium. I opened the sign-in page in the Playwright tab again (title "Sign in to GitHub") and stopped (HANDOFF).
+- **Read-only findings from the public API (no login needed):**
+  - `GET api.github.com/repos/TheScriptingGuy/Joplin-Web-App` returns **200 to an anonymous client: the repo is public.** Other fields: `default_branch: main`, created 2026-10-03, no tags, licence detected as MIT, description "Frontend and API for Joplin Web App with sync and MCP capabilities". `TheScriptingGuy/notestead` returns 404 (the name is free).
+  - The remote `main` is `4af1d3a` "Initial commit" (only `LICENSE`, MIT, made by GitHub at repo creation). It is the **root commit of our local `main`**, so the first push of `main` is a fast-forward and needs no force. Our `5b7bded` relicenses to AGPL-3.0-or-later.
+  - Because the repo is public, the push publishes the full history immediately.
 
 ## C. Deploy key and remote
 - `~/.ssh/notestead_deploy` and `.pub` did not exist beforehand.
