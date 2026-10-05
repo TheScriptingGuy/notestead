@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); next: CI evidence → QA closes CI-pending ACs; then M1-S5 |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); next: M1-S5 |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -42,12 +42,12 @@ The orchestrator (main Claude session) maintains this file.
 
 - 2026-10-04 **MCP exposure (L17):** the user chose to **publish MCP through the Cloudflare Tunnel behind Cloudflare Access plus the bearer token**. They accept that Cloudflare can read the decrypted note content MCP returns, so cloud clients such as claude.ai connectors can reach it. This replaces the earlier default (Q7). The architect records it in ARCHITECTURE §14 and the M4/M5 acceptance criteria. The product default for other users stays opt-in.
 
-## Pending CI verification (closes on the first green run after the user-approved push; QA's V1–V8 in docs/test-plans/M1-S3.md)
-- M1-AC8 (x64), M1-AC9, M1-AC27, and through M1-AC27: **M1-AC5** (full web build on x64).
-- M1-AC24/25/26/29 on x64, and M1-AC29's T90 notices assertions.
-- **First CI run (2026-10-05):** `ci` run 37285783659 and `web-bundle` run 37285783648 both concluded `success` on `dc515fa`. QA still has to check them against V1–V8, using artifacts downloaded through the logged-in browser, before these ACs flip to PASS.
-- M1-S4 x64 (contract suite): gated by M1-S8. An x64 failure reopens M1-S4.
-- If the first run fails, fixes go on a `fix/M1-S3-*` branch, not the merged story branch.
+## Pending CI verification
+- **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
+- **Still open:** M1-S4 x64 (contract suite), gated by M1-S8. An x64 failure reopens M1-S4.
+- **CI follow-ups for M1-S8:**
+  - record `df`/`free` after T90;
+  - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
 
 ## Follow-ups from reviews (route into the named story when it starts)
 - **M1-S8 (or earlier):** `check:workflows` gaps from review M1-S3:
