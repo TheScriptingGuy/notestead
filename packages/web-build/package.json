@@ -2,7 +2,7 @@
   "name": "web-build",
   "version": "0.0.0",
   "private": true,
-  "description": "Notestead build tooling for the pinned upstream web bundle (build, branding overlay, verify, package), plus the upstream pin checks",
+  "description": "Notestead build tooling for the pinned upstream web bundle (build, branding overlay, verify, package, import), plus the upstream pin checks",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "overlay": "node bin/web-build.ts overlay",
     "package": "node bin/web-build.ts package",
     "verify": "node bin/web-build.ts verify",
-    "notices": "node bin/web-build.ts notices"
+    "notices": "node bin/web-build.ts notices",
+    "import": "node bin/web-build.ts import"
   },
   "dependencies": {
     "spdx-license-list": "6.12.0"
