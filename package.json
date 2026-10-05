@@ -11,6 +11,11 @@
   "workspaces": [
     "packages/*"
   ],
+  "dependenciesMeta": {
+    "sqlite3": {
+      "built": true
+    }
+  },
   "scripts": {
     "lint": "eslint --max-warnings 0 . && tsc -p tsconfig.json && tsc -p tests/acceptance/tsconfig.json && tsc -p .github/scripts/tsconfig.json",
     "test": "jest",
