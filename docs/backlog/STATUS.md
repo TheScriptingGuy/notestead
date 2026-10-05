@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); next: first push (needs the user's approval), then M1-S4/S5 |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); next: CI evidence → QA closes CI-pending ACs; then M1-S5 |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -45,6 +45,8 @@ The orchestrator (main Claude session) maintains this file.
 ## Pending CI verification (closes on the first green run after the user-approved push; QA's V1–V8 in docs/test-plans/M1-S3.md)
 - M1-AC8 (x64), M1-AC9, M1-AC27, and through M1-AC27: **M1-AC5** (full web build on x64).
 - M1-AC24/25/26/29 on x64, and M1-AC29's T90 notices assertions.
+- **First CI run (2026-10-05):** `ci` run 37285783659 and `web-bundle` run 37285783648 both concluded `success` on `dc515fa`. QA still has to check them against V1–V8, using artifacts downloaded through the logged-in browser, before these ACs flip to PASS.
+- M1-S4 x64 (contract suite): gated by M1-S8. An x64 failure reopens M1-S4.
 - If the first run fails, fixes go on a `fix/M1-S3-*` branch, not the merged story branch.
 
 ## Follow-ups from reviews (route into the named story when it starts)
@@ -54,6 +56,12 @@ The orchestrator (main Claude session) maintains this file.
   - C3: also check local actions outside `.github/actions/`.
   - C4/C5 (nits): verify the sha256 of a cached tool binary, and add a download timeout.
 - **Before the first push (ci-cd-specialist):** `ci.yml` runs `check:licenses`, `check:pin` and `check:no-upstream-copy` on both architectures (M1-S9 goal).
+- **M1-S4 review follow-ups:**
+  - **Bug, fix before M5 pre-publish:** `packages/web-build/src/provenance.ts` turns the SSH alias remote `git@github-notestead:…` into a fake host `https://github-notestead/…` in `source.html`. Locally packaged bundles get a broken source link; CI builds are unaffected. Derive the URL from the canonical repo instead (e.g. `package.json` `repository`).
+  - Add `Cache-Control` on static 404s (`handle_errors`), so Cloudflare doesn't briefly cache a 404 for a `.js` file.
+  - Architect: should `Cf-Access-Client-Id`/`-Secret` be stripped before proxying to Joplin Server? ADR-0002 rule 3 doesn't cover them.
+  - M5: the OCI label set must override Caddy's inherited labels (licence, title, source).
+  - Nits: empty unlisted dirs survive `import`; the decompression limit comes from the manifest; a trailing-slash `JOPLIN_SERVER_URL` fails with Caddy's error rather than ours; the image `EXPOSE`s 8089, so `podman run -P` would publish the internal listener.
 - **M1-S9 review follow-ups, for the architect to schedule:**
   - C1: `check:pin` alias hole — any `joplin`/`@joplin/*` lockfile entry must resolve to the same name. Needs a concrete story.
   - C2: ADR-0010 should say an exception's text wins over the standard SPDX text, which is what the code does.
