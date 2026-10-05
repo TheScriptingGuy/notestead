@@ -1,0 +1,27 @@
+# The Notestead `web` image (ADR-0002, ADR-0006, ADR-0008): Caddy serving the overlaid upstream web bundle, the
+# same-origin proxy to the user's Joplin Server and the internal sync listener (deploy/web/Caddyfile).
+# The bundle comes from the named build context `dist`: the output of `corepack yarn workspace web-build import`
+# (M1-AC28), or a local overlaid dist/ during development. Build:
+#   podman build -f deploy/web/Containerfile --build-context dist=<dist> -t <tag> deploy/web
+# Run hardened (ADR-0006): --read-only --tmpfs /tmp --cap-drop=ALL --security-opt no-new-privileges --memory 128m.
+
+# The official multi-arch Caddy image (Apache-2.0), pinned by its index digest (linux/amd64 and linux/arm64 among
+# others). Change the version and the digest together; see deploy/web/README.md.
+FROM docker.io/library/caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9
+
+# The base binary carries cap_net_bind_service as a file capability. With every capability dropped and
+# no-new-privileges, executing such a binary fails; we only listen on unprivileged ports, so remove it.
+RUN setcap -r /usr/bin/caddy
+
+COPY --chmod=0444 Caddyfile /etc/caddy/Caddyfile
+COPY --chmod=0555 notestead-web-entrypoint.sh /usr/local/bin/notestead-web-entrypoint
+COPY --from=dist --chown=0:0 . /srv/www/
+
+# Nothing persists: no admin API, no config autosave, no certificates. Anything Caddy writes goes to the /tmp tmpfs.
+ENV XDG_CONFIG_HOME=/tmp/caddy/config \
+	XDG_DATA_HOME=/tmp/caddy/data \
+	HOME=/tmp
+USER 65532:65532
+EXPOSE 8080 8089
+ENTRYPOINT ["/usr/local/bin/notestead-web-entrypoint"]
+CMD []
