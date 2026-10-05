@@ -1,7 +1,9 @@
-# CI (M1-S3; ADR-0007, ADR-0009): lint, type checks, unit tests, the repo checks and the default acceptance suites on
-# x64 and arm64. The workflow only orchestrates root scripts that run identically on the Pi.
+# CI (M1-S3, M1-S9; ADR-0007, ADR-0009): lint, type checks, unit tests, the repo checks (check:workflows, check:pin,
+# check:no-upstream-copy, check:licenses) and the default acceptance suites on x64 and arm64. The workflow only
+# orchestrates root scripts that run identically on the Pi.
 # Evidence for QA (docs/test-plans/M1-S3.md, Verification procedure): JUnit per architecture, the redacted
-# per-command logs (test-results/**) uploaded on every run, and the acceptance totals in the job summary.
+# per-command logs (test-results/**) and the repo-check logs and licence report (test-results/checks/**) uploaded on
+# every run, and the acceptance totals in the job summary.
 name: ci
 
 on:
@@ -52,17 +54,41 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: corepack yarn test
 
+      # The repo checks (M1-S1, M1-S3, M1-S9; ADR-0009 A6, A7). Each check's output also goes to
+      # test-results/checks/<check>-<arch>.log, and check:licenses writes its JSON report there; the upload step below
+      # takes both. The default run shell has no pipefail, so steps that pipe through tee set it.
       - name: check:workflows
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: corepack yarn check:workflows
+        run: |
+          set -o pipefail
+          mkdir -p test-results/checks
+          corepack yarn check:workflows 2>&1 | tee "test-results/checks/check-workflows-${RUNNER_ARCH}.log"
 
+      # Pin schema, yarn.lock against the pin, and the headless manifest's CLI version (M1-AC2, M1-AC3, M1-AC26).
       - name: check:pin
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: corepack yarn check:pin
+        run: |
+          set -o pipefail
+          mkdir -p test-results/checks
+          corepack yarn check:pin 2>&1 | tee "test-results/checks/check-pin-${RUNNER_ARCH}.log"
 
+      # Verbatim upstream copies and upstream's licence header, against the pinned upstream tree (M1-AC4, M1-AC25).
       - name: check:no-upstream-copy
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: corepack yarn check:no-upstream-copy
+        run: |
+          set -o pipefail
+          mkdir -p test-results/checks
+          corepack yarn check:no-upstream-copy 2>&1 | tee "test-results/checks/check-no-upstream-copy-${RUNNER_ARCH}.log"
+
+      # The declared licence of every installed package against ADR-0009's allow-list and the reviewed exceptions
+      # (M1-AC24). The installed tree differs per architecture (platform-specific optional packages), so both legs run it.
+      - name: check:licenses
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          mkdir -p test-results/checks
+          corepack yarn check:licenses --report "test-results/checks/licenses-report-${RUNNER_ARCH}.json" 2>&1 \
+            | tee "test-results/checks/check-licenses-${RUNNER_ARCH}.log"
 
       - name: Acceptance suites (M1-S1, M1-S2 default, M1-S3)
         id: acceptance
