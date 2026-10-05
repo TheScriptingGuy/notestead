@@ -1,0 +1,15 @@
+# Fixture image for the CLI "other device" of the M1-S5 contract suite (docs/test-plans/M1-S5.md §Fixtures).
+# Test fixture only: it is never the image under test and never published. It installs the pinned CLI with npm, as
+# spike S3 did (docs/spikes/S3/Containerfile); the image under test installs from this repo's yarn.lock (ADR-0009 A4).
+# Build: podman build -f tests/fixtures/m1-s5/device/Containerfile --build-arg JOPLIN_CLI_VERSION=<cli.version> \
+#          -t localhost/notestead-test-device:<cli.version> tests/fixtures/m1-s5/device
+FROM docker.io/library/node:22-bookworm-slim
+ARG JOPLIN_CLI_VERSION
+RUN test -n "${JOPLIN_CLI_VERSION}" \
+ && NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false npm install -g --omit=dev "joplin@${JOPLIN_CLI_VERSION}" \
+ && joplin --profile /tmp/version-probe version | grep -F "joplin ${JOPLIN_CLI_VERSION}" \
+ && rm -rf /tmp/version-probe /root/.npm
+COPY device.mjs /fixture/device.mjs
+USER node
+ENV HOME=/tmp/home
+ENTRYPOINT ["node", "/fixture/device.mjs"]
