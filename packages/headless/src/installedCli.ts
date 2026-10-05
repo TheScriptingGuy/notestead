@@ -27,6 +27,22 @@ const binOf = (manifest: CliManifest, packageName: string): string | null => {
 	return null;
 };
 
+// The exact CLI version `packageDir`'s manifest pins (`dependencies[packageName]`), or an error if it is a range.
+export const pinnedCliVersion = (packageDir: string, packageName: string): string => {
+	const manifest = JSON.parse(readFileSync(join(resolve(packageDir), 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown> };
+	const spec = manifest.dependencies?.[packageName];
+	if (typeof spec !== 'string' || !/^\d+\.\d+\.\d+$/.test(spec)) throw new Error(`${packageDir}/package.json must pin "${packageName}" to an exact version`);
+	return spec;
+};
+
+// The installed CLI, refusing a version other than the pinned one.
+export const findPinnedCli = (packageDir: string, packageName: string): InstalledCli => {
+	const installed = findInstalledCli(packageDir, packageName);
+	const pinned = pinnedCliVersion(packageDir, packageName);
+	if (installed.version !== pinned) throw new Error(`the installed ${packageName} is ${installed.version}, but ${packageDir}/package.json pins ${pinned}`);
+	return installed;
+};
+
 // Resolves `packageName` the way Node would from `packageDir` (honouring node_modules hoisting).
 export const findInstalledCli = (packageDir: string, packageName: string): InstalledCli => {
 	const requireFromPackage = createRequire(join(resolve(packageDir), 'package.json'));
