@@ -20,19 +20,20 @@ WORKDIR /app
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY packages/web-build/package.json packages/web-build/
 COPY packages/headless/ packages/headless/
-# 1. Immutable: yarn.lock must already describe these manifests. `yarn workspaces focus` doesn't honour --immutable,
-#    so resolve without linking and refuse any change to the lockfile.
+# 1. A focused production install of the headless workspace from yarn.lock. Install scripts stay off
+#    (.yarnrc.yml enableScripts: false) except for the one allow-list, the root package.json "dependenciesMeta"
+#    (today sqlite3, which fetches its prebuilt native binding).
+RUN corepack yarn workspaces focus --production headless
+# 2. Immutable: yarn.lock must already describe these manifests, else no image. `yarn workspaces focus` doesn't
+#    honour --immutable, so resolve again without linking and refuse any change to the lockfile. This runs after the
+#    focus because `--mode=update-lockfile` can't fetch a `file:` package into a cold cache (ENOENT on the cache zip).
 RUN cp yarn.lock /tmp/yarn.lock.committed \
 	&& corepack yarn install --mode=update-lockfile \
 	&& if ! cmp -s yarn.lock /tmp/yarn.lock.committed; then \
 		echo 'yarn.lock does not match the manifests: run `corepack yarn install` and commit yarn.lock' >&2; \
 		diff /tmp/yarn.lock.committed yarn.lock >&2; \
 		exit 1; \
-	fi
-# 2. A focused production install of the headless workspace from yarn.lock. Install scripts stay off
-#    (.yarnrc.yml enableScripts: false) except for the one allow-list, the root package.json "dependenciesMeta"
-#    (today sqlite3, which fetches its prebuilt native binding).
-RUN corepack yarn workspaces focus --production headless \
+	fi \
 	&& rm -rf .yarn
 
 FROM ${NODE_IMAGE}
