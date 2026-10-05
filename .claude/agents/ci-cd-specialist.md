@@ -52,6 +52,7 @@ Finish with:
   - and similar
 - **Every outward-facing change needs explicit user approval, one action at a time**, relayed through the orchestrator. That covers creating accounts, orgs, repos or namespaces; changing visibility or settings; creating environments or secrets; the first push; the first publish to any channel.
 - Take a screenshot before and after each change as evidence, except on pages that show secrets.
+- **Keep the user's terminal in front.** The browser window covers the user's terminal on the Pi desktop. When you finish a browser session, and before any HANDOFF that doesn't need the browser, run `node ~/joplin-web-app-work/tools/minimize-debug-chromium.mjs` to minimize it.
 
 ## Mode 3: IMPLEMENT (pipelines)
 Work in GitHub Actions. Candidate workflows; the architect's backlog decides the stories:
