@@ -33,7 +33,7 @@ The image runs as uid 65532 and writes only to `/tmp`. Point the web app's Jopli
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `JOPLIN_SERVER_URL` | required | The server's **direct** address that Caddy dials (`scheme://host[:port]`), never a Cloudflare-proxied hostname. |
+| `JOPLIN_SERVER_URL` | required | The server's **direct** address that Caddy dials (`scheme://host[:port]`; trailing `/`s are removed), never a Cloudflare-proxied hostname. |
 | `JOPLIN_SERVER_PUBLIC_URL` | required | The server's `APP_BASE_URL`, the target of published-note redirects. |
 | `JOPLIN_SERVER_HOST` | the host of `JOPLIN_SERVER_PUBLIC_URL` | The `Host` sent to the server; it must equal the host of `APP_BASE_URL`, or the server answers `Invalid origin`. |
 | `COEP` | `credentialless` | `Cross-Origin-Embedder-Policy`: `credentialless` or `require-corp`. |
