@@ -1,0 +1,12 @@
+# Build context of packages/headless/Containerfile (the repository root). The image installs everything from
+# yarn.lock, so local installs, caches and results never enter the context. (deploy/web builds use their own context.)
+**/node_modules
+.git
+.yarn/cache
+.yarn/install-state.gz
+test-results
+playwright-report
+blob-report
+coverage
+packages/headless/src/**/*.test.ts
+packages/headless/src/testing

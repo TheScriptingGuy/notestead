@@ -1,5 +1,8 @@
 // Raw HTTP from the test process (node:http, so any header can be set, Host included, and nothing is decompressed
 // behind the test's back). Bodies can be streamed both ways for the 100 MiB round trip (M1-AC10 C5).
+// `agent: false`: one connection per request, never pooled (M1-S5 dispute D1). Node's global agent keeps sockets alive;
+// while a test blocks the event loop (spawnSync of an image build), the server closes an idle pooled socket unseen,
+// and the next request is handed the dead socket (`socket hang up`).
 import { createHash } from 'node:crypto';
 import http from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
@@ -23,7 +26,7 @@ export interface HttpRequest {
 
 const send = (req: HttpRequest, onResponse: (res: http.IncomingMessage, resolve: (value: unknown) => void, reject: (error: Error) => void) => void): Promise<unknown> =>
 	new Promise((resolve, reject) => {
-		const r = http.request({ host: '127.0.0.1', port: req.port, path: req.path, method: req.method ?? 'GET', headers: req.headers ?? {} }, res => onResponse(res, resolve, reject));
+		const r = http.request({ host: '127.0.0.1', port: req.port, path: req.path, method: req.method ?? 'GET', headers: req.headers ?? {}, agent: false }, res => onResponse(res, resolve, reject));
 		r.setTimeout(req.timeoutMs ?? 60_000, () => r.destroy(new Error(`timeout after ${req.timeoutMs ?? 60_000} ms: ${req.method ?? 'GET'} :${req.port}${req.path}`)));
 		r.on('error', reject);
 		const body = req.body;

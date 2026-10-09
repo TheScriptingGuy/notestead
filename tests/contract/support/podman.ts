@@ -70,7 +70,7 @@ export interface Stack {
 	logsDir: string;
 }
 
-const usedSubnets = (): Set<string> => {
+export const usedSubnets = (): Set<string> => {
 	const names = podman(['network', 'ls', '--format', '{{.Name}}']).stdout.split('\n').filter(n => n !== '');
 	const used = new Set<string>();
 	if (names.length === 0) return used;
@@ -79,14 +79,19 @@ const usedSubnets = (): Set<string> => {
 	return used;
 };
 
-export const createStack = (suite: string): Stack => {
+// A free 10.89.200-254.0/24 prefix (`10.89.N`) that no existing podman network uses.
+export const freeSubnetPrefix = (): string => {
 	const used = usedSubnets();
-	let prefix = '';
-	for (let third = 200; third < 255 && prefix === ''; third++) if (!used.has(`10.89.${third}`)) prefix = `10.89.${third}`;
-	if (prefix === '') throw new Error('no free 10.89.200-254.0/24 subnet for the test network');
+	for (let third = 200; third < 255; third++) if (!used.has(`10.89.${third}`)) return `10.89.${third}`;
+	throw new Error('no free 10.89.200-254.0/24 subnet for the test network');
+};
+
+// `story` names the results dir: test-results/contract/<story>/<suite>/.
+export const createStack = (suite: string, story = 'm1-s4'): Stack => {
+	const prefix = freeSubnetPrefix();
 	const net = `nst-${suite}-${runId()}`;
 	podman(['network', 'create', '--subnet', `${prefix}.0/24`, '--label', `${testLabel}=contract`, '--label', `${runLabel}=${runId()}`, net]);
-	const logsDir = join(repoRoot, 'test-results', 'contract', 'm1-s4', suite);
+	const logsDir = join(repoRoot, 'test-results', 'contract', story, suite);
 	mkdirSync(logsDir, { recursive: true });
 	return { suite, net, prefix, containers: [], logsDir };
 };
@@ -177,13 +182,16 @@ export const teardownStack = (stack: Stack | undefined): void => {
 	podman(['network', 'rm', '-f', stack.net], { allowFail: true });
 };
 
-// Removes everything a contract run labelled (`run` = one run id, or every run when omitted).
+// Removes everything a contract run labelled: containers, networks, volumes (`run` = one run id, or every run when
+// omitted).
 export const removeLabelled = (run?: string): void => {
 	const filter = run ? `label=${runLabel}=${run}` : `label=${testLabel}=contract`;
 	const containers = podman(['ps', '-a', '--filter', filter, '--format', '{{.Names}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
 	if (containers.length > 0) podman(['rm', '-f', '-t', '0', ...containers], { allowFail: true });
 	const networks = podman(['network', 'ls', '--filter', filter, '--format', '{{.Name}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
 	if (networks.length > 0) podman(['network', 'rm', '-f', ...networks], { allowFail: true });
+	const volumes = podman(['volume', 'ls', '--filter', filter, '--format', '{{.Name}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
+	if (volumes.length > 0) podman(['volume', 'rm', '-f', ...volumes], { allowFail: true });
 };
 
 // ---- Fixture clients: short-lived Node containers at fixed addresses (the TCP peer the web container sees) ----
