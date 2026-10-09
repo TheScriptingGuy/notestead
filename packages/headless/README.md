@@ -11,7 +11,9 @@ the `degraded` state come in M3.
 - `packages/headless/Containerfile`, built with the repository root as the context:
   `podman build -f packages/headless/Containerfile -t <tag> .`
 - Base: the official multi-arch `node:22` (bookworm-slim) image, pinned by index digest. Runs as uid/gid 1000.
-- Install: an immutable check of `yarn.lock`, then `yarn workspaces focus --production headless`.
+- Install, in this order: a focused production install of the headless workspace from `yarn.lock`
+  (`yarn workspaces focus --production headless`), then a lockfile check (`yarn install --mode=update-lockfile`
+  compared with the committed `yarn.lock`) that fails the build when `yarn.lock` doesn't match the manifests.
 - Install scripts: off (`.yarnrc.yml` `enableScripts: false`). The **only** allow-list is the root `package.json`
   `dependenciesMeta` (today `sqlite3`, which downloads its prebuilt binding; `sharp` and `keytar` stay unbuilt).
   ADR-0009 A4, M1-AC23.
