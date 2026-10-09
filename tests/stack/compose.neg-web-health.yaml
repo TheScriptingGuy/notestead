@@ -1,0 +1,11 @@
+# M1-AC18 NEG override (docs/test-plans/M1-S6.md): the `web` healthcheck targets a closed port (8079), so `web` must
+# turn `unhealthy` and the harness must abort, naming the service, before any test runs. Applied only by the self-test
+# through NOTESTEAD_STACK_OVERRIDES; never part of a normal run.
+services:
+  web:
+    healthcheck:
+      test: "wget -q -O /dev/null http://127.0.0.1:8079/"
+      interval: 1s
+      timeout: 2s
+      retries: 3
+      start_period: 0s
