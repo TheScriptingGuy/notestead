@@ -219,12 +219,8 @@ const json = (text: string): unknown => {
 	}
 };
 
-// One connection per request: Node's global agent keeps sockets alive, and a socket the server closed while a test
-// waited (the other device takes ~20 s) fails the next request with "socket hang up".
-const noReuse = { Connection: 'close' };
-
 export const sessionFor = async (server: JoplinServer, email: string, password: string): Promise<string> => {
-	const res = await direct(server, '/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json', ...noReuse }, body: JSON.stringify({ email, password }) });
+	const res = await direct(server, '/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
 	const id = (json(res.text) as { id?: string }).id;
 	if (res.status !== 200 || !id) throw new Error(`login of ${email} returned ${res.status}: ${res.text.slice(0, 300)}`);
 	return id;
@@ -234,11 +230,11 @@ export const sessionFor = async (server: JoplinServer, email: string, password: 
 export const createUser = async (server: JoplinServer): Promise<User> => {
 	const admin = await sessionFor(server, 'admin@localhost', 'admin');
 	const email = `m1s5-${randomBytes(6).toString('hex')}@example.com`;
-	const created = await direct(server, '/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-AUTH': admin, ...noReuse }, body: JSON.stringify({ email, full_name: 'M1-S5 test user' }) });
+	const created = await direct(server, '/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-AUTH': admin }, body: JSON.stringify({ email, full_name: 'M1-S5 test user' }) });
 	const id = (json(created.text) as { id?: string }).id;
 	if (created.status !== 200 || !id) throw new Error(`POST /api/users returned ${created.status}: ${created.text.slice(0, 300)}`);
 	const password = makeSecret('joplin_password');
-	const patched = await direct(server, `/api/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-API-AUTH': admin, ...noReuse }, body: JSON.stringify({ password: password.value, must_set_password: 0 }) });
+	const patched = await direct(server, `/api/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-API-AUTH': admin }, body: JSON.stringify({ password: password.value, must_set_password: 0 }) });
 	if (patched.status !== 200 && patched.status !== 204) throw new Error(`PATCH /api/users/${id} returned ${patched.status}: ${patched.text.slice(0, 300)}`);
 	await sessionFor(server, email, password.value); // the password works
 	return { email, password };
@@ -247,7 +243,7 @@ export const createUser = async (server: JoplinServer): Promise<User> => {
 // The raw item a client uploaded for a note, read straight from the server as that user.
 export const serverItem = async (server: JoplinServer, user: User, itemId: string): Promise<{ status: number; text: string }> => {
 	const session = await sessionFor(server, user.email, user.password.value);
-	const res = await direct(server, `/api/items/root:/${itemId}.md:/content`, { headers: { 'X-API-AUTH': session, ...noReuse } });
+	const res = await direct(server, `/api/items/root:/${itemId}.md:/content`, { headers: { 'X-API-AUTH': session } });
 	return { status: res.status, text: res.text };
 };
 
