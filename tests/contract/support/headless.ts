@@ -122,7 +122,9 @@ export const buildHeadlessFrom = (context: string, tag: string, label: string): 
 	if (!existsSync(containerfile)) {
 		throw new Error(`Contract (docs/test-plans/M1-S5.md §Image contract): missing ${headlessContainerfileRel}; the headless image cannot be built`);
 	}
-	const built = runLogged(label, 'podman', ['build', '-f', containerfile, '--label', `${testLabel}=contract`, '-t', tag, context], { timeoutMs: 60 * 60_000 });
+	// --layer-label: the intermediate images (the install stage of a multi-stage build) carry the test label too, so
+	// globalTeardown can prune them; otherwise every run leaves ~1 GB of untagged stage images behind.
+	const built = runLogged(label, 'podman', ['build', '-f', containerfile, '--label', `${testLabel}=contract`, '--layer-label', `${testLabel}=contract`, '-t', tag, context], { timeoutMs: 60 * 60_000 });
 	if (built.code !== 0) throw new Error(`podman build of ${tag} failed (exit ${built.code}; log ${built.log}):\n${redact(`${built.stdout}\n${built.stderr}`).slice(-3000)}`);
 };
 
@@ -141,7 +143,7 @@ export const deviceImage = (): string => lazyImage('device', () => {
 	const tag = `localhost/notestead-test-device:${cli.version}`;
 	const dir = join(fixtures, 'device');
 	const built = runLogged('build-device', 'podman', ['build', '-f', join(dir, 'Containerfile'), '--build-arg', `JOPLIN_CLI_VERSION=${cli.version}`,
-		'--label', `${testLabel}=contract`, '-t', tag, dir], { timeoutMs: 30 * 60_000 });
+		'--label', `${testLabel}=contract`, '--layer-label', `${testLabel}=contract`, '-t', tag, dir], { timeoutMs: 30 * 60_000 });
 	if (built.code !== 0) throw new Error(`the device fixture image failed to build (log ${built.log}): ${built.stderr.slice(-2000)}`);
 	return { image: tag };
 });
