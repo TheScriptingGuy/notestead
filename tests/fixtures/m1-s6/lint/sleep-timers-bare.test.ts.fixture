@@ -1,0 +1,10 @@
+// M1-S6 lint NEG fixture F1-c: `setTimeout` from the bare 'timers/promises' specifier, in a workspace package's test.
+import { setTimeout } from 'timers/promises';
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint NEG', () => {
+	test('a bare timers/promises sleep must be rejected', async () => {
+		await setTimeout(200);
+		expect(1 + 1).toBe(2);
+	});
+});
