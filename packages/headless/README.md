@@ -18,6 +18,8 @@ the `degraded` state come in M3.
 
 ## Run
 Hardening and topology from ADR-0006: a reaping init, a read-only root filesystem, the `internal` backend network only.
+Without an init (`--init`, compose `init: true`) the supervisor is PID 1 and can't reap the CLI children it stops; it then
+logs one `warning: running as PID 1 without an init; …` line at startup and carries on.
 ```sh
 podman run -d --init --read-only --tmpfs /tmp --cap-drop=ALL --security-opt no-new-privileges --memory 768m \
   --network <backend> --network-alias headless \

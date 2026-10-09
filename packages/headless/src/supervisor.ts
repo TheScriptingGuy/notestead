@@ -22,6 +22,11 @@ export const defaults = {
 // sysexits(3), as the web entrypoint uses: 64 = bad configuration, 73 = cannot create the profile.
 export const exitCodes = { config: 64, cantCreate: 73, serverExited: 1 };
 
+// ADR-0006: the container runs a reaping init as PID 1 (`podman run --init`, compose `init: true`). Without one the
+// supervisor is PID 1 and CLI children it stopped are never reaped (zombies that hang the sync cycle, spike S3/S4).
+// It says so once and carries on, since some runtimes provide an init in other ways.
+export const pidOneWarning = 'warning: running as PID 1 without an init; start the container with --init (compose: init: true) so that stopped CLI children are reaped';
+
 export interface SupervisorOptions {
 	env: NodeJS.ProcessEnv;
 	cliBinPath: string;
@@ -31,6 +36,8 @@ export interface SupervisorOptions {
 	healthHost?: string;
 	healthPort?: number;
 	dataApiPort?: number;
+	// This process's pid (default process.pid); 1 means no init runs in the container.
+	pid?: number;
 	retryDelayMs?: number;
 	pingTarget?: () => Promise<ProbeResult>;
 	// Raw output sink; lines are redacted before they get here.
@@ -51,6 +58,7 @@ export interface Supervisor {
 export const runSupervisor = async (options: SupervisorOptions): Promise<Supervisor | null> => {
 	const redactor = new Redactor();
 	const log = (line: string): void => options.write(`${new Date().toISOString()} ${redactor.redact(line)}`);
+	if ((options.pid ?? process.pid) === 1) log(pidOneWarning);
 
 	let config: SupervisorConfig;
 	try {
