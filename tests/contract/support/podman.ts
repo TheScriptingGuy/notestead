@@ -4,10 +4,13 @@
 // teardown; everything the run labelled is removed. Polling helpers wait for conditions, never for fixed times.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { join } from 'node:path';
+import { waitFor } from '../../support/poll.ts';
+import { findRepoRoot } from '../../support/repoRoot.ts';
 
-export const repoRoot = resolve(__dirname, '..', '..', '..');
+export { waitFor };
+// Found from the working directory, not __dirname: these helpers are shared with the Playwright harness (ESM, M1-S6).
+export const repoRoot = findRepoRoot();
 export const testLabel = 'io.github.thescriptingguy.notestead.test';
 export const runLabel = 'io.github.thescriptingguy.notestead.test-run';
 // Client and echo fixtures run on the official Node image (multi-arch), never on the image under test.
@@ -154,23 +157,6 @@ export const exitedWith = (name: string): string | undefined => {
 	return `${name} is ${state.status} (exit ${state.exitCode}); log tail:\n${redact(containerLogs(name)).slice(-3000)}`;
 };
 
-export const waitFor = async <T>(what: string, probe: () => Promise<T | undefined>, opts: { timeoutMs?: number; intervalMs?: number; failFast?: () => string | undefined } = {}): Promise<T> => {
-	const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
-	let last: unknown = null;
-	while (Date.now() < deadline) {
-		try {
-			const value = await probe();
-			if (value !== undefined) return value;
-		} catch (error) {
-			last = error;
-		}
-		const fatal = opts.failFast?.();
-		if (fatal) throw new Error(`while waiting for ${what}: ${fatal}`);
-		await delay(opts.intervalMs ?? 250);
-	}
-	throw new Error(`timed out after ${opts.timeoutMs ?? 120_000} ms waiting for ${what}${last ? `; last error: ${String(last)}` : ''}`);
-};
-
 // Writes every container's log (redacted) under test-results/contract/m1-s4/<suite>/, then removes the containers and
 // the network. Safe on a partially created stack.
 export const teardownStack = (stack: Stack | undefined): void => {
@@ -182,10 +168,10 @@ export const teardownStack = (stack: Stack | undefined): void => {
 	podman(['network', 'rm', '-f', stack.net], { allowFail: true });
 };
 
-// Removes everything a contract run labelled: containers, networks, volumes (`run` = one run id, or every run when
-// omitted).
+// Removes everything a test run labelled: containers, networks, volumes (`run` = one run id, or, when omitted, every
+// resource carrying the test label with any value: `contract` stacks and the compose test stacks of M1-S6, `stack`).
 export const removeLabelled = (run?: string): void => {
-	const filter = run ? `label=${runLabel}=${run}` : `label=${testLabel}=contract`;
+	const filter = run ? `label=${runLabel}=${run}` : `label=${testLabel}`;
 	const containers = podman(['ps', '-a', '--filter', filter, '--format', '{{.Names}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
 	if (containers.length > 0) podman(['rm', '-f', '-t', '0', ...containers], { allowFail: true });
 	const networks = podman(['network', 'ls', '--filter', filter, '--format', '{{.Name}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
