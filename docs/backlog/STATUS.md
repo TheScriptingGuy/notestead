@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); next: M1-S5 |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); next: M1-S6 |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,7 +44,7 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification
 - **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4 x64 (contract suite), gated by M1-S8. An x64 failure reopens M1-S4.
+- **Still open:** M1-S4 and M1-S5 x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64).
 - **CI follow-ups for M1-S8:**
   - record `df`/`free` after T90;
   - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
@@ -76,6 +76,14 @@ The orchestrator (main Claude session) maintains this file.
   - `verify` should also hash-check upstream screenshots and every other binary the overlay replaces (at M1-AC29 or the M5-AC1 scan) (r1-C2).
   - Cache cleanup policy for `~/.cache/notestead/web-build/<commit>` (~13 GB each) (r1-C4).
   - QA: the T90 note should say `NOTESTEAD_BUILD_WORK` must be new, empty, or created by an earlier `build`.
+- **M1-S5 review follow-ups (`docs/reviews/M1-S5-r1.md`):**
+  - Architect: amend ADR-0003 with the sync-success rule (it relies on the `Completed:`/`Last error:` lines of `joplin sync`, the `locale` setting and `GET /api/ping`).
+  - Architect: ADR-0009 A4 should record that sqlite3's prebuilt binary is downloaded from GitHub releases with no checksum, and choose a remedy.
+  - Architect: decide what happens for an account without E2EE. `e2ee decrypt --force` exits 1 there, so the supervisor never reports ready.
+  - Orchestrator: propose upstream that `joplin sync` exits non-zero when the sync failed.
+  - QA, M3-AC1: add a contract test where `/api/ping` answers but the sync routes fail, so the stack must never report ready. A wrong sync password should be a hard failure, not a 30 s retry loop.
+  - M1-S6: set `init: true` in compose; warn when the supervisor runs as PID 1; fix the install order in `packages/headless/README.md:14`.
+  - M1-S8: x64 contract evidence for M1-AC14–17 and M1-AC23.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
