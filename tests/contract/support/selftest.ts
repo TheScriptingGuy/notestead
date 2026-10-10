@@ -59,9 +59,9 @@ export const stackImagesEnv = (): Record<string, string> => ({
 	NOTESTEAD_DEVICE_IMAGE: deviceImage(),
 });
 
-// `env` entries set to undefined are removed from the inner environment.
-export const runSelftest = (label: string, spec: string, env: Record<string, string | undefined> = {}, timeoutMs = 25 * 60_000): SelftestRun => {
-	const out = join(resultsDir, label);
+// `env` entries set to undefined are removed from the inner environment. `root`: the story's results dir.
+export const runSelftest = (label: string, spec: string, env: Record<string, string | undefined> = {}, timeoutMs = 25 * 60_000, root = resultsDir): SelftestRun => {
+	const out = join(root, label);
 	rmSync(out, { recursive: true, force: true });
 	mkdirSync(out, { recursive: true });
 	const childEnv: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', NST_SELFTEST_OUT: out };

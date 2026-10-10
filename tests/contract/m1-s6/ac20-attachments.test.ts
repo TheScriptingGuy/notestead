@@ -110,11 +110,13 @@ describe('M1-AC20 log attachments of a failing test', () => {
 		expect(secrets.length).toBeGreaterThanOrEqual(8);
 		const leaks: Leak[] = [];
 		const seen = new Set<string>();
-		// Every attachment of the report, and every file the run wrote (output dir, stack logs, console log), except the
-		// self-test's own planted.json.
+		// Every attachment of the report, and every file the run wrote (output dir, stack logs, console log, the HTML and
+		// JUnit reports), except the self-test's own planted.json and html/trace/ (Playwright's trace viewer app, copied
+		// verbatim into every HTML report; the report's data is html/data/ and is scanned).
+		const out = run?.out ?? '.';
 		const sources: { where: string; data: Buffer }[] = [
 			...(result?.attachments ?? []).map(a => ({ where: `attachment ${a.name}`, data: content(a) })),
-			...filesUnder(run?.out ?? '.').filter(f => !f.endsWith('planted.json')).map(f => ({ where: f, data: readFileSync(f) })),
+			...filesUnder(out).filter(f => !f.endsWith('planted.json') && !f.startsWith(join(out, 'html', 'trace'))).map(f => ({ where: f, data: readFileSync(f) })),
 		];
 		for (const source of sources) {
 			for (const view of textViews(source.where, source.data)) {

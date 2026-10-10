@@ -1,8 +1,8 @@
 // Playwright config for the harness self-tests (docs/test-plans/M1-S6.md §Harness self-tests). These specs are run only
 // by the M1-S6 contract tests (tests/contract/m1-s6/*.test.ts), each in its own Playwright process with
 // NST_SELFTEST_OUT set; one of them fails on purpose (M1-AC20), so they are never part of a normal run (the main
-// config's testDir is tests/e2e). Same harness as playwright.config.ts (globalSetup, fixtures, redacting reporter),
-// plus a JSON report the outer test reads.
+// config's testDir is tests/e2e). Same harness as playwright.config.ts (globalSetup, fixtures, redacting reporter, HTML
+// and JUnit reports), plus a JSON report the outer test reads.
 import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
 import base from '../../playwright.config.ts';
@@ -17,9 +17,12 @@ export default defineConfig({
 	outputDir: join(out, 'output'),
 	retries: 0,
 	workers: 1,
+	// The same reporters as playwright.config.ts (HTML and JUnit into the self-test's dir), plus JSON for the outer test.
 	reporter: [
 		['../e2e/support/redactingReporter.ts'],
 		['list'],
+		['html', { outputFolder: join(out, 'html'), open: 'never' }],
+		['junit', { outputFile: join(out, 'junit.xml') }],
 		['json', { outputFile: join(out, 'report.json') }],
 	],
 	globalSetup: '../e2e/support/globalSetup.ts',
