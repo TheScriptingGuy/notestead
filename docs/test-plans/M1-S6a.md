@@ -124,7 +124,42 @@ node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/m1-s6/*.
 - x64: PENDING-CI (M1-S8).
 
 ## Disputes
-None yet.
+The engineer filed no dispute (`docs/worklog/M1-S6a.md` §Disputes: none). Their worklog lists three deviations from R1 and three known gaps, and QA rules on each here. The evidence is a QA probe of the committed block: ESLint's `Linter` with the TypeScript parser, 28 one-line cases, report counts compared, 28/28 as expected (`test-results/verify/m1-s6a/qa-probe.mjs`, `qa-probe.log`). QA also re-ran the engineer's probe of 42 cases on the committed config: 42/42 (`qa-rerun-se-probe.log`).
+
+**Deviations (stricter than R1). All three are ACCEPTED.**
+
+| # | Deviation | Ruling | Why |
+|---|---|---|---|
+| D1 | A computed string-key access to `setTimeout`/`setInterval` is reported on **any** object, so a test writes `opts.setTimeout`, not `opts['setTimeout']`. | **Accepted.** | R1's allowed position is a *non-computed* member property, so the computed form was never on the allowed list. A literal key reads the same property as the dotted form, so nothing is lost: the dotted form stays allowed (probe: `opts.setTimeout` 0 reports). The rule also catches forms R1 did not name but that are clearly sleeps: `(globalThis as any)['setTimeout']`, `timersModule['setTimeout']`. No file in the repository uses the computed form (`C2-T03-repo`). |
+| D2 | A **default** import of a timers module is banned (`import timers from 'node:timers'`). | **Accepted.** | The default export of a Node built-in is the whole module object, just like the namespace import that ADR-0009 already bans. Without this, `timers.setTimeout(…)` would pass as a member of "another object". `import t, { clearTimeout } from 'node:timers'` reports only the default (probe: 1 report), so `clearTimeout`/`clearInterval` imports stay allowed. |
+| D3 | `(globalThis as T).setTimeout` is reported. | **Accepted.** | A type assertion does not change the value: this is R1's "member access on the globals". The selector checks `object.expression`, so it covers `as`, `<T>`, non-null `!` and `satisfies`, each one level deep (probe: `as`, `!`, `<any>` and `satisfies` each give 1 report). Nested assertions are covered under accepted risk A1 below. |
+
+**Known gaps.** Each becomes a follow-up or an accepted risk.
+
+| # | Gap | Ruling | Why |
+|---|---|---|---|
+| G1 | `require('node:timers').setTimeout(…)` | **Follow-up FU-S6a-1** | It is the CommonJS twin of the namespace import that is already banned, and it can be closed with one selector on the module name: `CallExpression[callee.name="require"]` whose first argument is one of the four timers modules, which bans the whole `require`. The rule would carry no false-positive risk, because tests never need the module object. The destructuring form is already reported (probe G1). |
+| G2 | Dynamic `import()` followed by member access: `(await import('node:timers/promises')).setTimeout(…)` | **Follow-up FU-S6a-1** | Same reasoning: an `ImportExpression` whose `source` is a timers module. The destructuring form is already reported (probe G2). |
+| G2b (found by QA) | `scheduler.wait(ms)` from `timers/promises`. Node 24 exports `scheduler`, and `await scheduler.wait(50)` is a fixed sleep (probe X2: 0 reports). | **Follow-up FU-S6a-1** | Add `'scheduler'` to `importNames`. No test uses it today (`C2-T03-repo` lint is clean). |
+| G3 | `Reflect.get(globalThis, 'setTimeout')`, a computed key held in a variable | **Accepted risk A1** | Syntax alone cannot tell these from legitimate code, and banning `Reflect.get` or every computed access would flag correct tests. The same holds for an alias of the global object (`const g = globalThis; g.setTimeout(…)`, probe X1) and nested type assertions (`(globalThis satisfies object as any).setTimeout`, probe: 0 reports). Each of these needs deliberate effort to get around the rule. The backstop is code review against ADR-0007 (lead engineer), as `docs/reviews/M1-S6-r1.md` already states. |
+
+**FU-S6a-1 (not blocking M1-S6a, proposed for the next story that touches `eslint.config.js`, at the latest M1-S8).**
+1. QA first adds three NEG fixtures to `tests/acceptance/m1-s6a` (or a successor test): `require` member, `import()` member, `scheduler.wait`.
+2. The engineer then extends the block:
+   - one `no-restricted-syntax` selector each for `require(<timers module>)` and `import(<timers module>)`;
+   - `'scheduler'` added to `importNames`.
+
+The orchestrator should add it to `docs/backlog/STATUS.md`.
+
+**Cosmetic, no action.** `export { setTimeout }` is reported twice on the same column, because `ExportSpecifier` has a `local` and an `exported` identifier (probe X3). It is still rejected, and re-exporting the timer from a test file is meaningless.
+
+**Process note: the overwritten C2 log.** The engineer's own RED re-check (worklog run 4: `git stash`, then the C2 test on the pre-R1 config) overwrote `test-results/acceptance/m1-s6a/C2-lint-sleep-values.log`, which the C2 test writes on every run. Their green run 6 then rewrote it, and this VERIFY run rewrote it again. **No evidence was lost:**
+- QA's RED evidence lives in `test-results/verify/m1-s6a/red-c2.log`, which nobody touched;
+- the engineer kept their RED copy as `se-red-c2.log`.
+
+Ruling: no defect. The fixed path is by design: it is the latest lint output for the CI artifact upload. Anyone re-running a check against an older config should copy that log first, or rely on the `test-results/verify/` logs, as the engineer did.
+
+**No edits to `tests/**` by the engineer.** `git log --format='%h %s%n%b' -- tests/` on this branch lists only the QA commits `090c78f`, `fb72b01`, `dabf839`, `a3cc6dc` and `1f842ba`. The engineer's commits `e1910f8` (`eslint.config.js`) and `e1c910c` (`docs/worklog/M1-S6a.md`) touch nothing else.
 
 ## RED (2026-10-10, Pi arm64)
 Branch `feat/M1-S6a-harness-hardening`, from `e127859`. Raspberry Pi 4, podman 5.4.2, podman-compose 1.3.0, Node 24.17.0, Playwright 1.59.1 with `chromium-1223`. Logs are under `test-results/verify/m1-s6a/` (gitignored), each ending with `exit <code>`.
@@ -207,3 +242,39 @@ C2 stays RED until the engineer's R1. Logs are under `test-results/verify/m1-s6a
 | Leftovers | `podman ps -a`, `network ls`, `volume ls` before vs after; `podman images` | **identical**; images are back to the starting set (the kept `notestead-*` images were removed); no `/tmp/nst-*` or descriptor files | | `podman-before.txt`, `podman-after-all.txt` |
 | Contract M1-S5 | not re-run | The only shared code it uses that changed is `removeLabelled(run)` in the contract globalTeardown. Every contract run above ran it, and the leftover checks prove it. | | |
 | x64 | n/a | **PENDING-CI (M1-S8)** | | |
+
+## Results (VERIFY, 2026-10-10, Pi arm64)
+These results are for branch `feat/M1-S6a-harness-hardening` at `e1c910c`: QA's C1/C4 harness work plus the engineer's R1 (`e1910f8`, `e1c910c`).
+- **Machine:** Raspberry Pi 4, podman 5.4.2, Node 24.17.0, ESLint 9.39.4, Playwright 1.59.1 (`chromium-1223`).
+- **Runs:** one heavy job at a time, and the contract runs in the background with a timeout.
+- **Logs:** under `test-results/verify/m1-s6a/` (gitignored); each ends with its duration and `exit <code>`.
+- The contract run started cold: the web, headless and device images were built by the run and kept for the M1-S4 run (`NOTESTEAD_KEEP_IMAGE=1`), then removed.
+
+| Item | Test IDs | Result | Command | Duration | Log / artifacts |
+|---|---|---|---|---|---|
+| **C1** | `c1-ran`, `c1-planted`, `c1-redacted-{trace,stdout,errors,steps,attachments,reports,console}`, `c1-redacted-all`, `c1-neg` | **PASS 11/11** | `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract --verbose tests/contract/m1-s6` (Jest's path pattern also matches `m1-s6a`) | 318 s (suite) | `verify-contract-m1-s6.log`; artifacts `test-results/contract/m1-s6a/c1/`; NEG summary `test-results/contract/m1-s6a/c1-neg-summary.json` (trace 12, console 3, stdout 3, errors 3, steps 1, attachments 6, reports 6: every channel, as in RED) |
+| C1 unit | `tests/unit/harness/secrets.test.ts` (7) | **PASS** | `corepack yarn jest` | in the 13 s run | `verify-unit.log` |
+| **C2** | `C2-T01`, `C2-T02-{promisify,alias,destructure,computed,interval,interval-promises}`, `C2-T03-{allowed,repo,only-ban}` | **PASS 10/10** (RED 3/10). There is exactly one report per NEG fixture, each on its `// NEG` line (unit 6:25, contract 6:15, e2e 5:9, harness 6:42, headless 8:32, acceptance 5:10 `no-restricted-imports`), and the repository and positive fixtures are clean. | `node --test --test-concurrency=1 --test-reporter=spec tests/acceptance/m1-s6a/c2-lint-sleep-values.test.mts` | 33 s | `verify-c2.log`; lint output `test-results/acceptance/m1-s6a/C2-lint-sleep-values.log` |
+| C2 probe (QA, beyond the acceptance test) | 28 cases on deviations D1 to D3, gaps G1 to G3 and adversarial forms | **28/28 as expected.** The known gaps stay unreported, which FU-S6a-1 and A1 record (§Disputes). | `node test-results/verify/m1-s6a/qa-probe.mjs` | 3 s | `qa-probe.log` |
+| **C4** | `c4-keep-dev`, `c4-keep-live`, `c4-sweep-dead`, `c4-sweep-orphan`, `c4-sweep-contract` | **PASS 5/5** | the same contract run as C1 | 11 s (suite) | `verify-contract-m1-s6.log` |
+| C4 unit | `tests/unit/harness/descriptors.test.ts` (2) | **PASS** | `corepack yarn jest` | in the 13 s run | `verify-unit.log` |
+
+**All layers:**
+
+| Layer | Command | Result | Duration | Log |
+|---|---|---|---|---|
+| Lint and types | `corepack yarn lint` (ESLint with the R1 block, then the three `tsc` projects) | **exit 0** | 54 s | `verify-lint.log` |
+| Unit (all workspaces) | `corepack yarn jest` | 29 suites, **258 passed** | 13 s | `verify-unit.log` |
+| Acceptance F1 (regression) | `node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/m1-s6/*.test.mts'` | **8 passed** | 33 s | `verify-f1.log` |
+| Acceptance C2 | as above | **10 passed** | 33 s | `verify-c2.log` |
+| Contract M1-S6 + M1-S6a | `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract --verbose tests/contract/m1-s6` | 7 suites, **34 passed** (`ac18`, `ac19`, `ac20`, `ac34`, `headless-pid1`, `c1`, `c4`) | 1 120 s, cold image builds included | `verify-contract-m1-s6.log` |
+| Contract M1-S4 (regression) | `corepack yarn test:contract --verbose tests/contract/m1-s4` | 4 suites, **28 passed** | 102 s | `verify-contract-m1-s4.log` |
+| Contract M1-S5 | **not re-run, on purpose** | The reasoning from the GREEN section still holds, and R1 adds nothing to it. R1 changes only `eslint.config.js`, which runs at lint time only and is not loaded by any test at run time. The only shared code M1-S5 uses that this story changed is `removeLabelled(run)` in the contract globalTeardown, and both contract runs above ran it, as the leftover check below shows. | | |
+| Leftovers | `podman ps -a`, `network ls`, `volume ls`, `images`, before vs after (after removing the two kept test images) | **identical**: only `byparr` and its network and images, untouched. No `/tmp/notestead-stacks` descriptors and no `/tmp/nst-*` dirs. | | `podman-before-verify.txt`, `podman-after-verify.txt` |
+| x64 | n/a | **PENDING-CI (M1-S8)** | | |
+
+**Test integrity.** `git log --format='%h %s%n%b' -- tests/` shows only QA commits. The engineer did not modify `tests/**` (§Disputes).
+
+**Defects found:** none that block the story. The QA probe found one more gap, `scheduler.wait` (G2b), and one cosmetic double report (`export { setTimeout }`). Both are recorded under §Disputes, and G2b goes into follow-up FU-S6a-1.
+
+**Sign-off (QA): YES** for C1, C2 and C4 on arm64. x64 is PENDING-CI (M1-S8). Follow-up FU-S6a-1 (lint: `require`/`import()` of the timers modules and `scheduler`) and accepted risk A1 are recorded under §Disputes for the orchestrator to track in `docs/backlog/STATUS.md`.
