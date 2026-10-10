@@ -1,0 +1,13 @@
+// M1-S6a lint NEG fixture C2-interval-promises (docs/test-plans/M1-S6a.md): `setInterval` from node:timers/promises,
+// whose first tick is a fixed delay, in a node:test acceptance test. `corepack yarn lint` must report the line marked
+// NEG.
+import assert from 'node:assert/strict';
+import { setInterval as every } from 'node:timers/promises'; // NEG
+import { it } from 'node:test';
+
+it('a timers/promises setInterval delay must be rejected', async () => {
+	for await (const tick of every(100, 'tick')) {
+		assert.equal(tick, 'tick');
+		break;
+	}
+});

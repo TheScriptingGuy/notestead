@@ -1,0 +1,30 @@
+// M1-S6a lint positive control (docs/test-plans/M1-S6a.md, C2): none of these is a fixed sleep, so `corepack yarn lint`
+// must report nothing in this file. A socket deadline, an abort deadline, Jest's fake timers and a spy on the global
+// setTimeout, setTimeout in a type position, option keys named setTimeout/setInterval, and clearing timers.
+import http from 'node:http';
+import { describe, expect, jest, test } from '@jest/globals';
+import { waitFor } from '../../support/poll.ts';
+
+type TimerHandle = ReturnType<typeof setTimeout>;
+const timeouts = { setTimeout: 1_000, setInterval: 250 };
+
+describe('lint positive control (M1-S6a)', () => {
+	test('deadlines, spies, type positions and option keys are allowed', async () => {
+		const value = await waitFor('a condition', async () => 42, { timeoutMs: timeouts.setTimeout, intervalMs: timeouts.setInterval });
+		const req = http.request({ host: '127.0.0.1', port: 9, path: '/' });
+		req.setTimeout(timeouts.setTimeout, () => req.destroy());
+		req.on('error', () => undefined);
+		req.destroy();
+		const signal = AbortSignal.timeout(1_000);
+		jest.useFakeTimers({ now: new Date('2026-10-10T12:00:00Z') });
+		const spy = jest.spyOn(globalThis, 'setTimeout');
+		jest.advanceTimersByTime(1_000);
+		const handle: TimerHandle | undefined = undefined;
+		clearTimeout(handle);
+		clearInterval(undefined);
+		const calls = spy.mock.calls.length;
+		spy.mockRestore();
+		jest.useRealTimers();
+		expect({ value, aborted: signal.aborted, calls }).toEqual({ value: 42, aborted: false, calls: 0 });
+	});
+});

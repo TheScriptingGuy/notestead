@@ -1,0 +1,9 @@
+// M1-S6a lint positive control (docs/test-plans/M1-S6a.md, C2): Playwright's own deadlines are member calls named
+// setTimeout/setDefaultTimeout, not sleeps, so `corepack yarn lint` must report nothing in this file.
+import { expect, test } from '@playwright/test';
+
+test('playwright deadlines are allowed', async ({ page }) => {
+	test.setTimeout(60_000);
+	page.setDefaultTimeout(5_000);
+	await expect.poll(async () => page.title(), { timeout: 5_000 }).toBe('');
+});

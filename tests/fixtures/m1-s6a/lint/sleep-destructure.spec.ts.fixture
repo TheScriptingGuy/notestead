@@ -1,0 +1,10 @@
+// M1-S6a lint NEG fixture C2-destructure (docs/test-plans/M1-S6a.md): setTimeout destructured from globalThis under
+// another name, then used as a sleep in a Playwright test. `corepack yarn lint` must report the line marked NEG.
+import { expect, test } from '@playwright/test';
+
+const { setTimeout: pause } = globalThis; // NEG
+
+test('a destructured setTimeout sleep must be rejected', async ({ page }) => {
+	await new Promise(resolve => pause(resolve, 250));
+	await expect(page).toHaveTitle('');
+});

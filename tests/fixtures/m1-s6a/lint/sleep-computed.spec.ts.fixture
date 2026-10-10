@@ -1,0 +1,8 @@
+// M1-S6a lint NEG fixture C2-computed (docs/test-plans/M1-S6a.md): setTimeout through a computed member with a string
+// key, `globalThis['setTimeout']`. `corepack yarn lint` must report the line marked NEG.
+import { expect, test } from '@playwright/test';
+
+test('a computed globalThis setTimeout sleep must be rejected', async ({ page }) => {
+	await new Promise(resolve => globalThis['setTimeout'](resolve, 250)); // NEG
+	await expect(page).toHaveTitle('');
+});

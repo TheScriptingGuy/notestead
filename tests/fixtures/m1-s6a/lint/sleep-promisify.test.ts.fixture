@@ -1,0 +1,13 @@
+// M1-S6a lint NEG fixture C2-promisify (docs/test-plans/M1-S6a.md): `promisify(setTimeout)`, the most common Node sleep
+// idiom after the Promise wrapper (review M1-S6-r1 C2). `corepack yarn lint` must report the line marked NEG.
+import { promisify } from 'node:util';
+import { describe, expect, test } from '@jest/globals';
+
+const sleep = promisify(setTimeout); // NEG
+
+describe('lint NEG', () => {
+	test('a promisified setTimeout sleep must be rejected', async () => {
+		await sleep(500);
+		expect(1 + 1).toBe(2);
+	});
+});
