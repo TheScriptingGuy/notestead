@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { waitFor } from '../../support/poll.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
+import { removeDescriptor, stackDescriptors } from '../../stack/descriptors.ts';
 
 export { waitFor };
 // Found from the working directory, not __dirname: these helpers are shared with the Playwright harness (ESM, M1-S6).
@@ -168,16 +169,54 @@ export const teardownStack = (stack: Stack | undefined): void => {
 	podman(['network', 'rm', '-f', stack.net], { allowFail: true });
 };
 
-// Removes everything a test run labelled: containers, networks, volumes (`run` = one run id, or, when omitted, every
-// resource carrying the test label with any value: `contract` stacks and the compose test stacks of M1-S6, `stack`).
-export const removeLabelled = (run?: string): void => {
-	const filter = run ? `label=${runLabel}=${run}` : `label=${testLabel}`;
-	const containers = podman(['ps', '-a', '--filter', filter, '--format', '{{.Names}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
+// Containers, networks and volumes matching a podman filter, each with its run label. JSON output: the Go template
+// for labels differs between `ps`, `network ls` and `volume ls`.
+interface LabelledResource {
+	name: string;
+	run: string;
+}
+
+const labelled = (args: string[], filter: string): LabelledResource[] => {
+	const r = podman([...args, '--filter', filter, '--format', 'json'], { allowFail: true });
+	let rows: Record<string, unknown>[];
+	try {
+		rows = JSON.parse(r.stdout.trim() || '[]') as Record<string, unknown>[];
+	} catch {
+		return [];
+	}
+	return rows.map(row => {
+		const names = row.Names ?? row.Name ?? row.name;
+		const labels = (row.Labels ?? row.labels ?? {}) as Record<string, string> | null;
+		return { name: String(Array.isArray(names) ? names[0] : names ?? ''), run: labels?.[runLabel] ?? '' };
+	}).filter(x => x.name !== '');
+};
+
+// Removes the matching containers, then networks, then volumes, except those whose run `keep` claims.
+const removeMatching = (filter: string, keep: (run: string) => boolean = () => false): void => {
+	const doomed = (args: string[]): string[] => labelled(args, filter).filter(x => !keep(x.run)).map(x => x.name);
+	const containers = doomed(['ps', '-a']);
 	if (containers.length > 0) podman(['rm', '-f', '-t', '0', ...containers], { allowFail: true });
-	const networks = podman(['network', 'ls', '--filter', filter, '--format', '{{.Name}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
+	const networks = doomed(['network', 'ls']);
 	if (networks.length > 0) podman(['network', 'rm', '-f', ...networks], { allowFail: true });
-	const volumes = podman(['volume', 'ls', '--filter', filter, '--format', '{{.Name}}'], { allowFail: true }).stdout.split('\n').filter(n => n !== '');
+	const volumes = doomed(['volume', 'ls']);
 	if (volumes.length > 0) podman(['volume', 'rm', '-f', ...volumes], { allowFail: true });
+};
+
+// Removes what test runs labelled: containers, networks, volumes.
+// - `run` given: everything of that run.
+// - omitted (the contract run's start-up sweep): every `contract` leftover, and every compose test stack (`stack`)
+//   that no live descriptor claims (tests/stack/descriptors.ts: a `cli.ts up` stack, or one whose owning process is
+//   alive, is kept; M1-S6a C4); the descriptors of the stacks it removed go too.
+export const removeLabelled = (run?: string): void => {
+	if (run) {
+		removeMatching(`label=${runLabel}=${run}`);
+		return;
+	}
+	removeMatching(`label=${testLabel}=contract`);
+	const descriptors = stackDescriptors();
+	const live = new Set(descriptors.filter(d => d.live).map(d => d.run));
+	removeMatching(`label=${testLabel}=stack`, r => r !== '' && live.has(r));
+	for (const d of descriptors.filter(x => !x.live)) removeDescriptor(d);
 };
 
 // ---- Fixture clients: short-lived Node containers at fixed addresses (the TCP peer the web container sees) ----

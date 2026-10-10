@@ -23,6 +23,7 @@ import { redactText } from '../support/redact.ts';
 import type { KnownSecret } from '../support/redact.ts';
 import { findRepoRoot } from '../support/repoRoot.ts';
 import { registerSecrets } from '../support/secrets.ts';
+import { descriptorDir, descriptorPath } from './descriptors.ts';
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
@@ -57,6 +58,10 @@ export interface StackState {
 	owned: boolean;
 	// true when this run attached to a stack another process started (JOPLIN_SERVER_URL, reuse mode)
 	attached?: boolean;
+	// the process that started the stack; while it is alive, the contract sweep keeps the stack (M1-S6a C4)
+	ownerPid?: number;
+	// a developer's stack (`cli.ts up`): it outlives ownerPid, and only `cli.ts down` removes it (M1-S6a C4)
+	persistent?: boolean;
 	overrides: string[];
 	images: StackImages;
 	workDir: string;
@@ -238,8 +243,7 @@ export const hostPortOf = (container: string, port: number): number => {
 
 // ---- Lifecycle ----
 
-export const descriptorDir = (): string => join(tmpdir(), 'notestead-stacks');
-export const descriptorPath = (project: string): string => join(descriptorDir(), `${project}.json`);
+export { descriptorDir, descriptorPath };
 
 export const saveDescriptor = (state: StackState): void => {
 	mkdirSync(descriptorDir(), { recursive: true, mode: 0o700 });
@@ -260,6 +264,8 @@ export interface NewStackOptions {
 	// uses compose.neg-web-health.yaml. NOTESTEAD_STACK_OVERRIDES (comma-separated) adds more.
 	overrides?: string[];
 	images?: StackImages;
+	// `cli.ts up`: the stack outlives this process (M1-S6a C4)
+	persistent?: boolean;
 }
 
 // Runs the guard first: with JOPLIN_SERVER_URL set, this either attaches to the stack that owns that server or throws.
@@ -275,6 +281,8 @@ export const newStack = (opts: NewStackOptions = {}): StackState => {
 		project,
 		run,
 		owned: true,
+		ownerPid: process.pid,
+		...(opts.persistent ? { persistent: true } : {}),
 		overrides: [...(opts.overrides ?? []), ...envOverrides],
 		images: opts.images ?? resolveImages(workDir, logsDir),
 		workDir,
