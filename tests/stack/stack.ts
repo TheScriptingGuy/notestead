@@ -232,8 +232,8 @@ export const hostPortOf = (container: string, port: number): number => {
 
 // ---- Lifecycle ----
 
-const descriptorDir = (): string => join(tmpdir(), 'notestead-stacks');
-const descriptorPath = (project: string): string => join(descriptorDir(), `${project}.json`);
+export const descriptorDir = (): string => join(tmpdir(), 'notestead-stacks');
+export const descriptorPath = (project: string): string => join(descriptorDir(), `${project}.json`);
 
 export const saveDescriptor = (state: StackState): void => {
 	mkdirSync(descriptorDir(), { recursive: true, mode: 0o700 });
