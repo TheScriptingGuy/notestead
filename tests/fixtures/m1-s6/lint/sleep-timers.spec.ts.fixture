@@ -1,0 +1,8 @@
+// M1-S6 lint NEG fixture F1-b: `setTimeout` from node:timers/promises (renamed) as a sleep in a Playwright test.
+import { setTimeout as sleep } from 'node:timers/promises';
+import { expect, test } from '@playwright/test';
+
+test('a timers/promises sleep must be rejected', async ({ page }) => {
+	await sleep(500);
+	await expect(page).toHaveTitle('');
+});

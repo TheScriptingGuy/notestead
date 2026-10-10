@@ -1,0 +1,10 @@
+// M1-S6 lint NEG fixture F1-a (docs/test-plans/M1-S6.md): a Promise-wrapped setTimeout sleep in a Jest test.
+// `corepack yarn lint` must reject it (review M1-S1-r1 C2; ADR-0007 bans setTimeout-based sleeps in tests).
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint NEG', () => {
+	test('a promise-wrapped setTimeout sleep must be rejected', async () => {
+		await new Promise(resolve => setTimeout(resolve, 500));
+		expect(1 + 1).toBe(2);
+	});
+});

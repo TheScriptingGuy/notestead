@@ -1,0 +1,7 @@
+// M1-S6 lint NEG fixture F1-e: the same sleep through globalThis.setTimeout.
+import { expect, test } from '@playwright/test';
+
+test('a globalThis.setTimeout sleep must be rejected', async ({ page }) => {
+	await new Promise(resolve => globalThis.setTimeout(resolve, 250));
+	await expect(page).toHaveTitle('');
+});

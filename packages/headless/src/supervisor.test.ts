@@ -4,12 +4,15 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProbeResult } from './probes.ts';
-import { exitCodes, runSupervisor } from './supervisor.ts';
+import { exitCodes, pidOneWarning, runSupervisor } from './supervisor.ts';
 import type { Supervisor } from './supervisor.ts';
 
 const fakeCli = join(__dirname, 'testing', 'fake-joplin.mjs');
 const syncPassword = 'nstsyncpw0123 Δ$x!';
 const masterPassword = 'nstmasterpw0123 Δ$x!';
+
+const validEnv = (): NodeJS.ProcessEnv => ({ JOPLIN_SERVER_URL: 'http://web:8089/joplin-server', JOPLIN_USERNAME: 'u@example.com', PATH: process.env.PATH });
+const isPidOneWarning = (line: string): boolean => /\bPID 1\b/.test(line) && /\binit\b/.test(line);
 
 const freePort = (): Promise<number> => new Promise(resolve => {
 	const server = createServer();
@@ -44,8 +47,9 @@ describe('runSupervisor', () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	const start = async (pingTarget: () => Promise<ProbeResult>, env: NodeJS.ProcessEnv = { JOPLIN_SERVER_URL: 'http://web:8089/joplin-server', JOPLIN_USERNAME: 'u@example.com', PATH: process.env.PATH }): Promise<Supervisor | null> => runSupervisor({
+	const start = async (pingTarget: () => Promise<ProbeResult>, env: NodeJS.ProcessEnv = validEnv(), pid = 4242): Promise<Supervisor | null> => runSupervisor({
 		env,
+		pid,
 		cliBinPath: fakeCli,
 		secretsDir,
 		profileDir,
@@ -96,9 +100,23 @@ describe('runSupervisor', () => {
 		for (const secret of [syncPassword, masterPassword, imported['api.token']]) expect(log.includes(secret)).toBe(false);
 		expect(log).toContain('initial cycle failed: the sync target did not answer /api/ping before the sync (ECONNREFUSED)');
 		expect(log).toContain('ready: Data API up on 127.0.0.1:');
+		expect(lines.filter(isPidOneWarning)).toEqual([]);
 
 		await s.shutdown(0);
 		expect(exits).toEqual([0]);
+	});
+
+	test('as PID 1 it logs one warning naming PID 1 and init, first, and carries on to ready', async () => {
+		supervisor = await start(async () => ({ ok: true, detail: 'ok' }), validEnv(), 1);
+		const s = supervisor as Supervisor;
+		await s.started;
+		expect((await healthz(s)).status).toBe(200);
+		const warnings = lines.filter(isPidOneWarning);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z /);
+		expect(warnings[0].endsWith(pidOneWarning)).toBe(true);
+		expect(lines[0]).toBe(warnings[0]);
+		expect(exits).toEqual([]);
 	});
 
 	test('a configuration error exits 64 before anything starts, naming the variable only', async () => {

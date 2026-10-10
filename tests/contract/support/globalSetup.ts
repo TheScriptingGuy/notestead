@@ -6,11 +6,14 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { checkServerUrl } from '../../stack/guard.ts';
 import { removeLabelled, repoRoot } from './podman.ts';
 
 export const webImageTag = 'localhost/notestead-web:m1-s4-test';
 
 const globalSetup = (): void => {
+	// The real-server guard (M1-AC19): a foreign JOPLIN_SERVER_URL stops the run before anything starts.
+	checkServerUrl(process.env.JOPLIN_SERVER_URL);
 	const run = `${Date.now().toString(36)}${process.pid.toString(36)}`;
 	process.env.NOTESTEAD_CONTRACT_RUN = run;
 	removeLabelled();

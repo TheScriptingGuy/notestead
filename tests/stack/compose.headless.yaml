@@ -1,0 +1,60 @@
+# Notestead compose TEST stack, the `headless` service (docs/test-plans/M1-S6.md §Compose test stack; ADR-0003,
+# ADR-0006, ADR-0008). One compose project per test account (ADR-0007: a fresh headless container and profile per test
+# that needs one), attached to the core stack's internal `back` network (compose.yaml), its only network: the sync
+# path is web's internal listener http://web:8089/joplin-server. Started only by tests/stack/stack.ts.
+# No shared pod (ADR-0006: in a pod, web would reach headless's 127.0.0.1:41184). podman-compose defaults to one pod per
+# project; docker compose ignores x- keys.
+x-podman:
+  in_pod: false
+
+services:
+  headless:
+    image: ${NST_HEADLESS_IMAGE}
+    # A reaping init as PID 1 (ADR-0006 hardening, spike S3's zombie finding, review M1-S5-r1 finding 4).
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+    mem_limit: 768m
+    environment:
+      JOPLIN_SERVER_URL: http://web:8089/joplin-server
+      JOPLIN_USERNAME: ${NST_JOPLIN_USERNAME}
+    secrets:
+      - joplin_password
+      - e2ee_master_password
+    volumes:
+      - headless-data:/data
+    networks:
+      - back
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}
+      io.github.thescriptingguy.notestead.stack-role: headless
+    healthcheck:
+      # The supervisor's /healthz is 200 only after the initial sync and decryption succeeded (M1-AC15).
+      test: "node -e \"fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))\""
+      interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
+
+secrets:
+  joplin_password:
+    file: ${NST_SECRETS_DIR}/joplin_password
+  e2ee_master_password:
+    file: ${NST_SECRETS_DIR}/e2ee_master_password
+
+volumes:
+  headless-data:
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}
+
+networks:
+  back:
+    external: true
+    name: ${NST_BACK_NETWORK}

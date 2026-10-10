@@ -1,7 +1,7 @@
 // ESLint flat config (ADR-0009), modelled on upstream Joplin's eslint.config.js: the same parser and plugins
 // (@typescript-eslint, @stylistic, jest) and the same style (tabs, single quotes, semicolons, trailing commas).
 // Added for this project's test rules (ADR-0007/0009): no focused or skipped tests (Jest and Playwright) and no fixed
-// sleeps (`waitForTimeout`). `corepack yarn lint` runs this config, then `tsc --noEmit`.
+// sleeps (`waitForTimeout`, setTimeout-based sleeps). `corepack yarn lint` runs this config, then `tsc --noEmit`.
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
@@ -13,7 +13,20 @@ import globals from 'globals';
 
 const tsFiles = ['**/*.ts', '**/*.mts', '**/*.cts'];
 const jestFiles = ['**/*.test.ts', '**/*.test.tsx'];
-const playwrightFiles = ['tests/e2e/**/*.spec.ts'];
+// Every Playwright spec under tests/, the harness self-tests (tests/harness/selftest/) included.
+const playwrightFiles = ['tests/**/*.spec.ts'];
+// Test files: everything under tests/ and test files co-located with the code (packages/*/src/*.test.ts).
+const testFiles = ['tests/**', '**/*.test.ts', '**/*.test.tsx', '**/*.test.mts', '**/*.spec.ts'];
+// Exempt from the setTimeout ban, exactly: the harness's one polling primitive (waitFor) and the programs that run
+// inside test containers and sample at an interval (health-watch.mjs, proc-watch.mjs).
+const sleepExempt = ['tests/support/poll.ts', 'tests/fixtures/**/*.mjs'];
+const noWaitForTimeout = {
+	selector: 'CallExpression[callee.property.name="waitForTimeout"]',
+	message: 'No fixed sleeps: wait for a condition (expect.poll, waitFor, a readiness probe) instead of waitForTimeout.',
+};
+const noSleepMessage = 'No fixed sleeps in tests (ADR-0007): wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead of a setTimeout-based delay.';
+// `setTimeout` imported under any name (a namespace import is reported too) from the timers modules.
+const timersModules = ['timers/promises', 'node:timers/promises', 'timers', 'node:timers'];
 
 export default defineConfig([
 	globalIgnores([
@@ -180,12 +193,28 @@ export default defineConfig([
 	},
 	{
 		name: 'No fixed sleeps in tests (ADR-0007)',
-		files: ['tests/**', ...jestFiles],
+		files: testFiles,
+		ignores: sleepExempt,
 		rules: {
-			'no-restricted-syntax': ['error', {
-				selector: 'CallExpression[callee.property.name="waitForTimeout"]',
-				message: 'No fixed sleeps: wait for a condition (expect.poll, waitFor, a readiness probe) instead of waitForTimeout.',
+			'no-restricted-syntax': ['error', noWaitForTimeout, {
+				// The global setTimeout: `new Promise(r => setTimeout(r, n))` and callback delays alike. Member calls such
+				// as `req.setTimeout(ms, cb)` (a socket deadline) are not matched.
+				selector: 'CallExpression[callee.type="Identifier"][callee.name="setTimeout"]',
+				message: noSleepMessage,
+			}, {
+				selector: 'MemberExpression[object.type="Identifier"][object.name=/^(globalThis|global|window|self)$/][property.name="setTimeout"]',
+				message: noSleepMessage,
 			}],
+			'no-restricted-imports': ['error', {
+				paths: timersModules.map(name => ({ name, importNames: ['setTimeout'], message: noSleepMessage })),
+			}],
+		},
+	},
+	{
+		name: 'No fixed sleeps in tests (ADR-0007): the exempt polling primitive and in-container samplers',
+		files: sleepExempt,
+		rules: {
+			'no-restricted-syntax': ['error', noWaitForTimeout],
 		},
 	},
 ]);

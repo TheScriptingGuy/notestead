@@ -1,0 +1,11 @@
+// M1-S6 lint NEG fixture F1-d: a callback-style setTimeout delay in a Jest test (the test waits a fixed time).
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint NEG', () => {
+	test('a callback setTimeout delay must be rejected', done => {
+		setTimeout(() => {
+			expect(1 + 1).toBe(2);
+			done();
+		}, 300);
+	});
+});

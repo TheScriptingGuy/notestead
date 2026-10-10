@@ -1,0 +1,83 @@
+# Notestead compose TEST stack, core services (docs/test-plans/M1-S6.md §Compose test stack; ADR-0006, ADR-0007).
+# Test-only: the user-facing file is deploy/compose.yaml (M5-AC8). Started only by tests/stack/stack.ts, which sets
+# every NST_* variable; never run it by hand against a real server.
+#   server  throwaway joplin/server at the pinned tag (upstream/joplin-version.json), testing mode
+#   web     the `web` image under test with the ADR-0006 hardening; :8080 published on 127.0.0.1 only, the internal
+#           listener :8089 is reachable on `back` only and never published (review M1-S4-r1, nit 7)
+# The `headless` service is in compose.headless.yaml: one compose project per account, on this stack's `back` network.
+# Healthchecks: every service has one here (ADR-0006 amendment 2026-10-05; images carry no HEALTHCHECK). Healthcheck
+# tests are strings (CMD-SHELL), so an override file replaces them instead of appending (podman-compose merges lists).
+# No shared pod (ADR-0006: in a pod, web would reach headless's 127.0.0.1:41184). podman-compose defaults to one pod per
+# project; docker compose ignores x- keys.
+x-podman:
+  in_pod: false
+
+services:
+  server:
+    image: ${NST_SERVER_IMAGE}
+    command: ["node", "dist/index.js", "--env", "dev", "--env-file", "/dev/null"]
+    environment:
+      APP_PORT: "22300"
+      APP_BASE_URL: ${NST_PUBLIC_URL}
+      JOPLIN_IS_TESTING: "1"
+    ports:
+      - "127.0.0.1::22300"
+    networks:
+      - front
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}
+      io.github.thescriptingguy.notestead.stack-role: server
+    healthcheck:
+      # GET /api/ping with the Host of APP_BASE_URL (any other Host gets "Invalid origin"), body {"status":"ok"}.
+      test: "node -e \"const u=new URL(process.env.APP_BASE_URL);require('http').get({host:'127.0.0.1',port:22300,path:'/api/ping',headers:{Host:u.host}},r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>{try{process.exit(r.statusCode===200&&JSON.parse(b).status==='ok'?0:1)}catch(e){process.exit(1)}})}).on('error',()=>process.exit(1))\""
+      interval: 2s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  web:
+    image: ${NST_WEB_IMAGE}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+    mem_limit: 128m
+    environment:
+      JOPLIN_SERVER_URL: http://server:22300
+      JOPLIN_SERVER_PUBLIC_URL: ${NST_PUBLIC_URL}
+    ports:
+      - "127.0.0.1::8080"
+    networks:
+      - front
+      - back
+    depends_on:
+      server:
+        condition: service_healthy
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}
+      io.github.thescriptingguy.notestead.stack-role: web
+    healthcheck:
+      # deploy/web/README.md: busybox wget is in the image.
+      test: "wget -q -O /dev/null http://127.0.0.1:8080/"
+      interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  front:
+    name: ${NST_PROJECT}-front
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}
+  back:
+    name: ${NST_PROJECT}-back
+    internal: true
+    labels:
+      io.github.thescriptingguy.notestead.test: stack
+      io.github.thescriptingguy.notestead.test-run: ${NST_RUN}

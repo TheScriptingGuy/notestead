@@ -24,6 +24,17 @@ http_url() {
 	plain "$1" "$2"
 }
 
+# Sets $stripped to $1 without its trailing '/'s.
+strip_trailing_slashes() {
+	stripped=$1
+	while :; do
+		case $stripped in
+			*/) stripped=${stripped%/} ;;
+			*) break ;;
+		esac
+	done
+}
+
 # The host[:port] that upstream's isValidOrigin compares: WHATWG URL.host (lower case, no default port).
 url_host() {
 	rest=${1#*://}
@@ -40,6 +51,11 @@ JOPLIN_SERVER_PUBLIC_URL=${JOPLIN_SERVER_PUBLIC_URL:-}
 [ -n "$JOPLIN_SERVER_URL" ] || fail 'JOPLIN_SERVER_URL is required: the direct address of your Joplin Server, e.g. http://192.168.1.10:22300'
 [ -n "$JOPLIN_SERVER_PUBLIC_URL" ] || fail "JOPLIN_SERVER_PUBLIC_URL is required: your Joplin Server's APP_BASE_URL"
 http_url JOPLIN_SERVER_URL "$JOPLIN_SERVER_URL"
+# http://host:22300/ is the same server as http://host:22300, but Caddy refuses an upstream address with a path, so
+# trailing '/'s are removed (as for JOPLIN_SERVER_PUBLIC_URL); the result is checked again.
+strip_trailing_slashes "$JOPLIN_SERVER_URL"
+JOPLIN_SERVER_URL=$stripped
+http_url JOPLIN_SERVER_URL "$JOPLIN_SERVER_URL"
 case ${JOPLIN_SERVER_URL#*://} in
 	*[@?#]* | */?*) fail 'JOPLIN_SERVER_URL must be scheme://host[:port], without credentials, path or query' ;;
 esac
@@ -47,12 +63,9 @@ http_url JOPLIN_SERVER_PUBLIC_URL "$JOPLIN_SERVER_PUBLIC_URL"
 case ${JOPLIN_SERVER_PUBLIC_URL#*://} in
 	*[@?#]*) fail 'JOPLIN_SERVER_PUBLIC_URL must not contain credentials, a query or a fragment' ;;
 esac
-while :; do
-	case $JOPLIN_SERVER_PUBLIC_URL in
-		*/) JOPLIN_SERVER_PUBLIC_URL=${JOPLIN_SERVER_PUBLIC_URL%/} ;;
-		*) break ;;
-	esac
-done
+strip_trailing_slashes "$JOPLIN_SERVER_PUBLIC_URL"
+JOPLIN_SERVER_PUBLIC_URL=$stripped
+http_url JOPLIN_SERVER_PUBLIC_URL "$JOPLIN_SERVER_PUBLIC_URL"
 
 JOPLIN_SERVER_HOST=${JOPLIN_SERVER_HOST:-$(url_host "$JOPLIN_SERVER_PUBLIC_URL")}
 case $JOPLIN_SERVER_HOST in

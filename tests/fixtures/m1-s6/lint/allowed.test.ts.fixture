@@ -1,0 +1,23 @@
+// M1-S6 lint positive control (docs/test-plans/M1-S6.md, F1): none of these is a fixed sleep, so `corepack yarn lint`
+// must report nothing in this file. Polling through the harness primitive, a socket deadline, an abort deadline and
+// Jest's fake timers.
+import http from 'node:http';
+import { describe, expect, jest, test } from '@jest/globals';
+import { waitFor } from '../../support/poll.ts';
+
+describe('lint positive control', () => {
+	test('polling and deadlines are allowed', async () => {
+		const value = await waitFor('a condition', async () => 42, { timeoutMs: 1_000 });
+		const req = http.request({ host: '127.0.0.1', port: 9, path: '/' });
+		req.setTimeout(1_000, () => req.destroy());
+		req.on('error', () => undefined);
+		req.destroy();
+		const signal = AbortSignal.timeout(1_000);
+		jest.useFakeTimers({ now: new Date('2026-10-09T12:00:00Z') });
+		const fired = jest.fn();
+		queueMicrotask(fired);
+		jest.advanceTimersByTime(1_000);
+		jest.useRealTimers();
+		expect({ value, aborted: signal.aborted }).toEqual({ value: 42, aborted: false });
+	});
+});
