@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); next: M1-S6 |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); next: M1-S7 (C1 and C2 below first) |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,7 +44,7 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification
 - **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4 and M1-S5 x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64).
+- **Still open:** M1-S4, M1-S5 and M1-S6 x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
 - **CI follow-ups for M1-S8:**
   - record `df`/`free` after T90;
   - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
@@ -61,7 +61,7 @@ The orchestrator (main Claude session) maintains this file.
   - Add `Cache-Control` on static 404s (`handle_errors`), so Cloudflare doesn't briefly cache a 404 for a `.js` file.
   - Architect: should `Cf-Access-Client-Id`/`-Secret` be stripped before proxying to Joplin Server? ADR-0002 rule 3 doesn't cover them.
   - M5: the OCI label set must override Caddy's inherited labels (licence, title, source).
-  - Nits: empty unlisted dirs survive `import`; the decompression limit comes from the manifest; a trailing-slash `JOPLIN_SERVER_URL` fails with Caddy's error rather than ours; the image `EXPOSE`s 8089, so `podman run -P` would publish the internal listener.
+  - Nits: empty unlisted dirs survive `import`; the decompression limit comes from the manifest; a ~~trailing-slash `JOPLIN_SERVER_URL`~~ (done in M1-S6, stripped and re-validated); the image `EXPOSE`s 8089, so `podman run -P` would publish the internal listener.
 - **M1-S9 review follow-ups, for the architect to schedule:**
   - C1: `check:pin` alias hole — any `joplin`/`@joplin/*` lockfile entry must resolve to the same name. Needs a concrete story.
   - C2: ADR-0010 should say an exception's text wins over the standard SPDX text, which is what the code does.
@@ -71,7 +71,6 @@ The orchestrator (main Claude session) maintains this file.
 - **Architect (with M1-S9, done):** an ADR-0009 amendment allowing pipeline-only tooling in `.github/scripts/` (review M1-S3 P1), and an M1.md fix: post-merge CI fixes go on `fix/M1-S3-*`.
 - **M1-S9 / M1-AC26:** `check:pin` must also check the *source* of `joplin`/`@joplin/*` in the lockfile: require `npm:` resolutions, reject git or local patches (review M1-S1 C1).
 - **M1-S9 `check:licenses`:** exception list with reasons for 5 transitive packages of `joplin@3.7.1` (one LGPL-3.0, one MPL-2.0-no-copyleft-exception, one AFL/BSD, two with no licence field) (review M1-S1).
-- **M1-S6:** the lint ban on fixed sleeps should also catch `setTimeout`-based sleeps in tests (C2). Playwright Chromium revision mismatch (expects r1217, the Pi has r1223): pin to the installed browser or ask the user before downloading. Fixture log attachments and the CI report format.
 - **M1-S2 follow-ups:**
   - `verify` should also hash-check upstream screenshots and every other binary the overlay replaces (at M1-AC29 or the M5-AC1 scan) (r1-C2).
   - Cache cleanup policy for `~/.cache/notestead/web-build/<commit>` (~13 GB each) (r1-C4).
@@ -82,8 +81,32 @@ The orchestrator (main Claude session) maintains this file.
   - Architect: decide what happens for an account without E2EE. `e2ee decrypt --force` exits 1 there, so the supervisor never reports ready.
   - Orchestrator: propose upstream that `joplin sync` exits non-zero when the sync failed.
   - QA, M3-AC1: add a contract test where `/api/ping` answers but the sync routes fail, so the stack must never report ready. A wrong sync password should be a hard failure, not a 30 s retry loop.
-  - M1-S6: set `init: true` in compose; warn when the supervisor runs as PID 1; fix the install order in `packages/headless/README.md:14`.
+  - ~~M1-S6: `init: true` in compose; PID-1 warning; README install order~~ (done in M1-S6).
   - M1-S8: x64 contract evidence for M1-AC14–17 and M1-AC23.
+- **M1-S6 review follow-ups (`docs/reviews/M1-S6-r1.md`):**
+  - **C1 (QA, before or in M1-S7):** the redacting reporter knows only the default account's secrets. Feed it per-test passwords and Data API tokens, and redact error messages and stdout/stderr. M1-S7 types the master password into the browser, so it would otherwise land in traces.
+  - **C2 (QA, then senior engineer, small item before M1-S7):** close the lint-ban gaps:
+    - `promisify(setTimeout)`;
+    - aliasing `setTimeout` to another name;
+    - destructuring it from `globalThis`;
+    - `globalThis['setTimeout']`;
+    - `setInterval` used as a delay.
+
+    QA adds failing fixtures first; the engineer then bans `setTimeout` used as a value.
+  - **C3, architect:** amend ADR-0007 and M1.md:
+    - one compose stack per run (in globalSetup);
+    - the fixture is named `headlessService`;
+    - tests that stop a shared service run serially once CI uses more than one worker.
+
+    QA also records that `e2eeAccount` doesn't yet seed a to-do with `todo_due`, a tag and an attachment, and adds that when M2 or M4 needs it.
+  - **C4 (QA, nit):** starting a contract run wipes a developer's running `tests/stack/cli.ts up` stack.
+  - **C5 (QA and ci-cd, in M1-S8):** throwaway passwords sit in plaintext in the stack descriptor in shared `/tmp` and in `planted.json`. Exclude `planted.json` from CI uploads.
+  - **P1 (nit):** lint evidence logs should record the exit code.
+  - **M1-S8:**
+    - confirm podman healthchecks fire on GitHub runners (otherwise set `NOTESTEAD_COMPOSE='docker compose'`);
+    - run `shellcheck` on `deploy/web/notestead-web-entrypoint.sh`;
+    - collect x64 evidence for M1-AC18–20 and M1-AC34.
+  - **Optional, M3:** show "no init" in `/status`.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
