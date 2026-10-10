@@ -175,3 +175,35 @@ Branch `feat/M1-S6a-harness-hardening`, from `e127859`. Raspberry Pi 4, podman 5
 | `c4-sweep-orphan`, `c4-sweep-contract` | PASS | The controls: the sweep still removes these. |
 
 **Leftovers:** `podman ps -a`, `network ls` and `volume ls` are identical before and after every run (`podman-before.txt`, `podman-after-red1.txt`), and the descriptor dir is empty. The three images under test were kept on purpose (`NOTESTEAD_KEEP_IMAGE=1`) for the GREEN runs; they are removed at the end of the story.
+
+## GREEN for the QA-owned items (C1, C4), 2026-10-10, Pi arm64
+C1 and C4 are harness code, so QA implemented them after committing RED:
+- C1 RED is `fb72b01`; its fix is `a3cc6dc`.
+- C4 RED is `dabf839`; its fix is `1f842ba`.
+
+C2 stays RED until the engineer's R1. Logs are under `test-results/verify/m1-s6a/`.
+
+**Harness bugs found while turning C1 green:**
+- **The reporter never got `outputDirs`.** It read them in `onConfigure`, but Playwright's wrapper for v1 reporters does not forward `onConfigure`. The config arrives in `onBegin(config, suite)` instead. Run `green-c1.log` caught this: `c1-redacted-all` was the only failure, because the original `pertest-file.txt` in the output dir was left unredacted. The unit test now calls `onBegin`, as the runner does.
+- **The global sweep's label template.** `{{index .Labels …}}` works for `podman ps`, but `podman network ls` fails on it. The sweep therefore lists resources as JSON.
+
+| Item | Test IDs | Result | Command | Duration | Log |
+|---|---|---|---|---|---|
+| **C1** | `c1-ran`, `c1-planted`, `c1-redacted-{trace,stdout,errors,steps,attachments,reports,console}`, `c1-redacted-all`, `c1-neg` | **PASS 11/11** (RED 3/11) | `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract --verbose tests/contract/m1-s6a/c1-pertest-secrets.test.ts` | 350 s | `green-c1-2.log`; artifacts `test-results/contract/m1-s6a/c1/`; NEG summary `c1-neg-summary.json` (trace 12, stdout 3, errors 3, steps 1, attachments 6, reports 6, console 3) |
+| C1 unit | `tests/unit/harness/secrets.test.ts` (7, including a negative control: without the registry, the same secret survives in ≥ 10 places) | **PASS** | `corepack yarn jest tests/unit/harness` | 2 s | `unit.log` |
+| **C4** | `c4-keep-dev`, `c4-keep-live`, `c4-sweep-dead`, `c4-sweep-orphan`, `c4-sweep-contract` | **PASS 5/5** (RED 2/5) | `corepack yarn test:contract --verbose tests/contract/m1-s6a/c4-sweep.test.ts` | 32 s | `green-c4.log` |
+| C4 unit | `tests/unit/harness/descriptors.test.ts` (2: liveness rules; `newStack` records `ownerPid`, and `persistent` for `cli.ts up`) | **PASS** | `corepack yarn jest tests/unit/harness` | 2 s | `unit.log` |
+| **C2** | `C2-T01`, `C2-T02-*` (6), `C2-T03-*` (3) | **RED 3/10** (until R1) | `node --test … tests/acceptance/m1-s6a/c2-lint-sleep-values.test.mts` | 51 s | `red-c2.log` |
+
+**Regression:**
+
+| Layer | Command | Result | Duration | Log |
+|---|---|---|---|---|
+| Contract M1-S6 + M1-S6a | `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract --verbose tests/contract/m1-s6`; Jest's path pattern also matches `m1-s6a` | 7 suites, **34 passed**. All M1-S6 self-tests now run with the HTML and JUnit reporters, the secret registry, worker stdio redaction and the new sweep; `ac20-redacted` passes with `html/trace/` excluded. | 966 s | `regress-contract-m1-s6.log` |
+| Contract M1-S4 | `corepack yarn test:contract --verbose tests/contract/m1-s4` | 4 suites, **28 passed** | 101 s | `regress-contract-m1-s4.log` |
+| Unit (all workspaces) | `corepack yarn jest` | 29 suites, **258 passed** (249 before, plus 9 new) | 34 s | `unit.log` |
+| Acceptance F1 | `node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/m1-s6/*.test.mts'` | **8 passed** | 14 s | `f1.log` |
+| Lint and types | `corepack yarn lint` | exit 0 | 53 s | `lint.log` |
+| Leftovers | `podman ps -a`, `network ls`, `volume ls` before vs after; `podman images` | **identical**; images are back to the starting set (the kept `notestead-*` images were removed); no `/tmp/nst-*` or descriptor files | | `podman-before.txt`, `podman-after-all.txt` |
+| Contract M1-S5 | not re-run | The only shared code it uses that changed is `removeLabelled(run)` in the contract globalTeardown. Every contract run above ran it, and the leftover checks prove it. | | |
+| x64 | n/a | **PENDING-CI (M1-S8)** | | |
