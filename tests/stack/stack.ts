@@ -22,6 +22,7 @@ import { waitFor } from '../support/poll.ts';
 import { redactText } from '../support/redact.ts';
 import type { KnownSecret } from '../support/redact.ts';
 import { findRepoRoot } from '../support/repoRoot.ts';
+import { registerSecrets } from '../support/secrets.ts';
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
@@ -90,6 +91,11 @@ export const podmanSync = (args: string[], { allowFail = false, timeoutMs = 5 * 
 
 // `podman compose` by default; NOTESTEAD_COMPOSE may name another provider command (for example `docker compose`).
 const composeCommand = (): string[] => (process.env.NOTESTEAD_COMPOSE ?? 'podman compose').split(' ').filter(p => p !== '');
+
+export const accountSecrets = (account: Account): KnownSecret[] => [
+	{ label: 'account_password', value: account.password },
+	{ label: 'master_password', value: account.masterPassword },
+];
 
 export const knownSecrets = (state: StackState): KnownSecret[] => state.accounts.flatMap((a, i) => [
 	{ label: `account${i}_password`, value: a.password },
@@ -334,6 +340,8 @@ export const createAccount = async (state: StackState): Promise<Account> => {
 	const id = json(created.text).id;
 	if (created.status !== 200 || typeof id !== 'string') throw new Error(`POST /api/users returned ${created.status}: ${created.text.slice(0, 300)}`);
 	const account: Account = { email, password: strongPassword('pw'), masterPassword: strongPassword('mp') };
+	// Known to every redaction (worker stdio, the redacting reporter) before anything can print it (M1-S6a C1).
+	registerSecrets(accountSecrets(account));
 	state.accounts.push(account);
 	const patched = await serverRequest(state, `/api/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-API-AUTH': admin }, body: JSON.stringify({ password: account.password, must_set_password: 0 }) });
 	if (patched.status !== 200 && patched.status !== 204) throw new Error(`PATCH /api/users/${id} returned ${patched.status}: ${patched.text.slice(0, 300)}`);
@@ -380,6 +388,7 @@ export const upHeadless = async (state: StackState, account: Account, label: str
 	const containers = await composeUp(state, `up-headless-${label}`, project, ['compose.headless.yaml'], ['headless'],
 		{ NST_JOPLIN_USERNAME: account.email, NST_SECRETS_DIR: secretsDir }, timeoutMs);
 	service.container = containers.headless;
+	registerToken(service);
 	if (state.owned) saveDescriptor(state);
 	return service;
 };
@@ -395,6 +404,12 @@ export const upDefault = async (state: StackState): Promise<void> => {
 export const dataApiToken = (container: string): string | undefined => {
 	const r = podmanSync(['exec', container, 'node', '-e', "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/data/profile/settings.json','utf8'))['api.token']||''))"], { allowFail: true });
 	return r.code === 0 && r.stdout.length >= 16 ? r.stdout : undefined;
+};
+
+// Registers the service's current Data API token (the CLI rotates it on every start, M1-S5), for redaction (M1-S6a C1).
+export const registerToken = (service: HeadlessService): void => {
+	const token = service.container ? dataApiToken(service.container) : undefined;
+	if (token) registerSecrets([{ label: `data_api_token_${service.label}`, value: token }]);
 };
 
 export const secretsFor = (state: StackState): KnownSecret[] => {
