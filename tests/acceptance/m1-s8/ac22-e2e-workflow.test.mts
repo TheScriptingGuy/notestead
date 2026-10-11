@@ -289,6 +289,8 @@ describe('C1-R2 and C5: test results are uploaded only through the upload gate (
 				assert.ok(new RegExp(`steps\\.${gate.id}\\.(outcome|conclusion)\\s*==\\s*'success'`).test(cond), `${where(job, u)}: if: must require steps.${gate.id}.outcome == 'success' (found ${JSON.stringify(cond)})`);
 				assert.ok(/\balways\(\)|\bfailure\(\)/.test(cond), `${where(job, u)}: if: must also run on failure (always() or failure()), so traces of a failing run are uploaded`);
 				assert.ok(/^\s*!\*\*\/planted\.json\s*$/m.test(str(u.with.path) ?? ''), `${where(job, u)}: path must exclude !**/planted.json (C5)`);
+				// The gate does not redact hidden files (upload-artifact leaves them out by default): keep it that way.
+				assert.notEqual(str(u.with['include-hidden-files']), 'true', `${where(job, u)}: include-hidden-files would upload what the gate does not redact`);
 			}
 			const names = uploads.map(u => str(u.with.name) ?? '');
 			if (job.runners.length > 1) for (const n of names) assert.ok(/\$\{\{\s*matrix\./.test(n), `${where(job)}: artifact name ${n} must differ per runner`);
