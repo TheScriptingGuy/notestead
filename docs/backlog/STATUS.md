@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); next: M1-S7 (C1 and C2 below first) |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); next: M1-S7 (with C1-R1 below) |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,7 +44,7 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification
 - **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4, M1-S5 and M1-S6 x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
+- **Still open:** M1-S4, M1-S5, M1-S6 and M1-S6a x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
 - **CI follow-ups for M1-S8:**
   - record `df`/`free` after T90;
   - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
@@ -84,8 +84,8 @@ The orchestrator (main Claude session) maintains this file.
   - ~~M1-S6: `init: true` in compose; PID-1 warning; README install order~~ (done in M1-S6).
   - M1-S8: x64 contract evidence for M1-AC14–17 and M1-AC23.
 - **M1-S6 review follow-ups (`docs/reviews/M1-S6-r1.md`):**
-  - **C1 (QA, before or in M1-S7):** the redacting reporter knows only the default account's secrets. Feed it per-test passwords and Data API tokens, and redact error messages and stdout/stderr. M1-S7 types the master password into the browser, so it would otherwise land in traces.
-  - **C2 (QA, then senior engineer, small item before M1-S7):** close the lint-ban gaps:
+  - ~~**C1 (QA, before or in M1-S7):** the redacting reporter knows only the default account's secrets. Feed it per-test passwords and Data API tokens, and redact error messages and stdout/stderr. M1-S7 types the master password into the browser, so it would otherwise land in traces.~~ (done in M1-S6a)
+  - ~~**C2 (QA, then senior engineer, small item before M1-S7):**~~ (done in M1-S6a) close the lint-ban gaps:
     - `promisify(setTimeout)`;
     - aliasing `setTimeout` to another name;
     - destructuring it from `globalThis`;
@@ -99,14 +99,22 @@ The orchestrator (main Claude session) maintains this file.
     - tests that stop a shared service run serially once CI uses more than one worker.
 
     QA also records that `e2eeAccount` doesn't yet seed a to-do with `todo_due`, a tag and an attachment, and adds that when M2 or M4 needs it.
-  - **C4 (QA, nit):** starting a contract run wipes a developer's running `tests/stack/cli.ts up` stack.
+  - ~~**C4 (QA, nit):** starting a contract run wipes a developer's running `tests/stack/cli.ts up` stack.~~ (done in M1-S6a)
+  - **P1:** ~~lint evidence logs should record the exit code~~ (done in M1-S6a).
   - **C5 (QA and ci-cd, in M1-S8):** throwaway passwords sit in plaintext in the stack descriptor in shared `/tmp` and in `planted.json`. Exclude `planted.json` from CI uploads.
-  - **P1 (nit):** lint evidence logs should record the exit code.
   - **M1-S8:**
     - confirm podman healthchecks fire on GitHub runners (otherwise set `NOTESTEAD_COMPOSE='docker compose'`);
     - run `shellcheck` on `deploy/web/notestead-web-entrypoint.sh`;
     - collect x64 evidence for M1-AC18–20 and M1-AC34.
   - **Optional, M3:** show "no init" in `/status`.
+- **M1-S6a review follow-ups (`docs/reviews/M1-S6a-r1.md`):**
+  - **C1-R1 (QA, in M1-S7):** C1 is only proven on a synthetic page, and trace screenshot frames (JPEG) can't be text-redacted. The "type like a user" helper must refuse to type a registered secret into anything but `type="password"`. Run the leak scan on M1-S7's real login/unlock flow, including the network bodies in the trace.
+  - **C1-R2 (ci-cd, in M1-S8):** traces are written unredacted and only cleaned by the reporter afterwards. Skip or redact the `if: always()` upload of `test-results/` unless the reporter finished (a job killed by a timeout or cancel would publish them).
+  - **C4-R3 (QA, next harness story; before M1-S8 if CI runs parallel jobs on one podman host):** save the stack descriptor in `newStack()`, not after the server is healthy, so a concurrent contract run can't sweep a stack that is still starting.
+  - **FU-S6a-1 (QA fixtures first, then engineer; next story touching `eslint.config.js`, at the latest M1-S8):** extend the sleep ban to `require('node:timers').setTimeout`, `import()` followed by member access, `scheduler.wait` from `node:timers/promises`, and `Atomics.wait`.
+  - **Accepted risk A1:** `Reflect.get`, a key held in a variable, an alias of `globalThis`, and nested type assertions all bypass the lint ban.
+  - Nits: C1-R4, check `html/trace/` against Playwright's viewer files instead of skipping it by path; C2-R5, the strategy should say to assert on the spy variable, since `expect(setTimeout)` is flagged; C1-R6 (from M4), a Data API token that changes when the CLI restarts mid-test isn't registered until teardown.
+  - **P-R1 (process):** test- and lint-only commits use `test(...)` or `chore(...)`, never `fix(...)` (`a3cc6dc`, `1f842ba` and `e1910f8` did). At M5-S3 the ci-cd specialist adds release-please `exclude-paths` or a `bootstrap-sha`.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
