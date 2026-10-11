@@ -2,7 +2,7 @@
 // the Playwright globalSetup and fixtures (tests/e2e/support), the M1-S6 contract self-tests and the developer CLI
 // (tests/stack/cli.ts). Shared by Jest (CommonJS) and Playwright/Node (ESM): no __dirname, no import.meta.
 // Lifecycle:
-//   newStack()      guard (M1-AC19), names, work dir; nothing started yet
+//   newStack()      guard (M1-AC19), names, work dir, descriptor saved (M1-S8 C4-R3); nothing started yet
 //   upCore()        `podman compose up -d server web`; every service must reach `healthy` (M1-AC18), else abort naming it
 //   createAccount() a fresh user through the admin API (strong unique password)
 //   enableE2ee()    the CLI "other device" turns E2EE on for that account and seeds notes (ADR-0007 `e2eeAccount`)
@@ -13,7 +13,7 @@
 // which only accepts this stack's own published port.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,7 +24,7 @@ import { redactText } from '../support/redact.ts';
 import type { KnownSecret } from '../support/redact.ts';
 import { findRepoRoot } from '../support/repoRoot.ts';
 import { registerSecrets } from '../support/secrets.ts';
-import { descriptorDir, descriptorPath } from './descriptors.ts';
+import { descriptorDir, descriptorPath, ensureDescriptorDir, readDescriptorFile } from './descriptors.ts';
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
@@ -246,16 +246,19 @@ export const hostPortOf = (container: string, port: number): number => {
 
 export { descriptorDir, descriptorPath };
 
+// The directory is checked (and created 0700) first; the file is written 0600 (M1-S8 C5).
 export const saveDescriptor = (state: StackState): void => {
-	mkdirSync(descriptorDir(), { recursive: true, mode: 0o700 });
-	writeFileSync(descriptorPath(state.project), JSON.stringify(state), { mode: 0o600 });
+	ensureDescriptorDir(true);
+	const file = descriptorPath(state.project);
+	writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+	chmodSync(file, 0o600);
 };
 
 // A stack another harness process started (JOPLIN_SERVER_URL named its server): used, never torn down here.
 export const attachStack = (server: HarnessServer): StackState => {
 	const file = descriptorPath(server.project);
 	if (!existsSync(file)) throw new Error(`JOPLIN_SERVER_URL names the harness server ${server.container}, but its stack descriptor ${file} is missing; restart the stack with \`node tests/stack/cli.ts up\``);
-	return { ...JSON.parse(readFileSync(file, 'utf8')) as StackState, owned: false, attached: true };
+	return { ...JSON.parse(readDescriptorFile(file)) as StackState, owned: false, attached: true };
 };
 
 export interface NewStackOptions {
@@ -278,7 +281,7 @@ export const newStack = (opts: NewStackOptions = {}): StackState => {
 	const logsDir = opts.logsDir ?? join(findRepoRoot(), 'test-results', 'stack', project);
 	const workDir = mkdtempSync(join(tmpdir(), 'nst-stack-'));
 	const envOverrides = (process.env.NOTESTEAD_STACK_OVERRIDES ?? '').split(',').map(s => s.trim()).filter(s => s !== '');
-	return {
+	const state: StackState = {
 		project,
 		run,
 		owned: true,
@@ -294,6 +297,9 @@ export const newStack = (opts: NewStackOptions = {}): StackState => {
 		accounts: [],
 		headless: [],
 	};
+	// Saved before anything starts (M1-S8 C4-R3): a concurrent contract sweep keeps a stack that is still starting.
+	saveDescriptor(state);
+	return state;
 };
 
 const coreFiles = (state: StackState): string[] => ['compose.yaml', ...state.overrides];
