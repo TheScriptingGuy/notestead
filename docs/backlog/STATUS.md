@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); next: M1-S7 (with C1-R1 below) |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); next: M1-S8 |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,7 +44,7 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification
 - **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4, M1-S5, M1-S6 and M1-S6a x64 (contract suite), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
+- **Still open:** M1-S4, M1-S5, M1-S6, M1-S6a and M1-S7 x64 (contract and E2E suites), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
 - **CI follow-ups for M1-S8:**
   - record `df`/`free` after T90;
   - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
@@ -108,13 +108,22 @@ The orchestrator (main Claude session) maintains this file.
     - collect x64 evidence for M1-AC18–20 and M1-AC34.
   - **Optional, M3:** show "no init" in `/status`.
 - **M1-S6a review follow-ups (`docs/reviews/M1-S6a-r1.md`):**
-  - **C1-R1 (QA, in M1-S7):** C1 is only proven on a synthetic page, and trace screenshot frames (JPEG) can't be text-redacted. The "type like a user" helper must refuse to type a registered secret into anything but `type="password"`. Run the leak scan on M1-S7's real login/unlock flow, including the network bodies in the trace.
+  - ~~**C1-R1 (QA, in M1-S7):**~~ (done in M1-S7) C1 is only proven on a synthetic page, and trace screenshot frames (JPEG) can't be text-redacted. The "type like a user" helper must refuse to type a registered secret into anything but `type="password"`. Run the leak scan on M1-S7's real login/unlock flow, including the network bodies in the trace.
   - **C1-R2 (ci-cd, in M1-S8):** traces are written unredacted and only cleaned by the reporter afterwards. Skip or redact the `if: always()` upload of `test-results/` unless the reporter finished (a job killed by a timeout or cancel would publish them).
   - **C4-R3 (QA, next harness story; before M1-S8 if CI runs parallel jobs on one podman host):** save the stack descriptor in `newStack()`, not after the server is healthy, so a concurrent contract run can't sweep a stack that is still starting.
   - **FU-S6a-1 (QA fixtures first, then engineer; next story touching `eslint.config.js`, at the latest M1-S8):** extend the sleep ban to `require('node:timers').setTimeout`, `import()` followed by member access, `scheduler.wait` from `node:timers/promises`, and `Atomics.wait`.
   - **Accepted risk A1:** `Reflect.get`, a key held in a variable, an alias of `globalThis`, and nested type assertions all bypass the lint ban.
   - Nits: C1-R4, check `html/trace/` against Playwright's viewer files instead of skipping it by path; C2-R5, the strategy should say to assert on the spy variable, since `expect(setTimeout)` is flagged; C1-R6 (from M4), a Data API token that changes when the CLI restarts mid-test isn't registered until teardown.
   - **P-R1 (process):** test- and lint-only commits use `test(...)` or `chore(...)`, never `fix(...)` (`a3cc6dc`, `1f842ba` and `e1910f8` did). At M5-S3 the ci-cd specialist adds release-please `exclude-paths` or a `bootstrap-sha`.
+- **M1-S7 review follow-ups (`docs/reviews/M1-S7-r1.md`):**
+  - **M1-S8 hand-over (ci-cd):** `e2e.yml` sets `NOTESTEAD_WEB_ARTIFACT` (the CI web bundle) for the Playwright run and the `tests/contract/m1-s7` run on both runners. Upload `test-results/**` and `playwright-report/**` only after the redacting reporter has finished (C1-R2, now the main leak path).
+  - **C1-R1a (QA, next harness story or M1-S8):** `typeLikeUser` with `secret: true` must register the text as a secret before typing; otherwise it shows in clear in the trace's typing action and in step titles.
+  - **C1-R1b (QA, with C1-R2 in M1-S8):** learn session ids from `/api/sessions` response bodies too, in both the reporter and the leak scan, so no test can miss them.
+  - **Before M3/M4 tests mix sync and MCP:** the "one headless sync" helper (currently a restart, which rotates the Data API token) switches to M3's manual sync trigger.
+  - **Architect:** reword M1-AC21 step 3 from "as `user1`" to "a fresh per-test E2EE user".
+  - Nits: C-N1, the guard should check that the element is really a password `<input>`, not just its `type` attribute; C-N2 (M2), check in the UI that the web app decrypted the body; C-N3, a spec using Playwright's own `page`/`context` gets no trace, with no warning.
+  - **Node 24 workaround:** Playwright's own trace merge hangs on the Pi's Node 24.17, so the browser fixture records its own trace (no screenshots) on every platform. The lead advises keeping it everywhere.
+  - Upstream issues the user may file: the web app's "Joplin Server URL" field loses focus after the first keystroke; the Playwright trace merge hangs on Node 24.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
