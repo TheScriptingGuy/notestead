@@ -86,6 +86,53 @@ describe('redacting reporter: credentials derived from a trace', () => {
 		expect({ session: all.includes(session), bearer: all.includes(bearer) }).toEqual({ session: false, bearer: false });
 	});
 
+	// M1-S8 C1-R1b (review M1-S7-r1): a session id that only ever appears in a POST /api/sessions response body (the app
+	// failed, or logged in again, before it sent the id in a request) is known to no registry and is in no header.
+	const sessionOnlyInBody = 'Qm4ZrT7vX2pL9sK3wN8yB6';
+	const noteId = '0123456789abcdef0123456789abcdef';
+	const runLoginOnly = (): string => {
+		const outputDir = join(work, 'output');
+		const dir = join(outputDir, 'test-b');
+		mkdirSync(dir, { recursive: true });
+		const login = {
+			type: 'resource-snapshot',
+			snapshot: {
+				request: { method: 'POST', url: 'http://127.0.0.1:1/joplin-server/api/sessions', headers: [{ name: 'Content-Type', value: 'application/json' }] },
+				response: { status: 200, headers: [], content: { mimeType: 'application/json', _sha1: 'session-response.json' } },
+			},
+		};
+		const item = {
+			type: 'resource-snapshot',
+			snapshot: {
+				request: { method: 'GET', url: `http://127.0.0.1:1/joplin-server/api/items/root:/${noteId}.md:`, headers: [] },
+				response: { status: 200, headers: [], content: { mimeType: 'application/json', _sha1: 'item-response.json' } },
+			},
+		};
+		const trace = join(dir, 'trace.zip');
+		writeFileSync(trace, writeZip([
+			{ name: 'trace.network', data: Buffer.from(`${JSON.stringify(login)}\n${JSON.stringify(item)}\n`) },
+			{ name: 'resources/session-response.json', data: Buffer.from(JSON.stringify({ id: sessionOnlyInBody, user_id: 'u1' })) },
+			{ name: 'resources/item-response.json', data: Buffer.from(JSON.stringify({ id: noteId, name: `${noteId}.md` })) },
+			{ name: 'trace.trace', data: Buffer.from(`${JSON.stringify({ type: 'console', text: `session ${sessionOnlyInBody}` })}\n`) },
+		]));
+		const stray = join(dir, 'stray.txt');
+		writeFileSync(stray, `stray ${sessionOnlyInBody}\n`);
+		const result = {
+			errors: [], stdout: [], stderr: [], steps: [],
+			attachments: [{ name: 'trace', contentType: 'application/zip', path: trace }],
+		} as unknown as TestResult;
+		const reporter = new RedactingReporter();
+		reporter.onBegin({ projects: [{ outputDir }] } as unknown as FullConfig);
+		reporter.onTestEnd({} as TestCase, result);
+		reporter.onEnd();
+		return [...readZip(readFileSync(trace)).map(e => e.data.toString('utf8')), readFileSync(stray, 'utf8')].join('\n');
+	};
+
+	test('c1r1b-derived a session id seen only in a POST /api/sessions response body is redacted everywhere; other response ids are kept', () => {
+		const all = runLoginOnly();
+		expect({ session: all.includes(sessionOnlyInBody), noteIdKept: all.includes(noteId) }).toEqual({ session: false, noteIdKept: true });
+	});
+
 	test('c1r1-derived-neg with the secret feed off (self-test NEG switch), the derived values survive outside the headers', () => {
 		process.env.NST_SELFTEST_OUT = work;
 		process.env.NST_SELFTEST_SECRET_FEED = 'off';
