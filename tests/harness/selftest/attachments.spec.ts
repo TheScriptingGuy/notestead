@@ -9,10 +9,9 @@
 //   marker values in X-API-AUTH, Authorization, Cookie, Cf-Access-Jwt-Assertion, CF-Access-Client-Secret and ?token=,
 //   and a unique path marker.
 // The real secrets (account and master passwords, the Data API token) and every planted value go to
-// $NST_SELFTEST_OUT/planted.json (outside the report and the test output dir) for the outer scan.
+// $NST_SELFTEST_PLANTED (a 0600 file outside test-results/, which CI uploads; M1-S8 C5) for the outer scan.
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { expect, test } from '../../e2e/support/fixtures.ts';
 import { dataApiToken, podmanSync, webRequest } from '../../stack/stack.ts';
 import { waitFor } from '../../support/poll.ts';
@@ -20,7 +19,8 @@ import { waitFor } from '../../support/poll.ts';
 const hex = (): string => randomBytes(12).toString('hex');
 
 test('M1-AC20 fails on purpose and attaches every log', async ({ stack, e2eeAccount, headlessService, dataApi, webApp }) => {
-	const out = process.env.NST_SELFTEST_OUT ?? '';
+	const plantedFile = process.env.NST_SELFTEST_PLANTED;
+	if (!plantedFile) throw new Error('NST_SELFTEST_PLANTED is not set: this spec is run by tests/contract/m1-s6/ac20-attachments.test.ts only');
 
 	// The supervisor has synced and decrypted the account (so its log has content to attach).
 	const notes = dataApi.get('/notes?fields=id,title');
@@ -67,7 +67,7 @@ test('M1-AC20 fails on purpose and attaches every log', async ({ stack, e2eeAcco
 		return `${log.stdout}${log.stderr}`.split('\n').some(l => l.includes(markers.path) && l.includes('"error"')) ? true : undefined;
 	}, { timeoutMs: 30_000 });
 
-	writeFileSync(join(out, 'planted.json'), JSON.stringify({
+	writeFileSync(plantedFile, JSON.stringify({
 		inPageVisible: inPage.visible,
 		markers,
 		secrets: [
@@ -75,7 +75,7 @@ test('M1-AC20 fails on purpose and attaches every log', async ({ stack, e2eeAcco
 			{ label: 'master_password', value: e2eeAccount.masterPassword },
 			{ label: 'data_api_token', value: dataApiToken(headlessService.container) ?? '' },
 		],
-	}));
+	}), { mode: 0o600 });
 
 	expect('the harness self-test', 'M1-AC20: this failure is deliberate').toBe('a passing test');
 });

@@ -4,6 +4,7 @@
 // secret value the harness knows (passwords, the Data API token) are replaced. Shared by Jest and Playwright.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readZip, writeZip } from './zip.ts';
+import type { ZipEntry } from './zip.ts';
 
 export const redacted = '[REDACTED]';
 
@@ -144,6 +145,45 @@ export const credentialValues = (text: string): string[] => {
 	for (const line of text.split('\n')) {
 		const t = line.trim();
 		if (t.startsWith('{') && t.endsWith('}')) parse(t);
+	}
+	return [...out];
+};
+
+// The session ids the Joplin Server returned to the browser, from a Playwright trace's entries: the `id` of every
+// …/api/sessions response body (M1-S8 C1-R1b). A `.network` entry names its response body resource
+// (`snapshot.response.content._sha1`, stored as `resources/<sha1>`). A session id the app received but never sent (it
+// failed or logged in again before its next request) is in no header, so credentialValues cannot see it.
+export const sessionIdsFromTrace = (entries: ZipEntry[]): string[] => {
+	const byName = new Map(entries.map(e => [e.name, e.data]));
+	const out = new Set<string>();
+	for (const entry of entries.filter(e => e.name.endsWith('.network'))) {
+		for (const line of entry.data.toString('utf8').split('\n')) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			const snapshot = (parsed as { snapshot?: { request?: { url?: unknown }; response?: { content?: { _sha1?: unknown } } } } | null)?.snapshot;
+			const url = snapshot?.request?.url;
+			const sha1 = snapshot?.response?.content?._sha1;
+			if (typeof url !== 'string' || typeof sha1 !== 'string') continue;
+			let path: string;
+			try {
+				path = new URL(url).pathname;
+			} catch {
+				continue;
+			}
+			if (!/\/api\/sessions\/?$/.test(path)) continue;
+			const body = byName.get(`resources/${sha1}`);
+			if (!body) continue;
+			try {
+				const id = (JSON.parse(body.toString('utf8')) as { id?: unknown } | null)?.id;
+				if (typeof id === 'string' && id.length >= 6) out.add(id);
+			} catch {
+				// not a JSON body (an error page): no session was created
+			}
+		}
 	}
 	return [...out];
 };
