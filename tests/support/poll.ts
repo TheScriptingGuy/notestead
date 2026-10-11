@@ -30,3 +30,18 @@ export const waitFor = async <T>(what: string, probe: () => Promise<T | undefine
 	}
 	throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}${last ? `; last error: ${String(last)}` : ''}`);
 };
+
+// "X never happens" over a bounded window anchored to an observed event (docs/testing/strategy.md §3, "Absence over a
+// window"): probes until `windowMs` has passed and fails at the first probe that returns a violation message. A probe
+// that throws fails too: an absence that could not be observed is not proven. Returns the number of probes made.
+export const holdsFor = async (what: string, probe: () => Promise<string | undefined>, opts: { windowMs: number; intervalMs?: number }): Promise<number> => {
+	const deadline = Date.now() + opts.windowMs;
+	let probes = 0;
+	for (;;) {
+		const violation = await probe();
+		probes++;
+		if (violation !== undefined) throw new Error(`${what} did not hold: ${violation} (after ${probes} probes)`);
+		if (Date.now() >= deadline) return probes;
+		await pause(opts.intervalMs ?? 1_000);
+	}
+};

@@ -19,9 +19,10 @@ import { test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
-	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, registerToken, secretsFor, serverRequest, upHeadless,
+	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, registerToken, removeContainer, secretsFor, serverRequest, upHeadless,
+	upWebWithoutHostRewrite,
 } from '../../stack/stack.ts';
-import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
+import type { Account, ExtraWeb, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { HttpResponse } from '../../contract/support/http.ts';
 import { redactText } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
@@ -46,6 +47,8 @@ export interface DataApiResult {
 
 export interface DataApi {
 	get: (path: string) => DataApiResult;
+	// Any method, with a JSON body made by the test (M1-S7: POST /notes); tests/fixtures/m1-s7/in-container
+	request: (method: string, path: string, body?: unknown) => DataApiResult;
 }
 
 export interface WebApp {
@@ -67,6 +70,7 @@ interface TestFixtures {
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	webWithoutHostRewrite: ExtraWeb;
 }
 
 const failed = (testInfo: TestInfo): boolean => testInfo.status !== testInfo.expectedStatus;
@@ -87,6 +91,15 @@ const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}$
 // The M1-S5 in-container Data API probe, piped to `node -` on stdin: no test files are mounted into the headless
 // container, and the token never leaves it.
 const dataApiProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s5', 'in-container', 'data-api.mjs'), 'utf8');
+// The M1-S7 probe: any method, the JSON body base64-encoded in argv (a test-made note, never a secret).
+const dataApiRequestProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s7', 'in-container', 'data-api-request.mjs'), 'utf8');
+
+const runProbe = (container: string, probe: string, args: string[]): DataApiResult => {
+	const r = spawnSync('podman', ['exec', '-i', container, 'node', '-', ...args], { input: probe, encoding: 'utf8', timeout: 120_000 });
+	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
+	if (!line) return { error: `data-api probe printed no result (exit ${r.status}): ${redactText(`${r.stdout}\n${r.stderr}`).slice(-1000)}` };
+	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
+};
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
 	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
@@ -150,31 +163,57 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 
 	dataApi: async ({ headlessService }, use) => {
 		const probe = dataApiProbe();
+		const requestProbe = dataApiRequestProbe();
 		await use({
-			get: (path: string): DataApiResult => {
-				const r = spawnSync('podman', ['exec', '-i', headlessService.container, 'node', '-', path], { input: probe, encoding: 'utf8', timeout: 120_000 });
-				const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
-				if (!line) return { error: `data-api probe printed no result (exit ${r.status}): ${redactText(`${r.stdout}\n${r.stderr}`).slice(-1000)}` };
-				return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
-			},
+			get: (path: string): DataApiResult => runProbe(headlessService.container, probe, [path]),
+			request: (method: string, path: string, body?: unknown): DataApiResult => runProbe(headlessService.container, requestProbe,
+				[method, path, ...(body === undefined ? [] : [Buffer.from(JSON.stringify(body), 'utf8').toString('base64')])]),
 		});
+	},
+
+	// A second web container whose proxy does not rewrite Host (M1-AC21 NEG; tests/stack/stack.ts upWebWithoutHostRewrite).
+	webWithoutHostRewrite: async ({ stack }, use, testInfo) => {
+		let web: ExtraWeb | undefined;
+		try {
+			web = await upWebWithoutHostRewrite(stack, shortId(testInfo));
+			await use(web);
+		} finally {
+			if (web && failed(testInfo)) await attachText(testInfo, 'web-without-host-rewrite.log', containerLog(stack, web.container, undefined, workerSecrets(stack)));
+			if (web) removeContainer(stack, web.container);
+		}
 	},
 
 	webApp: async ({ browser, stack }, use, testInfo) => {
 		if (!stack.webUrl) throw new Error('the stack has no web URL');
 		// 127.0.0.1, never localhost: upstream's environment.js turns on dev mode for any origin containing "localhost".
-		const context = await browser.newContext({ baseURL: stack.webUrl });
+		// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
+		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
+		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB' });
 		const lines: string[] = [];
 		const watch = (page: Page): void => {
 			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));
 			page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
 		};
 		context.on('page', watch);
+		// The trace of this context, kept on failure (docs/test-plans/M1-S7.md, Finding F2). The harness records it itself
+		// instead of Playwright's `use.trace` (off in playwright.config.ts): the runner merges the test's traces with
+		// yauzl, which never finishes on Node 24 once a trace entry is larger than 64 KiB (the real app's bundle, its DOM
+		// snapshots), so a failing test hung until its timeout and lost its trace. tracing.stop({ path }) writes the zip
+		// without reading one back. No screenshots: the screencast frames are pixels no redaction can reach (C1-R1); DOM
+		// snapshots and network bodies are text, which the redacting reporter redacts.
+		await context.tracing.start({ screenshots: false, snapshots: true, sources: true, title: testInfo.titlePath.join(' > ') });
 		const page = await context.newPage();
 		try {
 			await use({ context, page, baseURL: stack.webUrl, console: lines });
 		} finally {
-			if (failed(testInfo)) await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
+			if (failed(testInfo)) {
+				await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
+				const path = testInfo.outputPath('trace.zip');
+				await context.tracing.stop({ path });
+				await testInfo.attach('trace', { path, contentType: 'application/zip' });
+			} else {
+				await context.tracing.stop();
+			}
 			await context.close();
 		}
 	},

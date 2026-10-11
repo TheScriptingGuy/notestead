@@ -6,6 +6,7 @@
 //   docs/testing/strategy.md §6).
 // - Reports: the redacting reporter first (it redacts every attachment, the trace included, before anything copies
 //   it), then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
+// - Traces: recorded by the `webApp` fixture (no screenshots) and kept on failure; see `use.trace` below.
 // - Browser: tests/e2e/support/chromium.ts (the installed Chromium locally when Playwright's revision is missing).
 import { defineConfig, devices } from '@playwright/test';
 import { chooseChromium } from './tests/e2e/support/chromium.ts';
@@ -30,7 +31,10 @@ export default defineConfig({
 		['junit', { outputFile: 'test-results/e2e/junit.xml' }],
 	],
 	use: {
-		trace: 'retain-on-failure',
+		// Off on purpose: the `webApp` fixture records its context's trace itself and attaches it on failure, without
+		// screenshots (docs/test-plans/M1-S7.md, Finding F2: Playwright's own trace merge hangs on Node 24 for the real
+		// app's traces; screencast frames cannot be redacted).
+		trace: 'off',
 		screenshot: 'off',
 		video: 'off',
 		launchOptions: chromium.executablePath ? { executablePath: chromium.executablePath } : {},

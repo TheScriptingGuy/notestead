@@ -14,6 +14,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from '../contract/support/http.ts';
@@ -418,6 +419,116 @@ export const dataApiToken = (container: string): string | undefined => {
 export const registerToken = (service: HeadlessService): void => {
 	const token = service.container ? dataApiToken(service.container) : undefined;
 	if (token) registerSecrets([{ label: `data_api_token_${service.label}`, value: token }]);
+};
+
+// The supervisor's own health report, read inside the container (8090 is never published).
+export const headlessHealthz = (container: string): { status: number; state?: string; lastSync?: string } | undefined => {
+	const r = podmanSync(['exec', container, 'node', '-e', "fetch('http://127.0.0.1:8090/healthz').then(async r=>process.stdout.write(JSON.stringify({status:r.status,...JSON.parse(await r.text())})),()=>process.exit(1))"], { allowFail: true });
+	if (r.code !== 0) return undefined;
+	try {
+		return JSON.parse(r.stdout) as { status: number; state?: string; lastSync?: string };
+	} catch {
+		return undefined;
+	}
+};
+
+// One headless sync (M1-AC21 step 2; docs/test-plans/M1-S7.md Interpretation 2). The M1 supervisor syncs in its start
+// cycle only (packages/headless/README.md: `config --import`, `sync`, `e2ee decrypt --force`, `server start`), so one
+// sync is one restart of the service: SIGTERM stops the CLI children (the supervisor exits 0), the init and the
+// supervisor start again on the same profile volume, and the service is done when it is `healthy` again with a
+// `lastSync` later than the restart. The CLI rotates the Data API token on every start: the new one is registered
+// for redaction at once (review M1-S6a-r1 C1-R6). M3 (`requestSync('manual')`) can replace the restart with the
+// supervisor's own trigger without changing callers.
+export const syncHeadlessOnce = async (state: StackState, service: HeadlessService, timeoutMs = 10 * 60_000): Promise<{ lastSync: string; durationMs: number }> => {
+	const started = Date.now();
+	podmanSync(['restart', '-t', '30', service.container], { timeoutMs: 2 * 60_000 });
+	const lastSync = await waitFor(`${service.container} to sync once more (healthy again, lastSync after the restart)`, async () => {
+		const [health] = healthOf(['headless'], { headless: service.container });
+		if (health.status !== 'healthy') return undefined;
+		const report = headlessHealthz(service.container);
+		return report?.status === 200 && report.lastSync && Date.parse(report.lastSync) > started ? report.lastSync : undefined;
+	}, {
+		timeoutMs,
+		intervalMs: 1_000,
+		failFast: () => {
+			const [health] = healthOf(['headless'], { headless: service.container });
+			return health.status === 'exited' || health.status === 'unhealthy' ? describeSick(health) : undefined;
+		},
+	});
+	registerToken(service);
+	if (state.owned) saveDescriptor(state);
+	return { lastSync, durationMs: Date.now() - started };
+};
+
+// A free TCP port on 127.0.0.1 (released before it is returned: the caller binds it at once).
+export const freePort = (): Promise<number> => new Promise((resolve, reject) => {
+	const server = createServer();
+	server.once('error', reject);
+	server.listen(0, '127.0.0.1', () => {
+		const address = server.address();
+		server.close(() => (typeof address === 'object' && address ? resolve(address.port) : reject(new Error('no port'))));
+	});
+});
+
+export interface ExtraWeb {
+	container: string;
+	url: string;
+	host: string;
+}
+
+// A second `web` container of the image under test, on the stack's `front` network, whose proxy sends the browser's
+// own Host (127.0.0.1:<its published port>) to the server: exactly what the server receives when the proxy's Host
+// rewrite (ADR-0002 rule 1, `header_up Host`) is disabled, because Caddy then passes the incoming Host through. It uses
+// the shipped image and its documented JOPLIN_SERVER_HOST override (no product switch; M1-S4 `ac10-c1-neg` proved the
+// override wins over the default). Hardened like compose.yaml's `web`; labelled with the run, so the sweep removes it.
+// M1-AC21 NEG (docs/test-plans/M1-S7.md).
+export const upWebWithoutHostRewrite = async (state: StackState, label: string): Promise<ExtraWeb> => {
+	const port = await freePort();
+	const host = `127.0.0.1:${port}`;
+	const container = `${state.project}-web-nohost-${label}`;
+	podmanSync(['run', '-d', '--name', container, '--network', state.frontNetwork,
+		'--label', `${testLabel}=stack`, '--label', `${runLabel}=${state.run}`, '--label', `${roleLabel}=web-without-host-rewrite`,
+		'--read-only', '--tmpfs', '/tmp', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--memory', '128m',
+		'-p', `${host}:8080`,
+		'-e', 'JOPLIN_SERVER_URL=http://server:22300', '-e', `JOPLIN_SERVER_PUBLIC_URL=${publicUrl}`, '-e', `JOPLIN_SERVER_HOST=${host}`,
+		state.images.web]);
+	await waitFor(`${container} to serve the bundle`, async () => {
+		const res = await request({ port, path: '/' });
+		return res.status === 200 ? true : undefined;
+	}, {
+		timeoutMs: 60_000,
+		failFast: () => (podmanSync(['inspect', '--format', '{{.State.Status}}', container], { allowFail: true }).stdout.trim() === 'running' ? undefined : `${container} is not running: ${containerLog(state, container).slice(-1500)}`),
+	});
+	return { container, url: `http://${host}`, host };
+};
+
+export const removeContainer = (state: StackState, container: string): void => {
+	mkdirSync(state.logsDir, { recursive: true });
+	writeFileSync(join(state.logsDir, `${container}.log`), containerLog(state, container));
+	podmanSync(['rm', '-f', '-t', '0', container], { allowFail: true });
+};
+
+// The server's view of an account (data-level assertions): its item names (`<id>.md`, `.resource/<id>`, info.json …)
+// and an item's serialized content, through the server's own API (this stack's published port only).
+export const serverItemNames = async (state: StackState, account: Account): Promise<string[]> => {
+	const session = await sessionFor(state, account.email, account.password);
+	const names: string[] = [];
+	let cursor: string | undefined;
+	for (let page = 0; page < 100; page++) {
+		const res = await serverRequest(state, `/api/items/root:/:/children${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { headers: { 'X-API-AUTH': session } });
+		if (res.status !== 200) throw new Error(`GET /api/items/root:/:/children returned ${res.status}: ${res.text.slice(0, 300)}`);
+		const body = json(res.text) as unknown as { items?: { name: string }[]; has_more?: boolean; cursor?: string };
+		names.push(...(body.items ?? []).map(i => i.name));
+		if (!body.has_more || !body.cursor) return names.sort();
+		cursor = body.cursor;
+	}
+	throw new Error('more than 100 pages of items');
+};
+
+export const serverItemContent = async (state: StackState, account: Account, name: string): Promise<{ status: number; text: string }> => {
+	const session = await sessionFor(state, account.email, account.password);
+	const res = await serverRequest(state, `/api/items/root:/${name}:/content`, { headers: { 'X-API-AUTH': session } });
+	return { status: res.status, text: res.text };
 };
 
 export const secretsFor = (state: StackState): KnownSecret[] => {
