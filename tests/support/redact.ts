@@ -107,6 +107,47 @@ export const redactFile = (path: string, secrets: KnownSecret[] = []): void => {
 	if (!after.equals(before)) writeFileSync(path, after);
 };
 
+// The values of credential headers in a text: `{name, value}` pairs (Playwright's trace `.network` log, HAR) and header
+// maps keyed by a credential header name, in each line that parses as JSON (or the whole text). For
+// `Authorization: <scheme> <token>` the token alone is returned too. These are credentials no registry knows, such as
+// the Joplin Server session id the browser obtained itself and then sent as X-API-AUTH (docs/test-plans/M1-S7.md F3).
+export const credentialValues = (text: string): string[] => {
+	const out = new Set<string>();
+	const add = (value: unknown): void => {
+		if (typeof value !== 'string') return;
+		const v = value.trim();
+		if (v.length >= 6 && !/^\[?REDACTED\b/.test(v)) out.add(v);
+		const token = /^[A-Za-z][A-Za-z0-9-]*\s+(\S{6,})$/.exec(v)?.[1];
+		if (token && !/^\[?REDACTED\b/.test(token)) out.add(token);
+	};
+	const walk = (node: unknown): void => {
+		if (Array.isArray(node)) {
+			node.forEach(walk);
+		} else if (node !== null && typeof node === 'object') {
+			const r = node as Record<string, unknown>;
+			if (isCredentialHeader(r.name) && 'value' in r) add(r.value);
+			for (const [key, v] of Object.entries(r)) {
+				if (isCredentialHeader(key)) (Array.isArray(v) ? v : [v]).forEach(add);
+				else walk(v);
+			}
+		}
+	};
+	const parse = (t: string): void => {
+		try {
+			walk(JSON.parse(t));
+		} catch {
+			// not JSON
+		}
+	};
+	const whole = text.trim();
+	if (whole.startsWith('{') || whole.startsWith('[')) parse(whole);
+	for (const line of text.split('\n')) {
+		const t = line.trim();
+		if (t.startsWith('{') && t.endsWith('}')) parse(t);
+	}
+	return [...out];
+};
+
 // ---- Scanning (the self-tests use this to prove an artifact is clean) ----
 
 export interface Leak {

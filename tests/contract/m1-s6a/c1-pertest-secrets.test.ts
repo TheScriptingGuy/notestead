@@ -8,53 +8,19 @@
 // carries the planted secret. The NEG run's artifacts are deleted after the scan; only a value-free summary is kept.
 // docs/test-plans/M1-S6a.md.
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findLeaks, textViews } from '../../support/redact.ts';
-import type { KnownSecret, Leak } from '../../support/redact.ts';
+import type { KnownSecret } from '../../support/redact.ts';
 import { snapshot } from '../../stack/stack.ts';
+import { channelViews, fileViews, harnessPassword, leaksIn } from '../support/leakScan.ts';
+import type { JsonResult, View } from '../support/leakScan.ts';
 import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
-import type { PwAttachment, SelftestRun } from '../support/selftest.ts';
+import type { SelftestRun } from '../support/selftest.ts';
 import { repoRoot } from '../support/podman.ts';
 
 const minute = 60_000;
 const resultsRoot = join(repoRoot, 'test-results', 'contract', 'm1-s6a');
-// Every password the harness generates (tests/stack/stack.ts strongPassword), of any account of the run.
-const harnessPassword = /nst(pw|mp)[0-9a-f]{24}/;
-
-interface JsonOutput {
-	text?: string;
-	buffer?: string;
-}
-
-interface JsonError {
-	message?: string;
-	stack?: string;
-	value?: string;
-	snippet?: string;
-}
-
-interface JsonStep {
-	title: string;
-	error?: JsonError;
-	steps?: JsonStep[];
-}
-
-interface JsonResult {
-	status: string;
-	errors: JsonError[];
-	error?: JsonError;
-	stdout: JsonOutput[];
-	stderr: JsonOutput[];
-	steps?: JsonStep[];
-	attachments: PwAttachment[];
-}
-
-interface View {
-	where: string;
-	text: string;
-}
 
 interface Inner {
 	run: SelftestRun;
@@ -63,60 +29,11 @@ interface Inner {
 	leftovers: string[];
 }
 
-// The HTML report keeps its data in a base64 zip inside index.html.
-const htmlReportViews = (dir: string): View[] => {
-	const index = join(dir, 'index.html');
-	if (!existsSync(index)) return [];
-	const m = /<template id="playwrightReportBase64">data:application\/zip;base64,([A-Za-z0-9+/=]+)/.exec(readFileSync(index, 'utf8'));
-	return m ? textViews('html report', Buffer.from(m[1], 'base64')) : [];
-};
+// The text a person or a CI artifact would see, per channel (tests/contract/support/leakScan.ts).
+const channels = (inner: Inner): Record<string, View[]> => channelViews(inner.run, inner.result);
 
-const filesUnder = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).flatMap(name => {
-	const path = join(dir, name);
-	return statSync(path).isDirectory() ? filesUnder(path) : [path];
-}) : []);
-
-const outputText = (o: JsonOutput): string => o.text ?? Buffer.from(o.buffer ?? '', 'base64').toString('utf8');
-const errorText = (e: JsonError | undefined): string => (e ? [e.message, e.stack, e.value, e.snippet].filter(Boolean).join('\n') : '');
-const flatSteps = (steps: JsonStep[] = []): JsonStep[] => steps.flatMap(s => [s, ...flatSteps(s.steps)]);
-const content = (a: PwAttachment): Buffer => (a.path ? (existsSync(a.path) ? readFileSync(a.path) : Buffer.alloc(0)) : Buffer.from(a.body ?? '', 'base64'));
-
-// The text a person or a CI artifact would see, per channel.
-const channels = (inner: Inner): Record<string, View[]> => {
-	const r = inner.result;
-	const attachments = r?.attachments ?? [];
-	const trace = attachments.filter(a => a.name === 'trace').flatMap(a => textViews('trace', content(a)));
-	return {
-		trace,
-		console: existsSync(inner.run.log) ? [{ where: 'playwright-console.log', text: readFileSync(inner.run.log, 'utf8') }] : [],
-		stdout: [
-			...(r?.stdout ?? []).map((o, i) => ({ where: `stdout[${i}]`, text: outputText(o) })),
-			...(r?.stderr ?? []).map((o, i) => ({ where: `stderr[${i}]`, text: outputText(o) })),
-		],
-		errors: [
-			...(r?.errors ?? []).map((e, i) => ({ where: `errors[${i}]`, text: errorText(e) })),
-			{ where: 'error', text: errorText(r?.error) },
-			...flatSteps(r?.steps).filter(s => s.error).map((s, i) => ({ where: `step error ${i}`, text: errorText(s.error) })),
-		],
-		steps: flatSteps(r?.steps).map((s, i) => ({ where: `step title ${i}`, text: s.title })),
-		attachments: attachments.filter(a => a.name !== 'trace').flatMap(a => textViews(`attachment ${a.name}`, content(a))),
-		reports: [
-			...(existsSync(join(inner.run.out, 'junit.xml')) ? [{ where: 'junit.xml', text: readFileSync(join(inner.run.out, 'junit.xml'), 'utf8') }] : []),
-			...htmlReportViews(join(inner.run.out, 'html')),
-		],
-	};
-};
-
-// Every file the run wrote (the reports, the output dir with the originals of attached files, the stack logs, the
-// console log), zips opened, plus the decoded bodies and buffers the JSON report holds in base64. Not html/trace/: that
-// is Playwright's trace viewer app, copied verbatim into every HTML report (its code has `cookie=x.value`); the report's
-// data is html/data/ and the zip inside index.html, both scanned.
-const everything = (inner: Inner): View[] => [
-	...filesUnder(inner.run.out).filter(f => !f.startsWith(join(inner.run.out, 'html', 'trace'))).flatMap(f => textViews(f, readFileSync(f))),
-	...Object.values(channels(inner)).flat(),
-];
-
-const leaksIn = (views: View[], secrets: KnownSecret[], forbidden: RegExp[] = []): Leak[] => views.flatMap(v => findLeaks(v.where, v.text, { secrets, forbidden }));
+// Every file the run wrote plus the decoded bodies and buffers the JSON report holds in base64.
+const everything = (inner: Inner): View[] => [...fileViews(inner.run), ...Object.values(channels(inner)).flat()];
 
 const runInner = (label: string, env: Record<string, string>): Inner => {
 	const plantedDir = mkdtempSync(join(tmpdir(), 'nst-c1-planted-'));

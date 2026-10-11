@@ -11,12 +11,12 @@
 // - onExit: the registry file is removed (it must outlive globalSetup's teardown, which Playwright runs before onEnd).
 // The worker redacts its stdout/stderr at the source (fixtures.ts `redactStdio`), because `list` prints those chunks
 // live, before any reporter callback could change them.
-import { readdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FullConfig, Reporter, TestCase, TestError, TestResult, TestStep } from '@playwright/test/reporter';
-import { looksLikeText, redactBuffer, redactFile, redactText } from '../../support/redact.ts';
+import { credentialValues, isZip, looksLikeText, redactBuffer, redactFile, redactText, textViews } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
-import { mergeSecrets, readSecretsFile, removeSecretsFile, secretsFileEnv } from '../../support/secrets.ts';
+import { mergeSecrets, readSecretsFile, removeSecretsFile, secretFeedEnabled, secretsFileEnv } from '../../support/secrets.ts';
 
 const stackSecrets = (): KnownSecret[] => {
 	const raw = process.env.NOTESTEAD_E2E_STACK;
@@ -123,7 +123,35 @@ export default class RedactingReporter implements Reporter {
 		this.redactStep(step, this.secrets());
 	}
 
+	// Credentials the browser obtained itself (a session id sent as X-API-AUTH) are known to no registry: they are
+	// learnt from the request headers in each trace's network log, before anything is redacted, and from then on
+	// redacted like a registered secret, in every entry, attachment and output file (M1-S7 F3, C1-R1). Part of the
+	// secret feed, so the self-tests' negative control (feed off) still sees them.
+	private learnFromTraces(attachments: { path?: string; body?: Buffer }[]): void {
+		if (!secretFeedEnabled()) return;
+		const learnt: KnownSecret[] = [];
+		for (const attachment of attachments) {
+			let data: Buffer | undefined;
+			try {
+				data = attachment.path ? readFileSync(attachment.path) : attachment.body;
+			} catch {
+				data = undefined;
+			}
+			if (!data || !isZip(data)) continue;
+			try {
+				for (const view of textViews('trace', data)) {
+					for (const value of credentialValues(view.text)) learnt.push({ label: 'credential_header_value', value });
+				}
+			} catch {
+				// an unreadable zip is dropped by the redaction below
+			}
+		}
+		if (learnt.length > 0) this.known = mergeSecrets(this.known, learnt);
+	}
+
 	public onTestEnd(_test: TestCase, result: TestResult): void {
+		this.secrets(); // the registry first: learnFromTraces adds to what it loaded
+		this.learnFromTraces(result.attachments as { path?: string; body?: Buffer }[]);
 		const secrets = this.secrets();
 		for (const attachment of result.attachments as { path?: string; body?: Buffer }[]) {
 			try {
