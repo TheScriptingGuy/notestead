@@ -1,0 +1,13 @@
+// M1-S6a lint NEG fixture C2-alias (docs/test-plans/M1-S6a.md): the global setTimeout under another name. The call
+// `later(resolve, 5)` cannot be told from any other call, so the line that takes setTimeout as a value is the one
+// `corepack yarn lint` must report (marked NEG).
+import { describe, expect, test } from '@jest/globals';
+
+const later = setTimeout; // NEG
+
+describe('lint NEG', () => {
+	test('an aliased setTimeout sleep must be rejected', async () => {
+		await new Promise(resolve => later(resolve, 5));
+		expect(1 + 1).toBe(2);
+	});
+});

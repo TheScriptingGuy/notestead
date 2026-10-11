@@ -1,0 +1,11 @@
+// M1-S6a lint NEG fixture C2-interval (docs/test-plans/M1-S6a.md): setInterval used as a fixed delay (its first tick
+// resolves the promise), in a test co-located with a workspace package's code. `corepack yarn lint` must report the
+// line marked NEG.
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint NEG', () => {
+	test('a setInterval delay must be rejected', async () => {
+		await new Promise(resolve => setInterval(resolve, 10)); // NEG
+		expect(1 + 1).toBe(2);
+	});
+});

@@ -5,16 +5,15 @@
 // Images come from NOTESTEAD_WEB_IMAGE / NOTESTEAD_HEADLESS_IMAGE / NOTESTEAD_DEVICE_IMAGE or are built (images.ts).
 // Throwaway values only: the stack is a test fixture, never the user's server.
 import { existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { downStack, newStack, upCore, upDefault } from './stack.ts';
+import { descriptorPath, downStack, newStack, upCore, upDefault } from './stack.ts';
 import type { StackState } from './stack.ts';
 
 const [command, project] = process.argv.slice(2);
 
 const main = async (): Promise<void> => {
 	if (command === 'up') {
-		const state = newStack({ name: 'dev' });
+		// persistent: a contract run started meanwhile keeps this stack (M1-S6a C4)
+		const state = newStack({ name: 'dev', persistent: true });
 		try {
 			await upCore(state);
 			await upDefault(state);
@@ -25,7 +24,7 @@ const main = async (): Promise<void> => {
 		process.stdout.write(`project: ${state.project}\nweb: ${state.webUrl}\nJOPLIN_SERVER_URL=${state.serverUrl}\n`);
 		process.stdout.write(`stop with: node tests/stack/cli.ts down ${state.project}\n`);
 	} else if (command === 'down' && project) {
-		const file = join(tmpdir(), 'notestead-stacks', `${project}.json`);
+		const file = descriptorPath(project);
 		if (!existsSync(file)) throw new Error(`no stack descriptor ${file}`);
 		downStack({ ...JSON.parse(readFileSync(file, 'utf8')) as StackState, owned: true });
 	} else {

@@ -1,7 +1,8 @@
 // ESLint flat config (ADR-0009), modelled on upstream Joplin's eslint.config.js: the same parser and plugins
 // (@typescript-eslint, @stylistic, jest) and the same style (tabs, single quotes, semicolons, trailing commas).
 // Added for this project's test rules (ADR-0007/0009): no focused or skipped tests (Jest and Playwright) and no fixed
-// sleeps (`waitForTimeout`, setTimeout-based sleeps). `corepack yarn lint` runs this config, then `tsc --noEmit`.
+// sleeps (`waitForTimeout`, setTimeout/setInterval used as a value). `corepack yarn lint` runs this config, then
+// `tsc --noEmit`.
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
@@ -24,9 +25,52 @@ const noWaitForTimeout = {
 	selector: 'CallExpression[callee.property.name="waitForTimeout"]',
 	message: 'No fixed sleeps: wait for a condition (expect.poll, waitFor, a readiness probe) instead of waitForTimeout.',
 };
-const noSleepMessage = 'No fixed sleeps in tests (ADR-0007): wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead of a setTimeout-based delay.';
-// `setTimeout` imported under any name (a namespace import is reported too) from the timers modules.
+const noSleepMessage = 'No fixed sleeps in tests (ADR-0007): wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead of a setTimeout/setInterval-based delay.';
+// `setTimeout` and `setInterval` imported under any name from the timers modules. A namespace import and a default
+// import (both the whole module object) are reported too.
 const timersModules = ['timers/promises', 'node:timers/promises', 'timers', 'node:timers'];
+// The banned timer names (esquery regexes) and the global objects that carry them.
+const timerName = '/^set(Timeout|Interval)$/';
+const timerGlobal = '/^(globalThis|global|window|self)$/';
+// Positions where an identifier spelled setTimeout/setInterval is a name, not a use of the timer: a property after a
+// dot (`req.setTimeout`, `test.setTimeout`; the global objects are matched separately), a key of an object literal or
+// pattern (patterns are matched separately), of a class or of an interface or type literal, a type query
+// (`ReturnType<typeof setTimeout>`), and an import specifier (checked by no-restricted-imports).
+const timerNamePositions = [
+	'MemberExpression[computed=false] > Identifier.property',
+	'Property[computed=false] > Identifier.key',
+	'MethodDefinition[computed=false] > Identifier.key',
+	'PropertyDefinition[computed=false] > Identifier.key',
+	'TSAbstractMethodDefinition[computed=false] > Identifier.key',
+	'TSAbstractPropertyDefinition[computed=false] > Identifier.key',
+	'TSPropertySignature[computed=false] > Identifier.key',
+	'TSMethodSignature[computed=false] > Identifier.key',
+	'TSTypeQuery Identifier',
+	'ImportSpecifier > Identifier',
+	// The binding of a shorthand pattern (`const { setInterval } = globalThis`): its key is reported, once.
+	'ObjectPattern > Property[shorthand=true] > Identifier.value',
+];
+// A string key naming a timer: a string literal ('setTimeout') or a template literal without substitutions.
+const timerStringKey = field => [
+	`Literal.${field}[value=${timerName}]`,
+	`TemplateLiteral.${field}[expressions.length=0][quasis.0.value.cooked=${timerName}]`,
+];
+// Every form that takes the global setTimeout/setInterval as a value. Each selector reports the node that names the
+// timer, so the report sits on the line where the timer is taken, not on a later call of an alias.
+const sleepValueSelectors = [
+	// Any reference outside the name positions above: a call, an argument (`promisify(setTimeout)`), an alias
+	// (`const later = setTimeout`), `setTimeout.bind(…)`, a shorthand property (`{ setTimeout }`).
+	`Identifier[name=${timerName}]${timerNamePositions.map(p => `:not(${p})`).join('')}`,
+	// Destructuring, under any name and from anything: `const { setTimeout: pause } = globalThis`,
+	// `const { setInterval } = require('timers')`.
+	`ObjectPattern > Property > Identifier.key[name=${timerName}]`,
+	...timerStringKey('key').map(key => `ObjectPattern > Property > ${key}`),
+	// Member access on the global objects, dotted (also through a type assertion such as `(globalThis as T).setTimeout`).
+	`MemberExpression[computed=false][object.name=${timerGlobal}] > Identifier.property[name=${timerName}]`,
+	`MemberExpression[computed=false][object.expression.name=${timerGlobal}] > Identifier.property[name=${timerName}]`,
+	// Computed with a string key, on any object: `globalThis['setTimeout']`, `globalThis[`setInterval`]`.
+	...timerStringKey('property').map(property => `MemberExpression[computed=true] > ${property}`),
+];
 
 export default defineConfig([
 	globalIgnores([
@@ -196,17 +240,12 @@ export default defineConfig([
 		files: testFiles,
 		ignores: sleepExempt,
 		rules: {
-			'no-restricted-syntax': ['error', noWaitForTimeout, {
-				// The global setTimeout: `new Promise(r => setTimeout(r, n))` and callback delays alike. Member calls such
-				// as `req.setTimeout(ms, cb)` (a socket deadline) are not matched.
-				selector: 'CallExpression[callee.type="Identifier"][callee.name="setTimeout"]',
-				message: noSleepMessage,
-			}, {
-				selector: 'MemberExpression[object.type="Identifier"][object.name=/^(globalThis|global|window|self)$/][property.name="setTimeout"]',
-				message: noSleepMessage,
-			}],
+			// The global setTimeout/setInterval used as a value in any form (calls, `promisify`, aliases, destructuring,
+			// global member access). Deadlines such as `req.setTimeout(ms, cb)` and `test.setTimeout(ms)`, spies
+			// (`jest.spyOn(globalThis, 'setTimeout')`), type positions and option keys are not matched.
+			'no-restricted-syntax': ['error', noWaitForTimeout, ...sleepValueSelectors.map(selector => ({ selector, message: noSleepMessage }))],
 			'no-restricted-imports': ['error', {
-				paths: timersModules.map(name => ({ name, importNames: ['setTimeout'], message: noSleepMessage })),
+				paths: timersModules.map(name => ({ name, importNames: ['setTimeout', 'setInterval', 'default'], message: noSleepMessage })),
 			}],
 		},
 	},

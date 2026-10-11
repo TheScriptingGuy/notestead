@@ -1,0 +1,222 @@
+// M1-S6a C1 (review M1-S6-r1 C1; ADR-0007, ADR-0008; M1-AC20 extended to per-test secrets): the secrets a test's own
+// fixtures create (the per-test account's password and E2EE master password, the per-test headless service's Data API
+// token) never reach an artifact or the console unredacted: not the Playwright trace, not stdout/stderr, not error
+// messages, not step titles, not attachments (body or file), not the JSON, JUnit and HTML reports, not the run's
+// console. The inner test tests/harness/selftest/pertest-secrets.spec.ts plants them into each channel and fails on
+// purpose. Negative control (c1-neg): the same inner run with the per-test secret feed switched off (NST_SELFTEST_SECRET_FEED=off,
+// honoured only by self-test runs) must show leaks in every channel, so the scan below can fail and each channel really
+// carries the planted secret. The NEG run's artifacts are deleted after the scan; only a value-free summary is kept.
+// docs/test-plans/M1-S6a.md.
+import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { findLeaks, textViews } from '../../support/redact.ts';
+import type { KnownSecret, Leak } from '../../support/redact.ts';
+import { snapshot } from '../../stack/stack.ts';
+import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
+import type { PwAttachment, SelftestRun } from '../support/selftest.ts';
+import { repoRoot } from '../support/podman.ts';
+
+const minute = 60_000;
+const resultsRoot = join(repoRoot, 'test-results', 'contract', 'm1-s6a');
+// Every password the harness generates (tests/stack/stack.ts strongPassword), of any account of the run.
+const harnessPassword = /nst(pw|mp)[0-9a-f]{24}/;
+
+interface JsonOutput {
+	text?: string;
+	buffer?: string;
+}
+
+interface JsonError {
+	message?: string;
+	stack?: string;
+	value?: string;
+	snippet?: string;
+}
+
+interface JsonStep {
+	title: string;
+	error?: JsonError;
+	steps?: JsonStep[];
+}
+
+interface JsonResult {
+	status: string;
+	errors: JsonError[];
+	error?: JsonError;
+	stdout: JsonOutput[];
+	stderr: JsonOutput[];
+	steps?: JsonStep[];
+	attachments: PwAttachment[];
+}
+
+interface View {
+	where: string;
+	text: string;
+}
+
+interface Inner {
+	run: SelftestRun;
+	result?: JsonResult;
+	secrets: KnownSecret[];
+	leftovers: string[];
+}
+
+// The HTML report keeps its data in a base64 zip inside index.html.
+const htmlReportViews = (dir: string): View[] => {
+	const index = join(dir, 'index.html');
+	if (!existsSync(index)) return [];
+	const m = /<template id="playwrightReportBase64">data:application\/zip;base64,([A-Za-z0-9+/=]+)/.exec(readFileSync(index, 'utf8'));
+	return m ? textViews('html report', Buffer.from(m[1], 'base64')) : [];
+};
+
+const filesUnder = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).flatMap(name => {
+	const path = join(dir, name);
+	return statSync(path).isDirectory() ? filesUnder(path) : [path];
+}) : []);
+
+const outputText = (o: JsonOutput): string => o.text ?? Buffer.from(o.buffer ?? '', 'base64').toString('utf8');
+const errorText = (e: JsonError | undefined): string => (e ? [e.message, e.stack, e.value, e.snippet].filter(Boolean).join('\n') : '');
+const flatSteps = (steps: JsonStep[] = []): JsonStep[] => steps.flatMap(s => [s, ...flatSteps(s.steps)]);
+const content = (a: PwAttachment): Buffer => (a.path ? (existsSync(a.path) ? readFileSync(a.path) : Buffer.alloc(0)) : Buffer.from(a.body ?? '', 'base64'));
+
+// The text a person or a CI artifact would see, per channel.
+const channels = (inner: Inner): Record<string, View[]> => {
+	const r = inner.result;
+	const attachments = r?.attachments ?? [];
+	const trace = attachments.filter(a => a.name === 'trace').flatMap(a => textViews('trace', content(a)));
+	return {
+		trace,
+		console: existsSync(inner.run.log) ? [{ where: 'playwright-console.log', text: readFileSync(inner.run.log, 'utf8') }] : [],
+		stdout: [
+			...(r?.stdout ?? []).map((o, i) => ({ where: `stdout[${i}]`, text: outputText(o) })),
+			...(r?.stderr ?? []).map((o, i) => ({ where: `stderr[${i}]`, text: outputText(o) })),
+		],
+		errors: [
+			...(r?.errors ?? []).map((e, i) => ({ where: `errors[${i}]`, text: errorText(e) })),
+			{ where: 'error', text: errorText(r?.error) },
+			...flatSteps(r?.steps).filter(s => s.error).map((s, i) => ({ where: `step error ${i}`, text: errorText(s.error) })),
+		],
+		steps: flatSteps(r?.steps).map((s, i) => ({ where: `step title ${i}`, text: s.title })),
+		attachments: attachments.filter(a => a.name !== 'trace').flatMap(a => textViews(`attachment ${a.name}`, content(a))),
+		reports: [
+			...(existsSync(join(inner.run.out, 'junit.xml')) ? [{ where: 'junit.xml', text: readFileSync(join(inner.run.out, 'junit.xml'), 'utf8') }] : []),
+			...htmlReportViews(join(inner.run.out, 'html')),
+		],
+	};
+};
+
+// Every file the run wrote (the reports, the output dir with the originals of attached files, the stack logs, the
+// console log), zips opened, plus the decoded bodies and buffers the JSON report holds in base64. Not html/trace/: that
+// is Playwright's trace viewer app, copied verbatim into every HTML report (its code has `cookie=x.value`); the report's
+// data is html/data/ and the zip inside index.html, both scanned.
+const everything = (inner: Inner): View[] => [
+	...filesUnder(inner.run.out).filter(f => !f.startsWith(join(inner.run.out, 'html', 'trace'))).flatMap(f => textViews(f, readFileSync(f))),
+	...Object.values(channels(inner)).flat(),
+];
+
+const leaksIn = (views: View[], secrets: KnownSecret[], forbidden: RegExp[] = []): Leak[] => views.flatMap(v => findLeaks(v.where, v.text, { secrets, forbidden }));
+
+const runInner = (label: string, env: Record<string, string>): Inner => {
+	const plantedDir = mkdtempSync(join(tmpdir(), 'nst-c1-planted-'));
+	const planted = join(plantedDir, 'planted.json');
+	const before = snapshot();
+	const run = runSelftest(label, 'selftest/pertest-secrets.spec.ts', { ...stackImagesEnv(), NST_SELFTEST_PLANTED: planted, ...env }, 25 * minute, resultsRoot);
+	const after = snapshot();
+	const leftovers = (['containers', 'networks', 'volumes', 'pods'] as const).flatMap(k => after[k].filter(n => !before[k].includes(n)).map(n => `${k}: ${n}`));
+	const result = allSpecs(run.report?.suites ?? [])[0]?.tests[0]?.results[0] as unknown as JsonResult | undefined;
+	const secrets = existsSync(planted) ? (JSON.parse(readFileSync(planted, 'utf8')) as { secrets: KnownSecret[] }).secrets.filter(s => s.value !== '') : [];
+	rmSync(plantedDir, { recursive: true, force: true });
+	return { run, result, secrets, leftovers };
+};
+
+describe('M1-S6a C1 per-test secrets are redacted in every channel', () => {
+	let pos: Inner | undefined;
+	let neg: Inner | undefined;
+
+	beforeAll(() => {
+		pos = runInner('c1', {});
+		neg = runInner('c1-neg', { NST_SELFTEST_SECRET_FEED: 'off' });
+	}, 60 * minute);
+
+	afterAll(() => {
+		// The NEG run leaks on purpose: keep only a value-free summary of what the scan found, never the artifacts.
+		if (neg) {
+			const summary = Object.fromEntries(Object.entries(channels(neg)).map(([name, views]) => [name, leaksIn(views, neg?.secrets ?? []).map(l => ({ where: l.where, kind: l.kind }))]));
+			rmSync(neg.run.out, { recursive: true, force: true });
+			writeFileSync(join(resultsRoot, 'c1-neg-summary.json'), `${JSON.stringify({ exit: neg.run.code, durationMs: neg.run.durationMs, leaks: summary }, null, 2)}\n`);
+		}
+	});
+
+	const positive = (): Inner => {
+		if (!pos) throw new Error('the inner run did not happen (see beforeAll)');
+		return pos;
+	};
+
+	test('c1-ran the inner test failed on purpose (and only on purpose), planted three secrets, left nothing behind', () => {
+		const p = positive();
+		expect({ code: p.run.code === 0 ? 0 : 'non-zero', status: p.result?.status }).toEqual({ code: 'non-zero', status: 'failed' });
+		const messages = (p.result?.errors ?? []).map(e => e.message ?? '').join('\n');
+		expect(messages).toContain('C1: this failure is deliberate');
+		expect(messages).toContain('C1: this soft failure is deliberate');
+		expect(p.secrets.map(s => s.label).sort()).toEqual(['pertest_account_password', 'pertest_data_api_token', 'pertest_master_password']);
+		expect(p.leftovers).toEqual([]);
+	});
+
+	test('c1-planted every channel carries the planting context (positive control: the scan below is not vacuous)', () => {
+		const p = positive();
+		const ch = channels(p);
+		const has = (views: View[], needle: string | RegExp): boolean => views.some(v => (typeof needle === 'string' ? v.text.includes(needle) : needle.test(v.text)));
+		const traceLines = ch.trace.filter(v => v.where.endsWith('.trace')).flatMap(v => v.text.split('\n'));
+		expect({
+			traceFill: traceLines.some(l => l.includes('"method":"fill"') && l.includes('Account password')),
+			traceType: traceLines.some(l => l.includes('"method":"type"') && l.includes('Master password')),
+			traceConsole: has(ch.trace, 'C1 planted data api token'),
+			stdoutPassword: has(ch.stdout, 'C1 planted account password'),
+			stdoutToken: has(ch.stdout, 'C1 planted data api token'),
+			stderrMaster: has(ch.stdout, 'C1 planted master password'),
+			stepTitle: has(ch.steps, 'C1 planted step'),
+			junit: has(ch.reports.filter(v => v.where === 'junit.xml'), 'C1 planted account password'),
+			htmlSteps: has(ch.reports.filter(v => v.where.startsWith('html report')), 'C1 planted step'),
+			htmlFill: has(ch.reports.filter(v => v.where.startsWith('html report')), /"title":"Fill \\"/),
+			consoleLive: has(ch.console, 'C1 planted account password'),
+			errors: has(ch.errors, 'C1 planted master password') && has(ch.errors, 'C1 planted data api token'),
+			bodyAttachment: has(ch.attachments.filter(v => v.where.includes('pertest-body.txt')), 'C1 planted account password'),
+			fileAttachment: has(ch.attachments.filter(v => v.where.includes('pertest-file.txt')), 'C1 planted master password'),
+			browserConsole: has(ch.attachments.filter(v => v.where.includes('browser-console.log')), 'C1 planted data api token'),
+		}).toEqual({
+			traceFill: true, traceType: true, traceConsole: true, stdoutPassword: true, stdoutToken: true, stderrMaster: true,
+			stepTitle: true, junit: true, htmlSteps: true, htmlFill: true, consoleLive: true, errors: true, bodyAttachment: true,
+			fileAttachment: true, browserConsole: true,
+		});
+	});
+
+	for (const channel of ['trace', 'stdout', 'errors', 'steps', 'attachments', 'reports', 'console'] as const) {
+		test(`c1-redacted-${channel} no per-test secret in the ${channel}`, () => {
+			const p = positive();
+			expect(p.secrets).toHaveLength(3);
+			expect(leaksIn(channels(p)[channel], p.secrets).map(l => `${l.where}: ${l.kind}`)).toEqual([]);
+		});
+	}
+
+	test('c1-redacted-all no file the run wrote, and no report entry, holds a per-test secret or any harness password', () => {
+		const p = positive();
+		const views = everything(p);
+		expect(views.length).toBeGreaterThan(10);
+		expect(leaksIn(views, p.secrets, [harnessPassword]).map(l => `${l.where}: ${l.kind}`)).toEqual([]);
+	});
+
+	test('c1-neg with the per-test secret feed off, the scan finds the planted secrets in every channel', () => {
+		if (!neg) throw new Error('the NEG run did not happen (see beforeAll)');
+		const n = neg;
+		expect(n.run.code).not.toBe(0);
+		expect(n.secrets).toHaveLength(3);
+		const ch = channels(n);
+		const found = Object.fromEntries((['trace', 'stdout', 'errors', 'steps', 'attachments', 'reports', 'console'] as const).map(c => [c, leaksIn(ch[c], n.secrets).length > 0]));
+		expect({ found, attachments: n.result?.attachments.map(a => a.name) ?? describeRun(n.run) }).toEqual({
+			found: { trace: true, stdout: true, errors: true, steps: true, attachments: true, reports: true, console: true },
+			attachments: expect.arrayContaining(['trace', 'pertest-body.txt', 'pertest-file.txt']),
+		});
+	});
+});

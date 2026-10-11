@@ -1,0 +1,13 @@
+// M1-S6a lint positive control (docs/test-plans/M1-S6a.md, C2): non-test source of a workspace package may use timers
+// in every form the test ban covers (the ban is for tests only, ADR-0007), so `corepack yarn lint` must report nothing
+// in this file.
+import { setInterval as every } from 'node:timers/promises';
+import { promisify } from 'node:util';
+
+export const sleep = promisify(setTimeout);
+export const later = setTimeout;
+const { setTimeout: pause } = globalThis;
+export const pauseFor = (ms: number): Promise<void> => new Promise(resolve => pause(resolve, ms));
+export const tick = (ms: number): Promise<void> => new Promise(resolve => globalThis['setTimeout'](resolve, ms));
+export const ticks = every;
+export const repeat = (fn: () => void, ms: number): ReturnType<typeof setInterval> => setInterval(fn, ms);

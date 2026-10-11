@@ -7,8 +7,11 @@
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
-// Every attachment is redacted before it is written (tests/support/redact.ts); the redacting reporter then redacts the
-// Playwright trace and any other attachment file once more (tests/e2e/support/redactingReporter.ts).
+//   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
+//                         (the `list` reporter prints those chunks live; M1-S6a C1)
+// Every secret a fixture creates is registered (tests/support/secrets.ts) for the redacting reporter. Every attachment
+// is redacted before it is written (tests/support/redact.ts); the redacting reporter then redacts the Playwright trace,
+// every other attachment, errors, stdout/stderr and step titles once more (tests/e2e/support/redactingReporter.ts).
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,11 +19,13 @@ import { test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
-	containerLog, createAccount, downHeadless, enableE2ee, secretsFor, serverRequest, upHeadless,
+	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, registerToken, secretsFor, serverRequest, upHeadless,
 } from '../../stack/stack.ts';
 import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { HttpResponse } from '../../contract/support/http.ts';
 import { redactText } from '../../support/redact.ts';
+import type { KnownSecret } from '../../support/redact.ts';
+import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { stackEnv } from './globalSetup.ts';
 
@@ -53,6 +58,7 @@ export interface WebApp {
 interface WorkerFixtures {
 	stack: StackState;
 	joplinServer: JoplinServerHandle;
+	redactStdio: undefined;
 }
 
 interface TestFixtures {
@@ -64,6 +70,10 @@ interface TestFixtures {
 }
 
 const failed = (testInfo: TestInfo): boolean => testInfo.status !== testInfo.expectedStatus;
+
+// Every secret this worker knows: the stack's accounts (the default one and every per-test one this worker created)
+// and every registered secret (Data API tokens, secrets a test registered itself).
+const workerSecrets = (stack: StackState): KnownSecret[] => mergeSecrets(secretsFor(stack), registeredSecrets());
 
 // Writes `text` (already redacted) into the test's output dir and attaches it by path.
 export const attachText = async (testInfo: TestInfo, name: string, text: string): Promise<void> => {
@@ -89,6 +99,17 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		await use({ ...JSON.parse(raw) as StackState, owned: false });
 	}, { scope: 'worker' }],
 
+	redactStdio: [async ({ stack }, use) => {
+		// The C1 negative control (self-test runs only) knows only the default account, as the harness did before C1.
+		const defaults = knownSecrets(stack); // a snapshot: the accounts of NOTESTEAD_E2E_STACK
+		const restore = installStdioRedaction(() => (secretFeedEnabled() ? mergeSecrets(knownSecrets(stack), registeredSecrets()) : defaults));
+		try {
+			await use(undefined);
+		} finally {
+			restore();
+		}
+	}, { scope: 'worker', auto: true }],
+
 	joplinServer: [async ({ stack }, use) => {
 		if (!stack.serverUrl || !stack.webUrl) throw new Error('the stack has no server or web URL');
 		await use({
@@ -103,7 +124,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		const since = new Date(Date.now() - 1_000).toISOString();
 		await use(undefined);
 		if (!failed(testInfo)) return;
-		const secrets = secretsFor(stack);
+		const secrets = workerSecrets(stack);
 		if (stack.containers.server) await attachText(testInfo, 'server.log', containerLog(stack, stack.containers.server, since, secrets));
 		if (stack.containers.web) await attachText(testInfo, 'web.log', containerLog(stack, stack.containers.web, since, secrets));
 		if (stack.defaultHeadless?.container) await attachText(testInfo, 'supervisor-default.log', containerLog(stack, stack.defaultHeadless.container, since, secrets));
@@ -120,7 +141,9 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			service = await upHeadless(stack, e2eeAccount, shortId(testInfo));
 			await use(service);
 		} finally {
-			if (service?.container && failed(testInfo)) await attachText(testInfo, 'supervisor.log', containerLog(stack, service.container));
+			// The token again: a restart of the CLI inside the service rotates it.
+			if (service?.container) registerToken(service);
+			if (service?.container && failed(testInfo)) await attachText(testInfo, 'supervisor.log', containerLog(stack, service.container, undefined, workerSecrets(stack)));
 			downHeadless(stack, service);
 		}
 	},
@@ -151,7 +174,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		try {
 			await use({ context, page, baseURL: stack.webUrl, console: lines });
 		} finally {
-			if (failed(testInfo)) await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), secretsFor(stack)));
+			if (failed(testInfo)) await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
 			await context.close();
 		}
 	},
