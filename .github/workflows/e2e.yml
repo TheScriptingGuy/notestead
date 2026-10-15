@@ -1,0 +1,246 @@
+# E2E (M1-S8, M1-AC22; ADR-0001, ADR-0007): the compose test stack under podman, every contract test file and every
+# Playwright spec, on ubuntu-24.04 (x64) and ubuntu-24.04-arm (arm64), both with the ONE web bundle built on x64.
+# - bundle: restores web-bundle.yml's cache entry (same key and path), or on a miss runs M1-S2's T90 exactly as
+#   web-bundle.yml does (and saves the entry); uploads the verified artifact for this run. x64 only (ADR-0001).
+# - test: downloads that artifact, checks it with sha256sum -c and writes its SHA256SUMS to the job summary (evidence
+#   X5), installs podman-compose and Playwright's own Chromium, then runs the contract layer and Playwright with
+#   NOTESTEAD_WEB_ARTIFACT pointing at it.
+# Uploads (C1-R2, C5): results leave the runner only through the upload gate (tests/harness/upload-gate.ts, QA), which
+# runs after the tests whatever happened, redacts or removes what an unfinished run left behind and deletes the
+# throwaway passwords; the upload requires its success, never takes planted.json and never takes hidden files.
+# ADR-0007 deviation (docs/worklog/M1-S8.md): Chromium is installed on the runner by the repo's pinned Playwright
+# instead of running in the Playwright container image, because a container job cannot run the podman stack.
+# No secret is used anywhere; the token is read-only.
+name: e2e
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_COLOR: '0'
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+jobs:
+  bundle:
+    name: bundle (x64 build, ubuntu-24.04)
+    # Same-repo pull requests are already tested by their push run; pull_request runs are for forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.pin.outputs.tag }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pin
+        id: pin
+        run: |
+          tag=$(node -p "JSON.parse(require('node:fs').readFileSync('upstream/joplin-version.json', 'utf8')).web.tag")
+          echo "web.tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The same path and key as web-bundle.yml's save step: a hit is the bundle T90 built and verified for this pin and
+      # this packages/web-build.
+      - name: Restore the bundle cached by web-bundle.yml (ADR-0001)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/web-bundle-out
+          key: web-bundle-${{ hashFiles('upstream/joplin-version.json') }}-${{ hashFiles('packages/web-build/**', '!packages/web-build/node_modules/**') }}
+
+      - name: Disk space for the upstream build (~13 GB under the work dir)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h / "$RUNNER_TEMP"
+          avail_kib=$(df --output=avail -k "$RUNNER_TEMP" | tail -n 1)
+          if [ "$avail_kib" -lt $((25 * 1024 * 1024)) ]; then
+            echo "Less than 25 GiB free: removing preinstalled toolchains this job does not use"
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+            df -h / "$RUNNER_TEMP"
+          fi
+
+      - name: Set up Node and install
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup
+
+      - name: T90, the full build on a cache miss (M1-AC5 / M1-AC27, as web-bundle.yml)
+        id: t90
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p test-results/junit
+          NOTESTEAD_BUILD_OUT="$RUNNER_TEMP/web-bundle-out" NOTESTEAD_BUILD_WORK="$RUNNER_TEMP/web-build-work" \
+            node --test --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=junit --test-reporter-destination=test-results/junit/m1-s2-t90.xml \
+              tests/acceptance/m1-s2/optin/ac5-build.optin.mts
+
+      - name: Check the bundle and record its SHA256SUMS
+        working-directory: ${{ runner.temp }}/web-bundle-out
+        env:
+          TAG: ${{ steps.pin.outputs.tag }}
+          SOURCE: ${{ steps.cache.outputs.cache-hit == 'true' && 'restored from the web-bundle.yml cache' || 'built by T90 in this job' }}
+        run: |
+          ls -l
+          expected=$(printf '%s\n' SHA256SUMS bundle-manifest.json "web-bundle-${TAG}.tar.zst" | sort)
+          actual=$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::the bundle must hold exactly SHA256SUMS, bundle-manifest.json and web-bundle-${TAG}.tar.zst"
+            exit 1
+          fi
+          sha256sum --strict -c SHA256SUMS
+          {
+            echo "### Bundle artifact SHA256SUMS (${SOURCE})"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the bundle artifact for the test jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-bundle-x64
+          path: ${{ runner.temp }}/web-bundle-out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Cache the bundle T90 built (same key as web-bundle.yml)
+        if: steps.cache.outputs.cache-hit != 'true' && steps.t90.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/web-bundle-out
+          key: web-bundle-${{ hashFiles('upstream/joplin-version.json') }}-${{ hashFiles('packages/web-build/**', '!packages/web-build/node_modules/**') }}
+
+      - name: T90 job summary
+        if: always() && steps.t90.outcome != 'skipped'
+        env:
+          OUTCOME: ${{ steps.t90.outcome }}
+        run: node .github/scripts/junit-summary.ts --outcome "$OUTCOME" "T90 full web build (ubuntu-24.04, cache miss)" test-results/junit/m1-s2-t90.xml >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: test (${{ matrix.runner }})
+    needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node and install
+        id: setup
+        uses: ./.github/actions/setup
+
+      - name: Download the x64 bundle artifact
+        id: bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-bundle-x64
+          path: ${{ runner.temp }}/web-bundle
+
+      - name: sha256sum -c SHA256SUMS, and SHA256SUMS to the job summary
+        id: bundle-check
+        working-directory: ${{ runner.temp }}/web-bundle
+        env:
+          TAG: ${{ needs.bundle.outputs.tag }}
+        run: |
+          ls -l
+          expected=$(printf '%s\n' SHA256SUMS bundle-manifest.json "web-bundle-${TAG}.tar.zst" | sort)
+          actual=$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::the artifact must hold exactly SHA256SUMS, bundle-manifest.json and web-bundle-${TAG}.tar.zst"
+            exit 1
+          fi
+          sha256sum --strict -c SHA256SUMS
+          {
+            echo "### Bundle artifact SHA256SUMS (x64 build, used on ${{ matrix.runner }})"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Podman and the pinned podman-compose
+        id: podman
+        uses: ./.github/actions/podman
+
+      - name: Playwright's Chromium (the repo's pinned Playwright)
+        id: browser
+        run: corepack yarn playwright install --with-deps chromium
+
+      # The contract layer and the E2E layer run one after the other (one heavy job per runner), and the second runs
+      # even when the first failed, so one run reports both.
+      - name: Contract layer, every tests/contract file (Jest JSON)
+        id: contract
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' }}
+        timeout-minutes: 75
+        env:
+          NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
+        run: |
+          mkdir -p test-results/contract
+          corepack yarn test:contract --verbose --json --outputFile=test-results/contract/jest-results.json
+
+      - name: E2E layer, every Playwright spec
+        id: e2e
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' && steps.browser.outcome == 'success' }}
+        timeout-minutes: 45
+        env:
+          NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
+        run: corepack yarn playwright test
+
+      # C1-R2: after every test step, whatever happened (failure, timeout, cancellation). Exit 0 = safe to upload.
+      - name: Upload gate (redaction finished, no throwaway passwords)
+        id: gate
+        if: always()
+        run: node tests/harness/upload-gate.ts
+
+      - name: Job summary
+        if: always() && steps.gate.outcome == 'success'
+        run: |
+          node .github/scripts/e2e-summary.ts "Contract and E2E (${{ matrix.runner }})" \
+            --jest test-results/contract/jest-results.json --junit test-results/e2e/junit.xml >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results (Jest JSON, Playwright JUnit, HTML report, traces; through the gate)
+        if: always() && steps.gate.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-e2e-${{ matrix.runner }}
+          # Hidden files stay out (the default): the gate does not redact them.
+          path: |
+            test-results/
+            playwright-report/
+            !**/planted.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Leftovers and runner resources
+        if: always()
+        run: |
+          podman ps -a --format '{{.Names}} {{.Status}}' || true
+          podman network ls --format '{{.Name}}' || true
+          podman volume ls --format '{{.Name}}' || true
+          df -h / "$RUNNER_TEMP"
+          free -m
