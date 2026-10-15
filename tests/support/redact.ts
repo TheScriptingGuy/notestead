@@ -41,6 +41,11 @@ const isCredentialHeader = (name: unknown): boolean => typeof name === 'string' 
 // `{name, value}` pairs whose value is secret: credential headers, and the `token` query parameter (HAR's queryString).
 const isSecretPair = (name: unknown): boolean => isCredentialHeader(name) || (typeof name === 'string' && name.toLowerCase() === 'token');
 
+const isRedactedValue = (v: unknown): boolean => {
+	const one = (x: unknown): boolean => typeof x === 'string' && /^\[?REDACTED\]?$/.test(x.trim());
+	return Array.isArray(v) ? v.length > 0 && v.every(one) : one(v);
+};
+
 // Walks a parsed JSON value: `{name, value}` header pairs and header maps keyed by a credential header name get their
 // value replaced; every other string goes through redactText.
 export const redactJson = (value: unknown, secrets: KnownSecret[] = []): unknown => {
@@ -51,10 +56,12 @@ export const redactJson = (value: unknown, secrets: KnownSecret[] = []): unknown
 		const out: Record<string, unknown> = {};
 		const pair = isSecretPair(record.name) && 'value' in record;
 		for (const [key, v] of Object.entries(record)) {
-			if (pair && key === 'value') out[key] = redacted;
-			else if (isCredentialHeader(key)) out[key] = Array.isArray(v) ? v.map(() => redacted) : redacted;
-			// HAR cookies: [{name, value}] (request and response)
-			else if (key === 'cookies' && Array.isArray(v)) out[key] = v.map(c => (c !== null && typeof c === 'object' ? { ...(c as Record<string, unknown>), value: redacted } : redacted));
+			// A value that is already redacted (Caddy writes "X-Api-Auth": ["REDACTED"]) is kept as it is (M1-S8 F3). HAR
+			// cookies ([{name, value}], request and response) are redacted value by value.
+			if ((pair && key === 'value') || isCredentialHeader(key)) {
+				if (isRedactedValue(v)) out[key] = v;
+				else out[key] = pair && key === 'value' ? redacted : Array.isArray(v) ? v.map(() => redacted) : redacted;
+			} else if (key === 'cookies' && Array.isArray(v)) out[key] = v.map(c => (c !== null && typeof c === 'object' ? { ...(c as Record<string, unknown>), value: redacted } : redacted));
 			else out[key] = redactJson(v, secrets);
 		}
 		return out;

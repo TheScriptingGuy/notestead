@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isZip, looksLikeText, redactBuffer } from './redact.ts';
 import type { KnownSecret } from './redact.ts';
+import { findRepoRoot } from './repoRoot.ts';
 import { mergeSecrets, readSecretsFile } from './secrets.ts';
 import { readZip } from './zip.ts';
 
@@ -136,6 +137,22 @@ export const sameContent = (a: Buffer, b: Buffer): boolean => {
 	return la.length === lb.length && la.every((line, i) => line === lb[i] || sameJson(line.trim(), lb[i].trim()));
 };
 
+// Playwright's trace viewer, which the HTML reporter copies verbatim into <report>/trace/: its code contains `cookie=`,
+// which the header pattern would rewrite (M1-S8 F2). A file there is left alone only while it is byte-identical to
+// the packaged viewer file of the same name; anything else under trace/ is redacted like any file (review M1-S6a-r1
+// C1-R4).
+const viewerDir = (): string => join(findRepoRoot(), 'node_modules', 'playwright-core', 'lib', 'vite', 'traceViewer');
+const isPackagedViewerFile = (path: string, data: Buffer): boolean => {
+	const marker = `${sep}trace${sep}`;
+	const at = path.lastIndexOf(marker);
+	if (at < 0) return false;
+	try {
+		return readFileSync(join(viewerDir(), path.slice(at + marker.length))).equals(data);
+	} catch {
+		return false;
+	}
+};
+
 export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 	const roots = opts.roots.map(r => resolve(r));
 	const present = roots.filter(r => existsSync(r));
@@ -186,6 +203,7 @@ export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 			if (relative(root, e.path).split(sep).some(part => part.startsWith('.'))) continue;
 			try {
 				const before = readFileSync(e.path);
+				if (isPackagedViewerFile(e.path, before)) continue;
 				const after = redactBuffer(before, secrets);
 				if (!sameContent(before, after)) {
 					writeFileSync(e.path, after);
