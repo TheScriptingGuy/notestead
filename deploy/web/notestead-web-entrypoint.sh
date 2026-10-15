@@ -9,10 +9,11 @@ fail() {
 	exit 64
 }
 
-# Refuses whitespace, braces, quotes, backslashes and '#': they would change the Caddyfile's tokens.
+# Refuses whitespace, braces, quotes, backslashes and '#': they would change the Caddyfile's tokens. Whitespace has its
+# own bracket expression: shellcheck reads a named class inside a longer one as a mistake (SC2101).
 plain() {
 	case $2 in
-		*[[:space:]{}\"\'\`\\#]*) fail "$1 must not contain whitespace, braces, quotes, backslashes or '#'" ;;
+		*[[:space:]]* | *[{}\"\'\`\\#]*) fail "$1 must not contain whitespace, braces, quotes, backslashes or '#'" ;;
 	esac
 }
 
@@ -35,10 +36,11 @@ strip_trailing_slashes() {
 	done
 }
 
-# The host[:port] that upstream's isValidOrigin compares: WHATWG URL.host (lower case, no default port).
+# The host[:port] that upstream's isValidOrigin compares: WHATWG URL.host (lower case, no default port). WHATWG
+# lower-cases ASCII only, so tr runs in the C locale, where [:upper:] is exactly A-Z whatever the container's locale.
 url_host() {
 	rest=${1#*://}
-	authority=$(printf '%s' "${rest%%/*}" | tr 'A-Z' 'a-z')
+	authority=$(printf '%s' "${rest%%/*}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
 	case $1 in
 		[Hh][Tt][Tt][Pp][Ss]://*) authority=${authority%:443} ;;
 		*) authority=${authority%:80} ;;
