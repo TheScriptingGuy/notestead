@@ -123,6 +123,25 @@ describe('M1-S8 C1-R2 and C5: what CI may upload', () => {
 			expect({ removed: again.filesRemoved, planted: again.plantedRemoved, leaks: leaksUnder(work) }).toEqual({ removed: 0, planted: 0, leaks: [] });
 		});
 
+		// Finding F1 (docs/test-plans/M1-S8.md): a file is rewritten and counted only when redaction changed a value, not
+		// when the JSON was merely re-serialised (Jest's pretty-printed results, Playwright's report.json).
+		test('f1-gate-count formatting-only differences are neither rewritten nor counted; a replaced secret is (positive control)', () => {
+			const results = join(work, 'test-results');
+			const pretty = write(join(results, 'contract', 'jest-results.json'), `${JSON.stringify({ success: true, numTotalTests: 2, testResults: [{ name: 'a' }] }, null, 2)}\n`);
+			const zipped = write(join(results, 'e2e', 'output', 't', 'clean.zip'), writeZip([{ name: 'report.json', data: Buffer.from(JSON.stringify({ ok: true }, null, 2)) }, { name: 'trace.network', data: Buffer.from('{ "a" : 1 }\n{"b":2}\n') }]));
+			const before = { pretty: readFileSync(pretty), zipped: readFileSync(zipped) };
+			const leaky = write(join(results, 'contract', 'stack', 'web.log'), `typed ${secret}\n`);
+			const secrets = join(work, 'tmp');
+			write(join(secrets, 'nst-secrets-F1f1f1', 'secrets.jsonl'), `${JSON.stringify({ label: 'leftover_password', value: secret })}\n`);
+			const summary = runUploadGate({ roots: [results], secretsDirs: [secrets] });
+			expect({
+				counted: summary.filesRedacted,
+				prettyUntouched: readFileSync(pretty).equals(before.pretty),
+				zipUntouched: readFileSync(zipped).equals(before.zipped),
+				leakyRedacted: readFileSync(leaky, 'utf8').includes('[leftover_password]'),
+			}).toEqual({ counted: 1, prettyUntouched: true, zipUntouched: true, leakyRedacted: true });
+		});
+
 		test('c1r2-gate-missing roots that do not exist are fine (a job that failed before its tests ran)', () => {
 			const summary = runUploadGate({ roots: [join(work, 'nope'), join(work, 'nope2')], secretsDirs: [join(work, 'tmp')], summaryFile: join(work, 'summary.json') });
 			expect(summary.runs).toEqual([]);
