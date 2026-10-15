@@ -18,9 +18,10 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { redactBuffer } from './redact.ts';
+import { isZip, looksLikeText, redactBuffer } from './redact.ts';
 import type { KnownSecret } from './redact.ts';
 import { mergeSecrets, readSecretsFile } from './secrets.ts';
+import { readZip } from './zip.ts';
 
 export const pendingMarker = 'redaction-pending.json';
 export const completeMarker = 'redaction-complete.json';
@@ -106,6 +107,35 @@ const pendingPaths = (marker: string): string[] | undefined => {
 	}
 };
 
+// True when redaction changed nothing but formatting (Finding F1): redactBuffer re-serialises JSON documents and JSON
+// lines, so byte equality is too strict. Zips are compared entry by entry, JSON by value, everything else by bytes.
+const parsesTo = (text: string): unknown => {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+};
+const sameJson = (a: string, b: string): boolean => {
+	const pa = parsesTo(a);
+	return pa !== undefined && JSON.stringify(pa) === JSON.stringify(parsesTo(b));
+};
+export const sameContent = (a: Buffer, b: Buffer): boolean => {
+	if (a.equals(b)) return true;
+	if (isZip(a) && isZip(b)) {
+		const ea = readZip(a);
+		const eb = readZip(b);
+		return ea.length === eb.length && ea.every((e, i) => e.name === eb[i].name && sameContent(e.data, eb[i].data));
+	}
+	if (!looksLikeText(a) || !looksLikeText(b)) return false;
+	const ta = a.toString('utf8');
+	const tb = b.toString('utf8');
+	if (sameJson(ta.trim(), tb.trim())) return true;
+	const la = ta.split('\n');
+	const lb = tb.split('\n');
+	return la.length === lb.length && la.every((line, i) => line === lb[i] || sameJson(line.trim(), lb[i].trim()));
+};
+
 export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 	const roots = opts.roots.map(r => resolve(r));
 	const present = roots.filter(r => existsSync(r));
@@ -157,7 +187,7 @@ export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 			try {
 				const before = readFileSync(e.path);
 				const after = redactBuffer(before, secrets);
-				if (!after.equals(before)) {
+				if (!sameContent(before, after)) {
 					writeFileSync(e.path, after);
 					summary.filesRedacted++;
 				}
