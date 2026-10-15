@@ -63,6 +63,21 @@ describe('harness redaction', () => {
 		expect(textViews('t.zip', redactedZip).map(v => v.where)).toEqual(['t.zip!trace.network']);
 	});
 
+	// M1-S8 Finding F4: the header pattern backtracked over the space and the `[` of an already redacted value
+	// (`X-API-AUTH: [REDACTED]}` became `X-API-AUTH:[REDACTED]]}`), so every pass changed the text again.
+	test('f4 redaction is idempotent on already redacted header values; a real value is still redacted (positive control)', () => {
+		const samples = [
+			'console.warn(`X-API-AUTH: [REDACTED]} (sent with ${visible})`);',
+			'Authorization: [REDACTED]',
+			'"X-Api-Auth":["REDACTED"],"Accept":["*/*"]',
+			'cookie=[REDACTED]; path=/',
+			'Cf-Access-Jwt-Assertion: REDACTED',
+		];
+		expect(samples.map(t => redactText(t))).toEqual(samples);
+		const once = redactText('X-API-AUTH: abc123secret} and Cookie: session=s3cr3tvalue');
+		expect({ once, twice: redactText(once), leaked: /abc123secret|s3cr3tvalue/.test(once) }).toEqual({ once, twice: once, leaked: false });
+	});
+
 	test('findLeaks: forbidden patterns, and header names in prose are not leaks', () => {
 		expect(findLeaks('x', 'no unredacted X-API-AUTH values, token= or Authorization here')).toEqual([]);
 		expect(findLeaks('x', 'found nstsecretabcdef0123456789abcdef01 here', { forbidden: [/nstsecret[0-9a-f]{24}/] })).toHaveLength(1);
