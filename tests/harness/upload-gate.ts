@@ -34,6 +34,7 @@ const main = (argv: string[]): number => {
 		for (const run of summary.runs) {
 			process.stdout.write(`upload-gate: ${run.dir}: ${run.complete ? 'redaction complete' : `redaction NOT complete, removed ${run.removed.join(', ') || 'nothing'}`}\n`);
 		}
+		for (const file of summary.redacted) process.stdout.write(`upload-gate: redacted ${file}\n`);
 		process.stdout.write(`upload-gate: OK (${summary.filesRedacted} file(s) redacted, ${summary.filesRemoved} removed, ${summary.plantedRemoved} planted.json removed, ${summary.artifactDirsRemoved} raw trace dir(s) removed, ${summary.registries} leftover registr(y/ies) used)\n`);
 		return 0;
 	} catch (error) {

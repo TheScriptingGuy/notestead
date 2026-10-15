@@ -49,6 +49,8 @@ export interface UploadGateSummary {
 	plantedRemoved: number;
 	artifactDirsRemoved: number;
 	filesRedacted: number;
+	// the files whose values redaction changed (relative paths, no values)
+	redacted: string[];
 	filesRemoved: number;
 	registries: number;
 }
@@ -156,7 +158,7 @@ const isPackagedViewerFile = (path: string, data: Buffer): boolean => {
 export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 	const roots = opts.roots.map(r => resolve(r));
 	const present = roots.filter(r => existsSync(r));
-	const summary: UploadGateSummary = { runs: [], plantedRemoved: 0, artifactDirsRemoved: 0, filesRedacted: 0, filesRemoved: 0, registries: 0 };
+	const summary: UploadGateSummary = { runs: [], plantedRemoved: 0, artifactDirsRemoved: 0, filesRedacted: 0, redacted: [], filesRemoved: 0, registries: 0 };
 
 	// 1. Leftover registries.
 	const registries = leftoverRegistries(opts.secretsDirs ?? [tmpdir()]);
@@ -208,6 +210,7 @@ export const runUploadGate = (opts: UploadGateOptions): UploadGateSummary => {
 				if (!sameContent(before, after)) {
 					writeFileSync(e.path, after);
 					summary.filesRedacted++;
+					summary.redacted.push(rel(e.path));
 				}
 			} catch {
 				rmSync(e.path, { force: true });

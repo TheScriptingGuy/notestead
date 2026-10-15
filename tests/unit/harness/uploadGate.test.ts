@@ -140,6 +140,8 @@ describe('M1-S8 C1-R2 and C5: what CI may upload', () => {
 				zipUntouched: readFileSync(zipped).equals(before.zipped),
 				leakyRedacted: readFileSync(leaky, 'utf8').includes('[leftover_password]'),
 			}).toEqual({ counted: 1, prettyUntouched: true, zipUntouched: true, leakyRedacted: true });
+			// The summary names what it rewrote (paths only), so a CI run's evidence shows where redaction happened.
+			expect(summary.redacted.map(p => relative(work, join(process.cwd(), p)))).toEqual(['test-results/contract/stack/web.log']);
 		});
 
 		// Findings F2 and F3 (docs/test-plans/M1-S8.md VERIFY): Playwright's trace viewer, copied verbatim into every HTML
