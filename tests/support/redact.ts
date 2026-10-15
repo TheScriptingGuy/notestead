@@ -21,7 +21,10 @@ export interface KnownSecret {
 const headerAlternation = credentialHeaders.map(h => h.replace(/-/g, '[-_]')).join('|');
 // `Name: value`, `"Name": "value"`, `"Name":["value"]` (Caddy's JSON log), `Name=value`. The value runs to the end of
 // the line, a quote, a closing bracket or a comma.
-const headerPattern = new RegExp(`\\b(${headerAlternation})(["']?\\s*[:=]\\s*\\[?\\s*["']?)(?!\\[REDACTED\\]|REDACTED\\b)([^"'\\r\\n,\\]}]+)`, 'gi');
+// The value never starts with whitespace, a quote or `[`: otherwise the separator would backtrack over the space or the
+// bracket of an already redacted value (`X-API-AUTH: [REDACTED]` → `X-API-AUTH:[REDACTED]]`) and redaction would not
+// be idempotent (M1-S8 F4).
+const headerPattern = new RegExp(`\\b(${headerAlternation})(["']?\\s*[:=]\\s*\\[?\\s*["']?)(?![\\s"'[]|REDACTED\\b)([^"'\\r\\n,\\]}]+)`, 'gi');
 const tokenPattern = /([?&]token=)(?!\[REDACTED\]|REDACTED\b)[^&\s"'#<>\\]+/gi;
 
 export const redactText = (text: string, secrets: KnownSecret[] = []): string => {
