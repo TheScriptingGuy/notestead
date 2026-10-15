@@ -142,6 +142,31 @@ describe('M1-S8 C1-R2 and C5: what CI may upload', () => {
 			}).toEqual({ counted: 1, prettyUntouched: true, zipUntouched: true, leakyRedacted: true });
 		});
 
+		// Findings F2 and F3 (docs/test-plans/M1-S8.md VERIFY): Playwright's trace viewer, copied verbatim into every HTML
+		// report (html/trace/), contains `cookie=` in its code, which the header pattern used to rewrite, breaking the
+		// viewer in uploaded reports; and a value that is already redacted (Caddy writes "X-Api-Auth":["REDACTED"]) was
+		// rewritten and counted. A changed copy of a viewer file is still redacted (review M1-S6a-r1 C1-R4).
+		test('f2-f3-gate the packaged trace viewer and already-redacted values are left alone; a modified viewer file is still redacted', () => {
+			const viewerDir = join(findRepoRoot(), 'node_modules', 'playwright-core', 'lib', 'vite', 'traceViewer', 'assets');
+			const name = readdirSync(viewerDir).find(f => f.endsWith('.js') && readFileSync(join(viewerDir, f), 'utf8').includes('cookie='));
+			expect(name).toBeDefined();
+			const original = readFileSync(join(viewerDir, name ?? ''));
+			const results = join(work, 'test-results');
+			const viewer = write(join(results, 'contract', 'run', 'html', 'trace', 'assets', name ?? 'x.js'), original);
+			const tampered = write(join(results, 'contract', 'run', 'html', 'trace', 'assets', 'tampered.js'), `${original.toString('utf8')}\n// ${secret}\n`);
+			const caddyLine = `${JSON.stringify({ request: { headers: { 'X-Api-Auth': ['REDACTED'], 'Accept': ['*/*'] } } })}\n`;
+			const caddy = write(join(results, 'contract', 'run', 'stack', 'web.log'), caddyLine);
+			const secrets = join(work, 'tmp');
+			write(join(secrets, 'nst-secrets-F2f2f2', 'secrets.jsonl'), `${JSON.stringify({ label: 'leftover_password', value: secret })}\n`);
+			const summary = runUploadGate({ roots: [results], secretsDirs: [secrets] });
+			expect({
+				viewerUntouched: readFileSync(viewer).equals(original),
+				caddyUntouched: readFileSync(caddy, 'utf8') === caddyLine,
+				tamperedRedacted: !readFileSync(tampered, 'utf8').includes(secret),
+				counted: summary.filesRedacted,
+			}).toEqual({ viewerUntouched: true, caddyUntouched: true, tamperedRedacted: true, counted: 1 });
+		});
+
 		test('c1r2-gate-missing roots that do not exist are fine (a job that failed before its tests ran)', () => {
 			const summary = runUploadGate({ roots: [join(work, 'nope'), join(work, 'nope2')], secretsDirs: [join(work, 'tmp')], summaryFile: join(work, 'summary.json') });
 			expect(summary.runs).toEqual([]);
