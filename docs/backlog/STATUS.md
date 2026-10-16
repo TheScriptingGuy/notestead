@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); **M1-S8 merged** (CI E2E on both architectures, APPROVE r1, `bc973ab`); first `e2e.yml` run 38874722165 green except `ac12-s7` (podman 4.9 `top uid`), fixed in `fix/M1-S8-ac12-podman49` (APPROVE r1); next: re-verify X1/X3/X4 on the next run, then M1 close-out |
+| M1 Walking skeleton + test harness | close-out review r2 | Stories S1–S9 and S6a merged, each approved in review (S2 in r3, the rest in r1). Every acceptance criterion passes on arm64 and x64 (`e2e.yml` 38881804121, `ci.yml` 38881804157). Close-out: r1 CHANGES_REQUESTED (documentation only), fixed; r2 pending |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -42,109 +42,74 @@ The orchestrator (main Claude session) maintains this file.
 
 - 2026-10-04 **MCP exposure (L17):** the user chose to **publish MCP through the Cloudflare Tunnel behind Cloudflare Access plus the bearer token**. They accept that Cloudflare can read the decrypted note content MCP returns, so cloud clients such as claude.ai connectors can reach it. This replaces the earlier default (Q7). The architect records it in ARCHITECTURE §14 and the M4/M5 acceptance criteria. The product default for other users stays opt-in.
 
-## Pending CI verification
-- **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4, M1-S5, M1-S6, M1-S6a, M1-S7 and M1-S8 x64 (contract and E2E suites), and M1-AC22 in CI with the X1–X9 evidence. These are verified by the first `e2e.yml` run after merging M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
-- **CI follow-ups:** optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7). Recording `df`/`free` after T90 in `web-bundle.yml` was done in M1-S8.
+## CI verification
+- **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8.
+- **Closed 2026-10-16:** QA verified `e2e.yml` run 38881804121 and `ci.yml` run 38881804157 (head `4dc0cf5`) against X1–X9. Every M1 acceptance criterion now passes on arm64 (Pi) and x64 (CI), recorded per story in `docs/test-plans/M1-S*.md`. The lead checked the evidence in `docs/reviews/M1-closeout-r1.md`. Evidence is in `~/joplin-web-app-work/ci-evidence/<run-id>/`.
+- **Watch item W1:** the headless restart and sync are slow on x64 (the E2E step took 9.9 min against 6.6 min on arm64; the slowest test used 294 of its 600 s). If an x64 run gets within 20% of a timeout, profile the restart.
 
 ## Follow-ups from reviews (route into the named story when it starts)
-- **M1-S8 (or earlier):** `check:workflows` gaps from review M1-S3:
-  - C1: YAML aliases bypass the pin and permission checks.
-  - C2: ban `pull_request_target` outright.
-  - C3: also check local actions outside `.github/actions/`.
-  - C4/C5 (nits): verify the sha256 of a cached tool binary, and add a download timeout.
-- **Before the first push (ci-cd-specialist):** `ci.yml` runs `check:licenses`, `check:pin` and `check:no-upstream-copy` on both architectures (M1-S9 goal).
-- **M1-S4 review follow-ups:**
-  - **Bug, fix before M5 pre-publish:** `packages/web-build/src/provenance.ts` turns the SSH alias remote `git@github-notestead:…` into a fake host `https://github-notestead/…` in `source.html`. Locally packaged bundles get a broken source link; CI builds are unaffected. Derive the URL from the canonical repo instead (e.g. `package.json` `repository`).
-  - Add `Cache-Control` on static 404s (`handle_errors`), so Cloudflare doesn't briefly cache a 404 for a `.js` file.
-  - Architect: should `Cf-Access-Client-Id`/`-Secret` be stripped before proxying to Joplin Server? ADR-0002 rule 3 doesn't cover them.
-  - M5: the OCI label set must override Caddy's inherited labels (licence, title, source).
-  - Nits: empty unlisted dirs survive `import`; the decompression limit comes from the manifest; a ~~trailing-slash `JOPLIN_SERVER_URL`~~ (done in M1-S6, stripped and re-validated); the image `EXPOSE`s 8089, so `podman run -P` would publish the internal listener.
-- **M1-S9 review follow-ups, for the architect to schedule:**
-  - C1: `check:pin` alias hole — any `joplin`/`@joplin/*` lockfile entry must resolve to the same name. Needs a concrete story.
-  - C2: ADR-0010 should say an exception's text wins over the standard SPDX text, which is what the code does.
-  - C3: missing installed packages, and banners that name no package, should fail unless the package is platform-specific or on a reviewed list.
-  - C4/P1: treat a plain-string legacy `"licenses": "MIT"` (e.g. `requireg@0.2.2`) as declared.
-  - Optional upstream courtesy: `tkwidgets` lacks `"license": "MIT"` (the user can file it).
-- **Architect (with M1-S9, done):** an ADR-0009 amendment allowing pipeline-only tooling in `.github/scripts/` (review M1-S3 P1), and an M1.md fix: post-merge CI fixes go on `fix/M1-S3-*`.
-- **M1-S9 / M1-AC26:** `check:pin` must also check the *source* of `joplin`/`@joplin/*` in the lockfile: require `npm:` resolutions, reject git or local patches (review M1-S1 C1).
-- **M1-S9 `check:licenses`:** exception list with reasons for 5 transitive packages of `joplin@3.7.1` (one LGPL-3.0, one MPL-2.0-no-copyleft-exception, one AFL/BSD, two with no licence field) (review M1-S1).
-- **M1-S2 follow-ups:**
-  - `verify` should also hash-check upstream screenshots and every other binary the overlay replaces (at M1-AC29 or the M5-AC1 scan) (r1-C2).
-  - Cache cleanup policy for `~/.cache/notestead/web-build/<commit>` (~13 GB each) (r1-C4).
-  - QA: the T90 note should say `NOTESTEAD_BUILD_WORK` must be new, empty, or created by an earlier `build`.
-- **M1-S5 review follow-ups (`docs/reviews/M1-S5-r1.md`):**
-  - Architect: amend ADR-0003 with the sync-success rule (it relies on the `Completed:`/`Last error:` lines of `joplin sync`, the `locale` setting and `GET /api/ping`).
-  - Architect: ADR-0009 A4 should record that sqlite3's prebuilt binary is downloaded from GitHub releases with no checksum, and choose a remedy.
-  - Architect: decide what happens for an account without E2EE. `e2ee decrypt --force` exits 1 there, so the supervisor never reports ready.
-  - Orchestrator: propose upstream that `joplin sync` exits non-zero when the sync failed.
-  - QA, M3-AC1: add a contract test where `/api/ping` answers but the sync routes fail, so the stack must never report ready. A wrong sync password should be a hard failure, not a 30 s retry loop.
-  - ~~M1-S6: `init: true` in compose; PID-1 warning; README install order~~ (done in M1-S6).
-  - M1-S8: x64 contract evidence for M1-AC14–17 and M1-AC23.
-- **M1-S6 review follow-ups (`docs/reviews/M1-S6-r1.md`):**
-  - ~~**C1 (QA, before or in M1-S7):** the redacting reporter knows only the default account's secrets. Feed it per-test passwords and Data API tokens, and redact error messages and stdout/stderr. M1-S7 types the master password into the browser, so it would otherwise land in traces.~~ (done in M1-S6a)
-  - ~~**C2 (QA, then senior engineer, small item before M1-S7):**~~ (done in M1-S6a) close the lint-ban gaps:
-    - `promisify(setTimeout)`;
-    - aliasing `setTimeout` to another name;
-    - destructuring it from `globalThis`;
-    - `globalThis['setTimeout']`;
-    - `setInterval` used as a delay.
+Done in M1 (detail in the reviews and test plans):
+- `check:workflows` hardening, now M1-AC30–33;
+- `ci.yml` checks;
+- the M1-S9 lockfile source and licence exceptions;
+- M1-S6 C1, C2, C4, C5 and P1;
+- M1-S6a C1-R1, C1-R2, C4-R3 and FU-S6a-1;
+- M1-S7 hand-over, C1-R1a and C1-R1b;
+- the M1-S8 first CI run and the `ac12-s7` podman 4.9 fix;
+- every x64 evidence item;
+- the ADR-0007 (C3 harness rules, Chromium in CI) and ADR-0003 (sync-success) amendments, and the M1-AC21 rewording (`55a4be9`, `21389c2`).
 
-    QA adds failing fixtures first; the engineer then bans `setTimeout` used as a value.
-  - **C3, architect:** amend ADR-0007 and M1.md:
-    - one compose stack per run (in globalSetup);
-    - the fixture is named `headlessService`;
-    - tests that stop a shared service run serially once CI uses more than one worker.
-
-    QA also records that `e2eeAccount` doesn't yet seed a to-do with `todo_due`, a tag and an attachment, and adds that when M2 or M4 needs it.
-  - ~~**C4 (QA, nit):** starting a contract run wipes a developer's running `tests/stack/cli.ts up` stack.~~ (done in M1-S6a)
-  - **P1:** ~~lint evidence logs should record the exit code~~ (done in M1-S6a).
-  - **C5 (QA and ci-cd, in M1-S8):** throwaway passwords sit in plaintext in the stack descriptor in shared `/tmp` and in `planted.json`. Exclude `planted.json` from CI uploads.
-  - **M1-S8:**
-    - confirm podman healthchecks fire on GitHub runners (otherwise set `NOTESTEAD_COMPOSE='docker compose'`);
-    - run `shellcheck` on `deploy/web/notestead-web-entrypoint.sh`;
-    - collect x64 evidence for M1-AC18–20 and M1-AC34.
-  - **Optional, M3:** show "no init" in `/status`.
-- **M1-S6a review follow-ups (`docs/reviews/M1-S6a-r1.md`):**
-  - ~~**C1-R1 (QA, in M1-S7):**~~ (done in M1-S7) C1 is only proven on a synthetic page, and trace screenshot frames (JPEG) can't be text-redacted. The "type like a user" helper must refuse to type a registered secret into anything but `type="password"`. Run the leak scan on M1-S7's real login/unlock flow, including the network bodies in the trace.
-  - **C1-R2 (ci-cd, in M1-S8):** traces are written unredacted and only cleaned by the reporter afterwards. Skip or redact the `if: always()` upload of `test-results/` unless the reporter finished (a job killed by a timeout or cancel would publish them).
-  - **C4-R3 (QA, next harness story; before M1-S8 if CI runs parallel jobs on one podman host):** save the stack descriptor in `newStack()`, not after the server is healthy, so a concurrent contract run can't sweep a stack that is still starting.
-  - **FU-S6a-1 (QA fixtures first, then engineer; next story touching `eslint.config.js`, at the latest M1-S8):** extend the sleep ban to `require('node:timers').setTimeout`, `import()` followed by member access, `scheduler.wait` from `node:timers/promises`, and `Atomics.wait`.
-  - **Accepted risk A1:** `Reflect.get`, a key held in a variable, an alias of `globalThis`, and nested type assertions all bypass the lint ban.
-  - Nits: C1-R4, check `html/trace/` against Playwright's viewer files instead of skipping it by path; C2-R5, the strategy should say to assert on the spy variable, since `expect(setTimeout)` is flagged; C1-R6 (from M4), a Data API token that changes when the CLI restarts mid-test isn't registered until teardown.
-  - **P-R1 (process):** test- and lint-only commits use `test(...)` or `chore(...)`, never `fix(...)` (`a3cc6dc`, `1f842ba` and `e1910f8` did). At M5-S3 the ci-cd specialist adds release-please `exclude-paths` or a `bootstrap-sha`.
-- **M1-S7 review follow-ups (`docs/reviews/M1-S7-r1.md`):**
-  - **M1-S8 hand-over (ci-cd):** `e2e.yml` sets `NOTESTEAD_WEB_ARTIFACT` (the CI web bundle) for the Playwright run and the `tests/contract/m1-s7` run on both runners. Upload `test-results/**` and `playwright-report/**` only after the redacting reporter has finished (C1-R2, now the main leak path).
-  - **C1-R1a (QA, next harness story or M1-S8):** `typeLikeUser` with `secret: true` must register the text as a secret before typing; otherwise it shows in clear in the trace's typing action and in step titles.
-  - **C1-R1b (QA, with C1-R2 in M1-S8):** learn session ids from `/api/sessions` response bodies too, in both the reporter and the leak scan, so no test can miss them.
-  - **Before M3/M4 tests mix sync and MCP:** the "one headless sync" helper (currently a restart, which rotates the Data API token) switches to M3's manual sync trigger.
-  - **Architect:** reword M1-AC21 step 3 from "as `user1`" to "a fresh per-test E2EE user".
-  - Nits: C-N1, the guard should check that the element is really a password `<input>`, not just its `type` attribute; C-N2 (M2), check in the UI that the web app decrypted the body; C-N3, a spec using Playwright's own `page`/`context` gets no trace, with no warning.
-  - **Node 24 workaround:** Playwright's own trace merge hangs on the Pi's Node 24.17, so the browser fixture records its own trace (no screenshots) on every platform. The lead advises keeping it everywhere.
-  - Upstream issues the user may file: the web app's "Joplin Server URL" field loses focus after the first keystroke; the Playwright trace merge hangs on Node 24.
-- **M1-S8 review follow-ups (`docs/reviews/M1-S8-r1.md`):**
-  - **First CI run (ci-cd collects, QA verifies X1–X9):**
-    - podman setup on both runners;
-    - healthchecks (`ac18`);
-    - Docker Hub anonymous pulls;
-    - timings against the timeouts (contract 75 min, E2E 45 min);
-    - where the bundle came from;
-    - `ci.yml` green on x64 with the new binary hashes.
-
-    Fixes go on `fix/M1-S8-<slug>`. If Docker Hub limits bite, a mirror or authenticated pulls needs the user's approval and must not be exposed to fork pull requests.
-  - **Run 38874722165 results:** X2 and X5–X9 PASS. X1/X3/X4 failed on `ac12-s7` only; re-verify them on the run after the fix. That run should show 87 contract tests. Also correct X6 to 17 controls (14 NEG + 3 positive) and say how they are counted.
-  - **Fix-review nits (`docs/reviews/M1-S8-fix-ac12-r1.md`):** use `docs(test-plans)` for commits that only record results. Optionally, test the harness-error path when `podman top` fails.
-  - **Senior engineer (M5):** the web-bundle tarball is not byte-reproducible (tar metadata). The contents and manifest are identical.
-  - **Optional:** the e2e timeouts are generous. The slowest steps used 18/75 min (contract), 7/45 min (E2E) and 26/150 min (job).
-  - **C1 (ci-cd, minor):** `.github/actions/podman/action.yml:37-49` should fail or warn when lingering produces no user bus, and record the podman network backend.
-  - **C2 (QA, minor):** `tests/contract/m1-s6/ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values (like `c1r1`), and optionally add the harness password pattern to the gate.
-  - **P1 (process):** `79546b0 fix(web)` is shellcheck-only and repeats P-R1. Add it to the release-please `bootstrap-sha`/`exclude-paths` at M5-S3.
-  - **Architect:** amend ADR-0007 §CI to record that Chromium is installed on the runner (accepted pending architect).
-  - Nits: C3, `df`/`free` after T90 in the `bundle` job; C4, the wording about "throwaway passwords" in the `e2e.yml` header; C5, the `noSleepMessage` wording.
-- **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
-- **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
+Open, grouped by when they are due, following the classification in `docs/reviews/M1-closeout-r1.md`:
+- **M2-S1 QA (the next harness change):**
+  - Since ADR-0007's serial rule, CI's Playwright runs with more than one worker. Any spec that stops, restarts or reconfigures a shared service needs a serial project or its own containers.
+  - M1-S8 C2: `ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values; CI logs of a public repo are public.
+  - Nits: C-N1 (the password-input guard checks the element), C-N3 (warn when a spec uses Playwright's own `page`), C1-R4 (`html/trace/` checked against the viewer files), C2-R5 (strategy wording).
+- **M2-S2/S3:**
+  - `e2eeAccount` seeds a to-do with `todo_due`, a tag and an attachment.
+  - C-N2: check in the UI that the body is decrypted (covered by M2-AC2).
+- **Before M3/M4 mix sync and MCP:**
+  - The "one headless sync" helper (a restart, which rotates the token) moves to M3's manual sync trigger.
+  - QA, M3-AC1: a contract test where `/api/ping` answers but sync fails, so the stack never reports ready. A wrong sync password is a hard failure.
+  - Architect: decide the non-E2EE account case. `e2ee decrypt --force` exits 1, so the supervisor never reports ready.
+  - Optional: "no init" in `/status`.
+- **M4:** C1-R6, a Data API token that rotates mid-test is not registered until teardown.
+- **Before M5-S4 (tunnel) / M5 pre-publish:**
+  - `provenance.ts` turns the SSH alias remote into a fake host in `source.html`. Derive the URL from the canonical repo.
+  - `Cache-Control` on static 404s.
+  - Architect: rule on stripping `Cf-Access-Client-Id`/`-Secret` (ADR-0002 rule 3).
+  - The OCI label set overrides Caddy's labels.
+  - Architect: ADR-0009 A4, the sqlite3 prebuilt binary checksum gap, and its remedy.
+  - `verify` hash-checks upstream screenshots and the other replaced binaries.
+  - Web-bundle tarball reproducibility (tar metadata).
+  - Release-please `bootstrap-sha`/`exclude-paths` for the `fix(...)` commits that changed no behaviour: P-R1's three and `79546b0` (M5-S3).
+- **M6 or any pin-tooling story:**
+  - M1-S9 C1: the `check:pin` alias hole.
+  - C2: ADR-0010 says an exception's text wins.
+  - C3: missing packages and banners that name no package fail.
+  - C4/P1: a legacy plain-string `licenses` counts as declared.
+- **Anytime, low priority:**
+  - the optional Jest JUnit reporter;
+  - M1-S8 C1 (podman action: warn when lingering gives no user bus, record the network backend);
+  - e2e timeout tuning (the slowest run used 18/75, 7/45 and 26/150 min);
+  - a test for the harness-error path when `podman top` fails;
+  - the M1-S2 cache cleanup (about 13 GB per commit) and the T90 note wording;
+  - the M1-S4 nits;
+  - M1-S8 nits C3–C5;
+  - optional: list ADR-0003's three upstream interfaces in the ARCHITECTURE reuse map.
+- **Standing:**
+  - accepted risk A1, the lint-ban bypasses;
+  - the Node 24 trace workaround stays everywhere.
+- **Upstream proposals (the user may file them):**
+  - `joplin sync` exits non-zero when it fails;
+  - the web app's "Joplin Server URL" field loses focus;
+  - the Playwright trace merge hangs on Node 24;
+  - `tkwidgets` has no licence field.
+- **Process:**
+  - P1: QA hands over runner configs before implementation.
+  - P2: keep unrelated decisions out of story commits.
+  - P-R1: test- or docs-only commits use `test`/`chore`/`docs(test-plans)`.
 
 ## Open items for the user
 - EUIPO TMview check for "Notestead" before the first public release (user).
-- Approve the repo rename to `notestead` and the first push when M1-S3/S8 need CI.
+- ~~Approve the repo rename to `notestead` and the first push~~ (done 2026-10-05).
 - Confirm the Docker Hub and npm accounts `thescriptingguy` are yours (before Phase 1 and 2 publishing).
