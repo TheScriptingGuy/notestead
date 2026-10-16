@@ -121,7 +121,7 @@ node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/m1-s6/*.
 ## Out of scope
 - C3, C5 and the `e2eeAccount` seeding gap: see the story line above and STATUS.md.
 - Redacting pixels (screenshots, video, screencast frames): see the residual risks above.
-- x64: PENDING-CI (M1-S8).
+- x64: PENDING-CI (M1-S8). (superseded 2026-10-16: see §x64 (CI))
 
 ## Disputes
 The engineer filed no dispute (`docs/worklog/M1-S6a.md` §Disputes: none). Their worklog lists three deviations from R1 and three known gaps, and QA rules on each here. The evidence is a QA probe of the committed block: ESLint's `Linter` with the TypeScript parser, 28 one-line cases, report counts compared, 28/28 as expected (`test-results/verify/m1-s6a/qa-probe.mjs`, `qa-probe.log`). QA also re-ran the engineer's probe of 42 cases on the committed config: 42/42 (`qa-rerun-se-probe.log`).
