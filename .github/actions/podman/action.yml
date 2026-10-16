@@ -1,0 +1,59 @@
+# Podman for the test harness on a GitHub runner (M1-S8, M1-AC22; docs/test-plans/M1-S8.md §e2e.yml contract).
+# The harness drives `podman` and `podman compose` exactly as on the Pi (tests/stack/stack.ts). The runner images ship
+# podman (4.9 on Ubuntu 24.04) and docker's compose, but `podman compose` would pick docker-compose first and talk to
+# a Docker API socket; instead this installs the Pi's podman-compose 1.3.0 from hash-pinned wheels into a venv and
+# selects it with PODMAN_COMPOSE_PROVIDER, so every container lives in podman.
+# Healthchecks (M1-AC18): rootless podman runs them from transient systemd --user timers. The step below records
+# whether the runner user has a systemd user manager and starts one (lingering) if not, as on the Pi's desktop
+# session. It never changes how the harness waits: if the healthchecks still do not fire, the run fails at the
+# harness's globalSetup naming the service as `starting` (a QA finding, docs/test-plans/M1-S8.md).
+name: podman
+description: Install the pinned podman-compose as podman's compose provider and record the podman setup.
+runs:
+  using: composite
+  steps:
+    - name: Install podman-compose 1.3.0 (hash-pinned wheels) as the compose provider
+      shell: bash
+      env:
+        REQUIREMENTS: ${{ github.action_path }}/requirements.txt
+      run: |
+        set -euo pipefail
+        venv="$RUNNER_TEMP/podman-compose-venv"
+        python3 --version
+        python3 -m venv "$venv"
+        "$venv/bin/pip" install --disable-pip-version-check --no-input --require-hashes --only-binary=:all: --no-deps -r "$REQUIREMENTS"
+        "$venv/bin/podman-compose" --version
+        # podman 4.9 reads it before containers.conf's compose_providers (cmd/podman/compose.go at v4.9.3).
+        echo "PODMAN_COMPOSE_PROVIDER=$venv/bin/podman-compose" >> "$GITHUB_ENV"
+
+    - name: systemd user manager for podman healthcheck timers
+      shell: bash
+      run: |
+        set -uo pipefail
+        user=$(id -un)
+        uid=$(id -u)
+        echo "user=$user uid=$uid XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>} DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-<unset>}"
+        loginctl show-user "$user" -p Linger -p State 2>&1 || true
+        if ! systemctl --user show-environment > /dev/null 2>&1; then
+          echo "No systemd user manager reachable: enabling lingering for $user"
+          sudo loginctl enable-linger "$user"
+          for _ in $(seq 1 60); do
+            [ -S "/run/user/$uid/bus" ] && break
+            sleep 0.5
+          done
+          {
+            echo "XDG_RUNTIME_DIR=/run/user/$uid"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus"
+          } >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"
+        fi
+        echo "systemctl --user is-system-running: $(systemctl --user is-system-running 2>&1 || true)"
+        command -v systemd-run
+
+    - name: Record podman
+      shell: bash
+      run: |
+        set -euo pipefail
+        podman version
+        podman info --format 'cgroupManager={{.Host.CgroupManager}} cgroupVersion={{.Host.CgroupsVersion}} eventLogger={{.Host.EventLogger}} rootless={{.Host.Security.Rootless}} graphDriver={{.Store.GraphDriverName}} runRoot={{.Store.RunRoot}}'
+        podman compose version

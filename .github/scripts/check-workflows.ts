@@ -1,12 +1,14 @@
 // Entry point for `corepack yarn check:workflows [--dir <workflows-dir>]` (M1-AC8, docs/test-plans/M1-S3.md).
 // Runs the pinned actionlint (with the pinned shellcheck, pyflakes off) on every workflow file in the directory, then
-// the repo's own rules (workflowRules.ts) on those workflows and on the composite actions in ../actions/.
+// the repo's own rules (workflowRules.ts) on those workflows, on the composite actions in ../actions/ and on every local
+// action a step uses (`uses: ./<path>`, resolved against the project root, M1-AC32).
 // Exit codes: 0 no findings, 1 findings or a failure, 2 usage error. Run by Node's built-in type stripping.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { readPinnedTools, resolveTool } from './pinnedTools.ts';
-import { checkAction, checkWorkflow, formatFinding } from './workflowRules.ts';
+import { analyzeAction, analyzeWorkflow, formatFinding } from './workflowRules.ts';
+import type { Finding, LocalUse } from './workflowRules.ts';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..');
 const usage = 'usage: corepack yarn check:workflows [--dir <workflows-dir>]  (default: .github/workflows)';
@@ -49,6 +51,47 @@ const isInside = (base: string, path: string): boolean => {
 
 // File paths in findings are relative to `base` (as actionlint, run from `base`, shows them), else absolute.
 const displayFrom = (base: string) => (path: string): string => isInside(base, path) ? relative(base, path) : path;
+
+// The repo rules over the workflows, the composite actions under .github/actions/ and every local action a step uses
+// (M1-AC32). A `uses: ./<path>` resolves to <base>/<path>/action.yml or action.yaml, as GitHub resolves it against the
+// workspace (the checkout); each action file is checked once, and the actions it uses in turn are followed.
+const checkTree = (base: string, workflows: string[], actions: string[], display: (path: string) => string): { findings: Finding[]; actionFiles: number } => {
+	const findings: Finding[] = [];
+	const pending: LocalUse[] = [];
+	const checked = new Map<string, number>();
+	const realBase = realpathSync(base);
+	const checkActionFile = (path: string): number => {
+		const known = checked.get(path);
+		if (known !== undefined) return known;
+		const r = analyzeAction(display(path), readFileSync(path, 'utf8'));
+		checked.set(path, r.findings.length);
+		findings.push(...r.findings);
+		pending.push(...r.localUses);
+		return r.findings.length;
+	};
+	for (const path of workflows) {
+		const r = analyzeWorkflow(display(path), readFileSync(path, 'utf8'));
+		findings.push(...r.findings);
+		pending.push(...r.localUses);
+	}
+	for (const path of actions) checkActionFile(resolve(path));
+	for (let use = pending.shift(); use; use = pending.shift()) {
+		const at = { file: use.file, line: use.line, col: use.col };
+		const dir = resolve(base, use.uses);
+		const candidates = ['action.yml', 'action.yaml'].map(name => join(dir, name)).filter(path => existsSync(path) && statSync(path).isFile());
+		// Inside the project, also after symlinks are followed: a local action is code of this repository.
+		const outside = (dir !== base && !isInside(base, dir)) || candidates.some(path => !isInside(realBase, realpathSync(path)));
+		if (outside) {
+			findings.push({ ...at, message: `${use.where} uses "${use.uses}", which points outside the repository`, rule: 'local-action' });
+		} else if (candidates.length === 0) {
+			findings.push({ ...at, message: `${use.where} uses "${use.uses}", but neither ${display(join(dir, 'action.yml'))} nor action.yaml exists`, rule: 'local-action' });
+		} else {
+			const count = checkActionFile(candidates[0]);
+			if (count > 0) findings.push({ ...at, message: `${use.where} uses "${use.uses}", and ${display(candidates[0])} has ${count} finding(s)`, rule: 'local-action' });
+		}
+	}
+	return { findings, actionFiles: checked.size };
+};
 
 const main = async (argv: string[]): Promise<number> => {
 	const args = parseArgs(argv);
@@ -99,18 +142,15 @@ const main = async (argv: string[]): Promise<number> => {
 		return 1;
 	}
 
-	const findings = [
-		...workflows.flatMap(path => checkWorkflow(display(path), readFileSync(path, 'utf8'))),
-		...actions.flatMap(path => checkAction(display(path), readFileSync(path, 'utf8'))),
-	];
+	const { findings, actionFiles } = checkTree(base, workflows, actions, display);
 	for (const f of findings) out(formatFinding(f));
 
-	const scope = `${workflows.length} workflow file(s) and ${actions.length} composite action(s) in ${dir}`;
+	const scope = `${workflows.length} workflow file(s) and ${actionFiles} action file(s) (under .github/actions/ or used as ./<path>) in ${dir}`;
 	if (lint.status !== 0 || findings.length > 0) {
-		fail(`FAILED for ${scope}: actionlint exit ${lint.status}, ${findings.length} finding(s) from the repo rules [sha-pin] [permissions] [pull-request-target]`);
+		fail(`FAILED for ${scope}: actionlint exit ${lint.status}, ${findings.length} finding(s) from the repo rules [sha-pin] [permissions] [forbidden-trigger] [yaml-alias] [workflow-shape] [local-action]`);
 		return 1;
 	}
-	out(`check:workflows: OK, ${scope}: actionlint clean, every uses pinned, every job declares its permissions`);
+	out(`check:workflows: OK, ${scope}: actionlint clean, every uses pinned, every job declares its permissions, no forbidden trigger, no YAML alias, every local action found`);
 	return 0;
 };
 

@@ -1,0 +1,11 @@
+// M1-S8 lint NEG fixture FU-S6a-1-scheduler (docs/test-plans/M1-S8.md; review M1-S6a-r1 FU-S6a-1): `scheduler.wait`
+// from node:timers/promises is a fixed delay. The line that takes `scheduler` from the timers module is the one
+// `corepack yarn lint` must report (marked NEG), so an alias (`scheduler as s`) cannot slip through.
+import assert from 'node:assert/strict';
+import { scheduler } from 'node:timers/promises'; // NEG
+import { it } from 'node:test';
+
+it('scheduler.wait from timers/promises must be rejected', async () => {
+	await scheduler.wait(100);
+	assert.equal(1 + 1, 2);
+});

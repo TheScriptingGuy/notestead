@@ -85,6 +85,13 @@ jobs:
               --test-reporter=junit --test-reporter-destination=test-results/junit/m1-s2-t90.xml \
               tests/acceptance/m1-s2/optin/ac5-build.optin.mts
 
+      # Headroom evidence for the build (STATUS follow-up): disk and memory right after T90, also when it failed.
+      - name: Disk and memory after T90
+        if: always()
+        run: |
+          df -h / "$RUNNER_TEMP"
+          free -m
+
       - name: SHA256SUMS of the artifact T90 verified
         run: |
           ls -l "$RUNNER_TEMP/web-bundle-out"

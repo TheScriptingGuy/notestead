@@ -9,14 +9,20 @@
 //   errors (message, stack, value, snippet, cause), the stdout/stderr chunks, the step tree;
 // - onEnd: every file under each project's outputDir (for example the original of an attachment added by path);
 // - onExit: the registry file is removed (it must outlive globalSetup's teardown, which Playwright runs before onEnd).
+// Markers for the upload gate (M1-S8 C1-R2, tests/support/uploadGate.ts): onBegin writes `redaction-pending.json` next
+// to each output dir (in its parent: test-results/e2e/ for playwright.config.ts) listing the run's output dirs and
+// report paths, and removes a stale `redaction-complete.json`; onExit, after every reporter's onEnd, writes
+// `redaction-complete.json`. A run killed before that has a pending marker only, and the gate removes its outputs.
 // The worker redacts its stdout/stderr at the source (fixtures.ts `redactStdio`), because `list` prints those chunks
 // live, before any reporter callback could change them.
-import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { FullConfig, Reporter, TestCase, TestError, TestResult, TestStep } from '@playwright/test/reporter';
-import { credentialValues, isZip, looksLikeText, redactBuffer, redactFile, redactText, textViews } from '../../support/redact.ts';
+import { credentialValues, isZip, looksLikeText, redactBuffer, redactFile, redactText, sessionIdsFromTrace, textViews } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { mergeSecrets, readSecretsFile, removeSecretsFile, secretFeedEnabled, secretsFileEnv } from '../../support/secrets.ts';
+import { completeMarker, pendingMarker } from '../../support/uploadGate.ts';
+import { readZip } from '../../support/zip.ts';
 
 const stackSecrets = (): KnownSecret[] => {
 	const raw = process.env.NOTESTEAD_E2E_STACK;
@@ -49,12 +55,33 @@ const filesUnder = (dir: string): string[] => {
 	});
 };
 
+// The files and folders the run's other reporters write (html, junit, json, blob), resolved as Playwright resolves
+// them: relative to the config file's directory.
+const reportPaths = (config: FullConfig): string[] => {
+	const base = config.configFile ? dirname(config.configFile) : process.cwd();
+	const out: string[] = [];
+	for (const entry of config.reporter ?? []) {
+		const [name, options] = (Array.isArray(entry) ? entry : [entry, undefined]) as [string, Record<string, unknown> | undefined];
+		const opt = (key: string): string | undefined => (typeof options?.[key] === 'string' ? options[key] as string : undefined);
+		if (name === 'html') out.push(resolve(base, opt('outputFolder') ?? 'playwright-report'));
+		else if (name === 'blob') out.push(resolve(base, opt('outputDir') ?? 'blob-report'));
+		else if (name === 'junit' || name === 'json') {
+			const file = opt('outputFile');
+			if (file) out.push(resolve(base, file));
+		}
+	}
+	return out;
+};
+
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 export default class RedactingReporter implements Reporter {
 	private known: KnownSecret[] = [];
 	private fileSize = -1;
 	private outputDirs: string[] = [];
+	private markerDirs: string[] = [];
+	private ended = false;
+	private redactedFiles = 0;
 	// The registry file of this run (globalSetup, in this same runner process, sets it before any test starts).
 	private secretsFile(): string | undefined {
 		return process.env[secretsFileEnv];
@@ -113,6 +140,13 @@ export default class RedactingReporter implements Reporter {
 	// A v1 reporter gets the config here (Playwright's v2 wrapper does not forward onConfigure).
 	public onBegin(config: FullConfig): void {
 		this.outputDirs = [...new Set(config.projects.map(p => p.outputDir))];
+		this.markerDirs = [...new Set(this.outputDirs.map(d => dirname(d)))];
+		const paths = [...this.outputDirs, ...reportPaths(config)];
+		for (const dir of this.markerDirs) {
+			mkdirSync(dir, { recursive: true });
+			rmSync(join(dir, completeMarker), { force: true });
+			writeFileSync(join(dir, pendingMarker), `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), paths }, null, 2)}\n`);
+		}
 	}
 
 	public onStepBegin(_test: TestCase, _result: TestResult, step: TestStep): void {
@@ -124,7 +158,8 @@ export default class RedactingReporter implements Reporter {
 	}
 
 	// Credentials the browser obtained itself (a session id sent as X-API-AUTH) are known to no registry: they are
-	// learnt from the request headers in each trace's network log, before anything is redacted, and from then on
+	// learnt from the request headers in each trace's network log and from the bodies of its …/api/sessions responses
+	// (M1-S8 C1-R1b), before anything is redacted, and from then on
 	// redacted like a registered secret, in every entry, attachment and output file (M1-S7 F3, C1-R1). Part of the
 	// secret feed, so the self-tests' negative control (feed off) still sees them.
 	private learnFromTraces(attachments: { path?: string; body?: Buffer }[]): void {
@@ -142,6 +177,8 @@ export default class RedactingReporter implements Reporter {
 				for (const view of textViews('trace', data)) {
 					for (const value of credentialValues(view.text)) learnt.push({ label: 'credential_header_value', value });
 				}
+				// Session ids the server returned in a login response body, sent later or not (M1-S8 C1-R1b).
+				for (const value of sessionIdsFromTrace(readZip(data))) learnt.push({ label: 'session_id', value });
 			} catch {
 				// an unreadable zip is dropped by the redaction below
 			}
@@ -178,16 +215,23 @@ export default class RedactingReporter implements Reporter {
 			for (const file of filesUnder(dir)) {
 				try {
 					redactFile(file, secrets);
+					this.redactedFiles++;
 				} catch (error) {
 					process.stderr.write(`redacting reporter: removing a file it could not redact (${(error as Error).message})\n`);
 					rmSync(file, { force: true });
 				}
 			}
 		}
+		this.ended = true;
 	}
 
+	// After every reporter's onEnd (the HTML, JUnit and JSON reports are written): the run's redaction is complete.
 	public async onExit(): Promise<void> {
 		removeSecretsFile(this.secretsFile());
+		if (!this.ended) return;
+		for (const dir of this.markerDirs) {
+			writeFileSync(join(dir, completeMarker), `${JSON.stringify({ complete: true, finishedAt: new Date().toISOString(), redactedFiles: this.redactedFiles }, null, 2)}\n`);
+		}
 	}
 
 	public printsToStdio(): boolean {

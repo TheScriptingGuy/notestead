@@ -1,6 +1,7 @@
 // M1-AC8: `corepack yarn check:workflows [--dir <workflows-dir>]` runs the pinned actionlint plus the repo's pipeline
-// security rules (sha-pin, permissions, pull-request-target) over the workflows, and the repository's own
-// `.github/workflows/*.yml` pass. Test plan: docs/test-plans/M1-S3.md (§Command contract).
+// security rules (sha-pin, permissions, and since M1-S8 forbidden-trigger, which replaces pull-request-target) over the
+// workflows, and the repository's own `.github/workflows/*.yml` pass. Test plan: docs/test-plans/M1-S3.md (§Command
+// contract); the M1-S8 hardening (M1-AC30 to M1-AC33) is in docs/test-plans/M1-S8.md and tests/acceptance/m1-s8/.
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -52,7 +53,7 @@ describe('M1-AC8 fixtures (harness self-checks)', () => {
 			assert.equal(readText(caseFixture(c)), applyEdits(valid, c.edits, c.file), `${c.file} must equal the valid fixture with its declared edits`);
 		}
 		assert.ok(workflowCases.some(c => c.file === acNegCase && c.needles.includes('actions/checkout@v7')), 'the M1-AC8 NEG case (actions/checkout@v7) exists');
-		for (const rule of ['[sha-pin]', '[permissions]', '[pull-request-target]', '[job-needs]']) {
+		for (const rule of ['[sha-pin]', '[permissions]', '[forbidden-trigger]', '[job-needs]']) {
 			assert.ok(workflowCases.some(c => c.needles.includes(rule)), `a case expects ${rule}`);
 		}
 		// The independent pin scanner used by T11 agrees with the fixtures (so T11 cannot pass by accident).

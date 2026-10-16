@@ -4,7 +4,8 @@
 //   node tests/stack/cli.ts down <project>
 // Images come from NOTESTEAD_WEB_IMAGE / NOTESTEAD_HEADLESS_IMAGE / NOTESTEAD_DEVICE_IMAGE or are built (images.ts).
 // Throwaway values only: the stack is a test fixture, never the user's server.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readDescriptorFile } from './descriptors.ts';
 import { descriptorPath, downStack, newStack, upCore, upDefault } from './stack.ts';
 import type { StackState } from './stack.ts';
 
@@ -26,7 +27,7 @@ const main = async (): Promise<void> => {
 	} else if (command === 'down' && project) {
 		const file = descriptorPath(project);
 		if (!existsSync(file)) throw new Error(`no stack descriptor ${file}`);
-		downStack({ ...JSON.parse(readFileSync(file, 'utf8')) as StackState, owned: true });
+		downStack({ ...JSON.parse(readDescriptorFile(file)) as StackState, owned: true });
 	} else {
 		throw new Error('usage: node tests/stack/cli.ts up | down <project>');
 	}

@@ -1,0 +1,10 @@
+// M1-S8 lint NEG fixture FU-S6a-1-require (docs/test-plans/M1-S8.md; review M1-S6a-r1 FU-S6a-1): setTimeout taken
+// from `require('node:timers')` by member access. `corepack yarn lint` must report the line marked NEG.
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint NEG', () => {
+	test('a setTimeout taken from require(timers) must be rejected', async () => {
+		await new Promise(resolve => require('node:timers').setTimeout(resolve, 5)); // NEG
+		expect(1 + 1).toBe(2);
+	});
+});

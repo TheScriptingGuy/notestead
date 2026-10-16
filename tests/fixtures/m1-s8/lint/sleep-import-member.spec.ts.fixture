@@ -1,0 +1,8 @@
+// M1-S8 lint NEG fixture FU-S6a-1-import (docs/test-plans/M1-S8.md; review M1-S6a-r1 FU-S6a-1): setTimeout taken from
+// a dynamic `import('node:timers/promises')` by member access. `corepack yarn lint` must report the line marked NEG.
+import { expect, test } from '@playwright/test';
+
+test('a setTimeout taken from import(timers/promises) must be rejected', async ({ page }) => {
+	await (await import('node:timers/promises')).setTimeout(250); // NEG
+	await expect(page).toHaveTitle('');
+});

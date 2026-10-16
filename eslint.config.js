@@ -1,8 +1,8 @@
 // ESLint flat config (ADR-0009), modelled on upstream Joplin's eslint.config.js: the same parser and plugins
 // (@typescript-eslint, @stylistic, jest) and the same style (tabs, single quotes, semicolons, trailing commas).
 // Added for this project's test rules (ADR-0007/0009): no focused or skipped tests (Jest and Playwright) and no fixed
-// sleeps (`waitForTimeout`, setTimeout/setInterval used as a value). `corepack yarn lint` runs this config, then
-// `tsc --noEmit`.
+// sleeps (`waitForTimeout`, setTimeout/setInterval used as a value, the timers modules loaded by require()/import(),
+// `scheduler` from timers/promises, `Atomics.wait`). `corepack yarn lint` runs this config, then `tsc --noEmit`.
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
@@ -26,9 +26,36 @@ const noWaitForTimeout = {
 	message: 'No fixed sleeps: wait for a condition (expect.poll, waitFor, a readiness probe) instead of waitForTimeout.',
 };
 const noSleepMessage = 'No fixed sleeps in tests (ADR-0007): wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead of a setTimeout/setInterval-based delay.';
-// `setTimeout` and `setInterval` imported under any name from the timers modules. A namespace import and a default
-// import (both the whole module object) are reported too.
+// `setTimeout`, `setInterval` and `scheduler` (`scheduler.wait`) imported under any name from the timers modules. A
+// namespace import and a default import (both the whole module object) are reported too.
 const timersModules = ['timers/promises', 'node:timers/promises', 'timers', 'node:timers'];
+const timersImportNames = ['setTimeout', 'setInterval', 'scheduler', 'default'];
+// The same modules loaded at run time, by `require(…)` or `import(…)`, as an esquery regex (esquery regexes cannot
+// contain '/', so '.' stands for it). Tests have no use for them that a static import would not give (and
+// no-restricted-imports checks the names of a static import), so the call is reported whatever is done with its result:
+// member access (`require('node:timers').setTimeout`, `(await import('node:timers/promises')).setTimeout`), an alias
+// or destructuring.
+const timersModuleName = '/^(node:)?timers(.promises)?$/';
+const timersModuleMessage = 'No fixed sleeps in tests (ADR-0007): do not load the timers modules with require() or import(); wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead.';
+const timersModuleArgument = [
+	`Literal[value=${timersModuleName}]`,
+	`TemplateLiteral[expressions.length=0][quasis.0.value.cooked=${timersModuleName}]`,
+];
+const timersModuleSelectors = timersModuleArgument.flatMap(argument => [
+	`CallExpression[callee.type="Identifier"][callee.name="require"] > ${argument}.arguments`,
+	`ImportExpression > ${argument}.source`,
+]);
+// `Atomics.wait` blocks the thread until its timeout, a fixed sleep (review M1-S6a-r1 C2-R5). Reported wherever it is
+// taken: dotted or computed with a string key, on `Atomics` or on a global object's `Atomics`, or destructured from
+// `Atomics`. `Atomics.waitAsync` stays under the review's accepted risk A1; the other Atomics operations do not wait.
+const atomicsMessage = 'No fixed sleeps in tests (ADR-0007): Atomics.wait blocks the thread for its timeout; wait for a condition with waitFor (tests/support/poll.ts) or expect.poll instead.';
+const atomicsWaitSelectors = [
+	'MemberExpression[computed=false][object.name="Atomics"] > Identifier.property[name="wait"]',
+	'MemberExpression[computed=false][object.property.name="Atomics"] > Identifier.property[name="wait"]',
+	'MemberExpression[computed=true][object.name="Atomics"] > Literal.property[value="wait"]',
+	'MemberExpression[computed=true][object.property.name="Atomics"] > Literal.property[value="wait"]',
+	'VariableDeclarator[init.name="Atomics"] > ObjectPattern > Property > Identifier.key[name="wait"]',
+];
 // The banned timer names (esquery regexes) and the global objects that carry them.
 const timerName = '/^set(Timeout|Interval)$/';
 const timerGlobal = '/^(globalThis|global|window|self)$/';
@@ -242,10 +269,16 @@ export default defineConfig([
 		rules: {
 			// The global setTimeout/setInterval used as a value in any form (calls, `promisify`, aliases, destructuring,
 			// global member access). Deadlines such as `req.setTimeout(ms, cb)` and `test.setTimeout(ms)`, spies
-			// (`jest.spyOn(globalThis, 'setTimeout')`), type positions and option keys are not matched.
-			'no-restricted-syntax': ['error', noWaitForTimeout, ...sleepValueSelectors.map(selector => ({ selector, message: noSleepMessage }))],
+			// (`jest.spyOn(globalThis, 'setTimeout')`), type positions and option keys are not matched. Also the timers
+			// modules loaded by require()/import(), and Atomics.wait.
+			'no-restricted-syntax': ['error',
+				noWaitForTimeout,
+				...sleepValueSelectors.map(selector => ({ selector, message: noSleepMessage })),
+				...timersModuleSelectors.map(selector => ({ selector, message: timersModuleMessage })),
+				...atomicsWaitSelectors.map(selector => ({ selector, message: atomicsMessage })),
+			],
 			'no-restricted-imports': ['error', {
-				paths: timersModules.map(name => ({ name, importNames: ['setTimeout', 'setInterval', 'default'], message: noSleepMessage })),
+				paths: timersModules.map(name => ({ name, importNames: timersImportNames, message: noSleepMessage })),
 			}],
 		},
 	},

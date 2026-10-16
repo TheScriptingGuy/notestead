@@ -1,0 +1,15 @@
+// M1-S8 lint positive control (docs/test-plans/M1-S8.md, FU-S6a-1): `require` and `import()` of other modules with
+// member access, and the Atomics operations that do not wait, are not sleeps, so `corepack yarn lint` must report
+// nothing in this file.
+import { describe, expect, test } from '@jest/globals';
+
+describe('lint positive control (M1-S8)', () => {
+	test('require and import() of other modules, and Atomics without wait, are allowed', async () => {
+		const exists = require('node:fs').existsSync('/');
+		const joined = (await import('node:path')).join('a', 'b');
+		const view = new Int32Array(new SharedArrayBuffer(4));
+		Atomics.store(view, 0, 1);
+		Atomics.notify(view, 0, 1);
+		expect({ exists, joined, value: Atomics.load(view, 0) }).toEqual({ exists: true, joined: 'a/b', value: 1 });
+	});
+});

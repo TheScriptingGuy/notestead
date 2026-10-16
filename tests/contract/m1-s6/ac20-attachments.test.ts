@@ -3,7 +3,8 @@
 // value; the 502 path's error entry is in the attached web log without any of its marker values.
 // The inner test is tests/harness/selftest/attachments.spec.ts. docs/test-plans/M1-S6.md.
 import { beforeAll, describe, expect, test } from '@jest/globals';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findLeaks, textViews } from '../../support/redact.ts';
 import type { KnownSecret, Leak } from '../../support/redact.ts';
@@ -33,12 +34,15 @@ describe('M1-AC20 log attachments of a failing test', () => {
 	beforeAll(() => {
 		const images = stackImagesEnv();
 		const before = snapshot();
-		run = runSelftest('ac20', 'selftest/attachments.spec.ts', images);
+		// The planted values stay outside test-results/, which CI uploads (M1-S8 C5).
+		const plantedDir = mkdtempSync(join(tmpdir(), 'nst-ac20-planted-'));
+		const file = join(plantedDir, 'planted.json');
+		run = runSelftest('ac20', 'selftest/attachments.spec.ts', { ...images, NST_SELFTEST_PLANTED: file });
 		const after = snapshot();
 		leftovers = (['containers', 'networks', 'volumes', 'pods'] as const).flatMap(k => after[k].filter(n => !before[k].includes(n)).map(n => `${k}: ${n}`));
 		result = allSpecs(run.report?.suites ?? [])[0]?.tests[0]?.results[0];
-		const file = join(run.out, 'planted.json');
 		if (existsSync(file)) planted = JSON.parse(readFileSync(file, 'utf8')) as Planted;
+		rmSync(plantedDir, { recursive: true, force: true });
 	}, 40 * minute);
 
 	const attachment = (pattern: RegExp): PwAttachment => {
@@ -111,12 +115,12 @@ describe('M1-AC20 log attachments of a failing test', () => {
 		const leaks: Leak[] = [];
 		const seen = new Set<string>();
 		// Every attachment of the report, and every file the run wrote (output dir, stack logs, console log, the HTML and
-		// JUnit reports), except the self-test's own planted.json and html/trace/ (Playwright's trace viewer app, copied
+		// JUnit reports), except html/trace/ (Playwright's trace viewer app, copied
 		// verbatim into every HTML report; the report's data is html/data/ and is scanned).
 		const out = run?.out ?? '.';
 		const sources: { where: string; data: Buffer }[] = [
 			...(result?.attachments ?? []).map(a => ({ where: `attachment ${a.name}`, data: content(a) })),
-			...filesUnder(out).filter(f => !f.endsWith('planted.json') && !f.startsWith(join(out, 'html', 'trace'))).map(f => ({ where: f, data: readFileSync(f) })),
+			...filesUnder(out).filter(f => !f.startsWith(join(out, 'html', 'trace'))).map(f => ({ where: f, data: readFileSync(f) })),
 		];
 		for (const source of sources) {
 			for (const view of textViews(source.where, source.data)) {

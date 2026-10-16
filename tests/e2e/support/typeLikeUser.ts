@@ -6,7 +6,8 @@
 // `<input type="password">`; after the last key it must still be one (a show-password toggle would have unmasked it).
 // Otherwise the helper throws SecretInVisibleFieldError and no key is pressed. A text is a secret when the caller says
 // so (`secret: true`) or when it contains any secret the harness knows (tests/support/secrets.ts: the registry of this
-// process, the run's registry file, and the stack's accounts).
+// process, the run's registry file, and the stack's accounts). A text marked secret that no registry knows is
+// registered (label `typed_secret`) before the first key, so the redacting reporter knows it too (M1-S8 C1-R1a).
 //
 // Focus loss. Upstream's sync settings re-render the "Joplin Server URL" field after its first change (the "Attention:
 // If you change this location…" notice appears), and the field loses focus, so the keys after that go nowhere
@@ -16,7 +17,7 @@
 import type { Locator } from '@playwright/test';
 import { waitFor } from '../../support/poll.ts';
 import type { KnownSecret } from '../../support/redact.ts';
-import { mergeSecrets, readSecretsFile, registeredSecrets, secretsFileEnv } from '../../support/secrets.ts';
+import { mergeSecrets, readSecretsFile, registerSecrets, registeredSecrets, secretsFileEnv } from '../../support/secrets.ts';
 
 export class SecretInVisibleFieldError extends Error {}
 
@@ -64,6 +65,9 @@ export const typeLikeUser = async (field: Locator, text: string, opts: TypeOptio
 	const timeoutMs = opts.timeoutMs ?? 30_000;
 	const label = secretIn(text, opts.secrets ?? knownSecretsNow());
 	if (opts.secret || label) {
+		// A marked secret that no registry knows is registered first (M1-S8 C1-R1a): Playwright records the typed text
+		// in the trace's action and in the report's step title, and the redacting reporter only removes known values.
+		if (!label) registerSecrets([{ label: 'typed_secret', value: text }]);
 		const what = `a secret (${label ? `[${label}]` : 'marked secret'})`;
 		await requireMasked(field, what, 'before typing');
 		await field.click();

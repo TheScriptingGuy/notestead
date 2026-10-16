@@ -1,0 +1,11 @@
+// M1-S8 lint positive control (docs/test-plans/M1-S8.md, FU-S6a-1): non-test source of a workspace package may use
+// every form the test ban covers (the ban is for tests only, ADR-0007), so `corepack yarn lint` must report nothing in
+// this file.
+import { scheduler } from 'node:timers/promises';
+
+export const later = (ms: number): Promise<void> => new Promise(resolve => require('node:timers').setTimeout(resolve, ms));
+export const pause = async (ms: number): Promise<void> => {
+	await (await import('node:timers/promises')).setTimeout(ms);
+};
+export const wait = (ms: number): Promise<void> => scheduler.wait(ms);
+export const block = (ms: number): string => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

@@ -2,9 +2,11 @@
 // docs/test-plans/M1-S7.md, C1-R1 layer "unit"). A hand-written fake Locator records every call, so each test can
 // prove that no key was pressed when the helper refuses. The real-DOM counterpart is tests/e2e/harness/type-like-user.spec.ts.
 import { describe, expect, test } from '@jest/globals';
+import { randomBytes } from 'node:crypto';
 import type { Locator } from '@playwright/test';
 import { SecretInVisibleFieldError, secretIn, typeLikeUser } from '../../e2e/support/typeLikeUser.ts';
 import type { KnownSecret } from '../../support/redact.ts';
+import { registeredSecrets } from '../../support/secrets.ts';
 
 interface FakeOptions {
 	type: string | null;
@@ -108,6 +110,23 @@ describe('typeLikeUser', () => {
 			const fake = fakeField({ type: 'password', accept: t => ({ keep: t.slice(0, 1), loseFocus: true }) });
 			await expect(typeLikeUser(fake.field, secret.value, quick)).rejects.toThrow(/all 34 typed characters/);
 			expect(keys(fake).filter(c => c.startsWith('pressSequentially'))).toHaveLength(1);
+		});
+
+		// M1-S8 C1-R1a (review M1-S7-r1): a text marked secret that no registry knows would reach the trace's typing action
+		// and the report's step title in clear, because the redacting reporter only knows registered values.
+		test('c1r1a-unit-8 a text marked secret that no registry knows is registered (label typed_secret) before the first key', async () => {
+			const text = `unregistered-${randomBytes(8).toString('hex')}`;
+			let registeredAtFirstKey: boolean | undefined;
+			const fake = fakeField({
+				type: 'password',
+				accept: t => {
+					registeredAtFirstKey ??= registeredSecrets().some(s => s.value === text);
+					return { keep: t };
+				},
+			});
+			await typeLikeUser(fake.field, text, { ...quick, secrets: [], secret: true });
+			const entry = registeredSecrets().find(s => s.value === text);
+			expect({ atFirstKey: registeredAtFirstKey, label: entry?.label }).toEqual({ atFirstKey: true, label: 'typed_secret' });
 		});
 
 		test('c1r1-unit-7 values shorter than 6 characters are never treated as secrets', () => {

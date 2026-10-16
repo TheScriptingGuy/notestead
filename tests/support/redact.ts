@@ -4,6 +4,7 @@
 // secret value the harness knows (passwords, the Data API token) are replaced. Shared by Jest and Playwright.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readZip, writeZip } from './zip.ts';
+import type { ZipEntry } from './zip.ts';
 
 export const redacted = '[REDACTED]';
 
@@ -20,7 +21,10 @@ export interface KnownSecret {
 const headerAlternation = credentialHeaders.map(h => h.replace(/-/g, '[-_]')).join('|');
 // `Name: value`, `"Name": "value"`, `"Name":["value"]` (Caddy's JSON log), `Name=value`. The value runs to the end of
 // the line, a quote, a closing bracket or a comma.
-const headerPattern = new RegExp(`\\b(${headerAlternation})(["']?\\s*[:=]\\s*\\[?\\s*["']?)(?!\\[REDACTED\\]|REDACTED\\b)([^"'\\r\\n,\\]}]+)`, 'gi');
+// The value never starts with whitespace, a quote or `[`: otherwise the separator would backtrack over the space or the
+// bracket of an already redacted value (`X-API-AUTH: [REDACTED]` → `X-API-AUTH:[REDACTED]]`) and redaction would not
+// be idempotent (M1-S8 F4).
+const headerPattern = new RegExp(`\\b(${headerAlternation})(["']?\\s*[:=]\\s*\\[?\\s*["']?)(?![\\s"'[]|REDACTED\\b)([^"'\\r\\n,\\]}]+)`, 'gi');
 const tokenPattern = /([?&]token=)(?!\[REDACTED\]|REDACTED\b)[^&\s"'#<>\\]+/gi;
 
 export const redactText = (text: string, secrets: KnownSecret[] = []): string => {
@@ -40,6 +44,11 @@ const isCredentialHeader = (name: unknown): boolean => typeof name === 'string' 
 // `{name, value}` pairs whose value is secret: credential headers, and the `token` query parameter (HAR's queryString).
 const isSecretPair = (name: unknown): boolean => isCredentialHeader(name) || (typeof name === 'string' && name.toLowerCase() === 'token');
 
+const isRedactedValue = (v: unknown): boolean => {
+	const one = (x: unknown): boolean => typeof x === 'string' && /^\[?REDACTED\]?$/.test(x.trim());
+	return Array.isArray(v) ? v.length > 0 && v.every(one) : one(v);
+};
+
 // Walks a parsed JSON value: `{name, value}` header pairs and header maps keyed by a credential header name get their
 // value replaced; every other string goes through redactText.
 export const redactJson = (value: unknown, secrets: KnownSecret[] = []): unknown => {
@@ -50,10 +59,12 @@ export const redactJson = (value: unknown, secrets: KnownSecret[] = []): unknown
 		const out: Record<string, unknown> = {};
 		const pair = isSecretPair(record.name) && 'value' in record;
 		for (const [key, v] of Object.entries(record)) {
-			if (pair && key === 'value') out[key] = redacted;
-			else if (isCredentialHeader(key)) out[key] = Array.isArray(v) ? v.map(() => redacted) : redacted;
-			// HAR cookies: [{name, value}] (request and response)
-			else if (key === 'cookies' && Array.isArray(v)) out[key] = v.map(c => (c !== null && typeof c === 'object' ? { ...(c as Record<string, unknown>), value: redacted } : redacted));
+			// A value that is already redacted (Caddy writes "X-Api-Auth": ["REDACTED"]) is kept as it is (M1-S8 F3). HAR
+			// cookies ([{name, value}], request and response) are redacted value by value.
+			if ((pair && key === 'value') || isCredentialHeader(key)) {
+				if (isRedactedValue(v)) out[key] = v;
+				else out[key] = pair && key === 'value' ? redacted : Array.isArray(v) ? v.map(() => redacted) : redacted;
+			} else if (key === 'cookies' && Array.isArray(v)) out[key] = v.map(c => (c !== null && typeof c === 'object' ? { ...(c as Record<string, unknown>), value: redacted } : redacted));
 			else out[key] = redactJson(v, secrets);
 		}
 		return out;
@@ -144,6 +155,45 @@ export const credentialValues = (text: string): string[] => {
 	for (const line of text.split('\n')) {
 		const t = line.trim();
 		if (t.startsWith('{') && t.endsWith('}')) parse(t);
+	}
+	return [...out];
+};
+
+// The session ids the Joplin Server returned to the browser, from a Playwright trace's entries: the `id` of every
+// …/api/sessions response body (M1-S8 C1-R1b). A `.network` entry names its response body resource
+// (`snapshot.response.content._sha1`, stored as `resources/<sha1>`). A session id the app received but never sent (it
+// failed or logged in again before its next request) is in no header, so credentialValues cannot see it.
+export const sessionIdsFromTrace = (entries: ZipEntry[]): string[] => {
+	const byName = new Map(entries.map(e => [e.name, e.data]));
+	const out = new Set<string>();
+	for (const entry of entries.filter(e => e.name.endsWith('.network'))) {
+		for (const line of entry.data.toString('utf8').split('\n')) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			const snapshot = (parsed as { snapshot?: { request?: { url?: unknown }; response?: { content?: { _sha1?: unknown } } } } | null)?.snapshot;
+			const url = snapshot?.request?.url;
+			const sha1 = snapshot?.response?.content?._sha1;
+			if (typeof url !== 'string' || typeof sha1 !== 'string') continue;
+			let path: string;
+			try {
+				path = new URL(url).pathname;
+			} catch {
+				continue;
+			}
+			if (!/\/api\/sessions\/?$/.test(path)) continue;
+			const body = byName.get(`resources/${sha1}`);
+			if (!body) continue;
+			try {
+				const id = (JSON.parse(body.toString('utf8')) as { id?: unknown } | null)?.id;
+				if (typeof id === 'string' && id.length >= 6) out.add(id);
+			} catch {
+				// not a JSON body (an error page): no session was created
+			}
+		}
 	}
 	return [...out];
 };
