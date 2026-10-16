@@ -69,7 +69,9 @@ export interface Web {
 // ADR-0006 hardening. No --user and no command: the image's own defaults are under test.
 export const hardening = ['--read-only', '--tmpfs', '/tmp', '--cap-drop=ALL', '--security-opt', 'no-new-privileges', '--memory', '128m'];
 
-export const startWeb = async (stack: Stack, { role, host, env, caddyfile }: { role: string; host: number; env: WebEnv; caddyfile?: string }): Promise<Web> => {
+// `extraArgs` exists for negative controls only (for example `--user 0:0` in `ac12-s7-neg`); the positive tests
+// run the image's own defaults.
+export const startWeb = async (stack: Stack, { role, host, env, caddyfile, extraArgs = [] }: { role: string; host: number; env: WebEnv; caddyfile?: string; extraArgs?: string[] }): Promise<Web> => {
 	const { image } = webImageInfo();
 	const name = startContainer(stack, {
 		role,
@@ -77,7 +79,7 @@ export const startWeb = async (stack: Stack, { role, host, env, caddyfile }: { r
 		image,
 		publish: [8080, 8089],
 		env: { ...env },
-		args: hardening,
+		args: [...hardening, ...extraArgs],
 		volumes: caddyfile ? [`${caddyfile}:/etc/caddy/Caddyfile:ro,Z`] : [],
 	});
 	const web = { name, ip: ipOf(stack, host), port: hostPort(name, 8080), internalPort: hostPort(name, 8089) };
