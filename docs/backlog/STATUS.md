@@ -8,8 +8,8 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | close-out review r2 | Stories S1–S9 and S6a merged, each approved in review (S2 in r3, the rest in r1). Every acceptance criterion passes on arm64 and x64 (`e2e.yml` 38881804121, `ci.yml` 38881804157). Close-out: r1 CHANGES_REQUESTED (documentation only), fixed; r2 pending |
-| M2 Web app | not started | |
+| M1 Walking skeleton + test harness | **done 2026-10-16** | Stories S1–S9 and S6a merged, each approved in review (S2 in r3, the rest in r1). Every acceptance criterion passes on arm64 and x64 (`e2e.yml` 38881804121, `ci.yml` 38881804157). Close-out `docs/reviews/M1-closeout-r2.md` APPROVE r2; tag `m1-done` |
+| M2 Web app | in progress | next: M2-S1 (sync through the proxy and E2EE unlock) |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
 | M5 Release | not started | |
@@ -43,7 +43,7 @@ The orchestrator (main Claude session) maintains this file.
 - 2026-10-04 **MCP exposure (L17):** the user chose to **publish MCP through the Cloudflare Tunnel behind Cloudflare Access plus the bearer token**. They accept that Cloudflare can read the decrypted note content MCP returns, so cloud clients such as claude.ai connectors can reach it. This replaces the earlier default (Q7). The architect records it in ARCHITECTURE §14 and the M4/M5 acceptance criteria. The product default for other users stays opt-in.
 
 ## CI verification
-- **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8.
+- **Closed 2026-10-05:** QA verified the first CI run (head `dc515fa`; recorded in `d550c16`) against V1–V8.
 - **Closed 2026-10-16:** QA verified `e2e.yml` run 38881804121 and `ci.yml` run 38881804157 (head `4dc0cf5`) against X1–X9. Every M1 acceptance criterion now passes on arm64 (Pi) and x64 (CI), recorded per story in `docs/test-plans/M1-S*.md`. The lead checked the evidence in `docs/reviews/M1-closeout-r1.md`. Evidence is in `~/joplin-web-app-work/ci-evidence/<run-id>/`.
 - **Watch item W1:** the headless restart and sync are slow on x64 (the E2E step took 9.9 min against 6.6 min on arm64; the slowest test used 294 of its 600 s). If an x64 run gets within 20% of a timeout, profile the restart.
 
@@ -61,7 +61,7 @@ Done in M1 (detail in the reviews and test plans):
 
 Open, grouped by when they are due, following the classification in `docs/reviews/M1-closeout-r1.md`:
 - **M2-S1 QA (the next harness change):**
-  - Since ADR-0007's serial rule, CI's Playwright runs with more than one worker. Any spec that stops, restarts or reconfigures a shared service needs a serial project or its own containers.
+  - CI's Playwright already runs more than one worker, so ADR-0007's serial rule applies: any spec that stops, restarts or reconfigures a shared service needs a serial project or its own containers.
   - M1-S8 C2: `ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values; CI logs of a public repo are public.
   - Nits: C-N1 (the password-input guard checks the element), C-N3 (warn when a spec uses Playwright's own `page`), C1-R4 (`html/trace/` checked against the viewer files), C2-R5 (strategy wording).
 - **M2-S2/S3:**
