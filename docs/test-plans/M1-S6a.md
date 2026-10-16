@@ -287,3 +287,5 @@ These results are for branch `feat/M1-S6a-harness-hardening` at `e1c910c`: QA's 
 | **C2** | `C2-T01`…`C2-T03-*` (10) | **PASS 10/10**, the 236 x64 acceptance testcases have 0 failures | [38874722176](https://github.com/TheScriptingGuy/notestead/actions/runs/38874722176), `acceptance-X64.xml` |
 
 The same contract tests also passed on `ubuntu-24.04-arm`. The `c1-pertest-secrets` and `c4-sweep` test code and the product didn't change between `cf053b4` and `4dc0cf5`. [38881804121](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804121) at `4dc0cf5` ran the contract layer green on x64, and `ci.yml` [38881804157](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804157) succeeded on both runners. **QA sign-off x64: YES** for C1, C2 and C4.
+
+**Per-test confirmation at `4dc0cf5`** (2026-10-16): in [38881804121](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804121), `contract/jest-results.json` shows the same tests passed per test on `ubuntu-24.04` and `ubuntu-24.04-arm`: 16/16 (C1 11, C4 5), one invocation each, in a run of 87/87 (M1-S8 §Second CI run).
