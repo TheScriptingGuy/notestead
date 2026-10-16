@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); **M1-S8 merged** (CI E2E on both architectures, APPROVE r1, `bc973ab`); next: verify the first `e2e.yml` run (X1–X9), then M1 close-out |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); **M1-S8 merged** (CI E2E on both architectures, APPROVE r1, `bc973ab`); first `e2e.yml` run 38874722165 green except `ac12-s7` (podman 4.9 `top uid`), fixed in `fix/M1-S8-ac12-podman49` (APPROVE r1); next: re-verify X1/X3/X4 on the next run, then M1 close-out |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -132,6 +132,10 @@ The orchestrator (main Claude session) maintains this file.
     - `ci.yml` green on x64 with the new binary hashes.
 
     Fixes go on `fix/M1-S8-<slug>`. If Docker Hub limits bite, a mirror or authenticated pulls needs the user's approval and must not be exposed to fork pull requests.
+  - **Run 38874722165 results:** X2 and X5–X9 PASS. X1/X3/X4 failed on `ac12-s7` only; re-verify them on the run after the fix. That run should show 87 contract tests. Also correct X6 to 17 controls (14 NEG + 3 positive) and say how they are counted.
+  - **Fix-review nits (`docs/reviews/M1-S8-fix-ac12-r1.md`):** use `docs(test-plans)` for commits that only record results. Optionally, test the harness-error path when `podman top` fails.
+  - **Senior engineer (M5):** the web-bundle tarball is not byte-reproducible (tar metadata). The contents and manifest are identical.
+  - **Optional:** the e2e timeouts are generous. The slowest steps used 18/75 min (contract), 7/45 min (E2E) and 26/150 min (job).
   - **C1 (ci-cd, minor):** `.github/actions/podman/action.yml:37-49` should fail or warn when lingering produces no user bus, and record the podman network backend.
   - **C2 (QA, minor):** `tests/contract/m1-s6/ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values (like `c1r1`), and optionally add the harness password pattern to the gate.
   - **P1 (process):** `79546b0 fix(web)` is shellcheck-only and repeats P-R1. Add it to the release-please `bootstrap-sha`/`exclude-paths` at M5-S3.
