@@ -4,11 +4,12 @@
 // No Joplin Server is needed: the proxy upstream points at an unused address.
 // Test plan: docs/test-plans/M1-S4.md.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { userInfo } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { gunzipSync, zstdDecompressSync } from 'node:zlib';
 import { cacheableBy, cacheDirectives, headerValue, request } from '../support/http.ts';
 import type { HttpResponse } from '../support/http.ts';
-import { createStack, ipOf, podman, teardownStack, webImageInfo } from '../support/podman.ts';
+import { createStack, ipOf, podman, redact, teardownStack, webImageInfo } from '../support/podman.ts';
 import type { Stack } from '../support/podman.ts';
 import { startWeb, webEnvFor } from '../support/services.ts';
 import type { Web } from '../support/services.ts';
@@ -32,6 +33,40 @@ const expectNoCacheNoTransform = (res: HttpResponse, what: string): void => {
 	expect({ what, noCache: directives.has('no-cache'), noTransform: directives.has('no-transform'), cacheable: cacheableBy(value) })
 		.toEqual({ what, noCache: true, noTransform: true, cacheable: [] });
 };
+
+// `podman top` descriptors portable across the podman versions in use: podman 4.9.3 on the Ubuntu 24.04 runners is
+// built against psgo 1.7.1, which has no `uid` descriptor (podman then falls back to the host's ps(1), which rejects
+// `uid` and exits 125); the Pi's podman 5.4 has psgo 1.9. `user` (effective user, resolved against the container's
+// /etc/passwd, numeric when there is no entry) and `huser` (the same process as the host sees it) exist in both.
+const processUsers = (container: string): { pid: string; user: string; huser: string }[] => {
+	const r = podman(['top', container, 'pid', 'user', 'huser'], { allowFail: true });
+	if (r.code !== 0) {
+		throw new Error(`\`podman top ${container} pid user huser\` itself failed (exit ${r.code}), so the process users could not be read; `
+			+ `this is a harness/podman problem, not an image finding: ${redact(r.stderr.trim()).slice(-1000)}`);
+	}
+	const [header, ...rows] = r.stdout.trim().split('\n');
+	if (header?.trim().split(/\s+/).join(' ') !== 'PID USER HUSER') throw new Error(`unexpected \`podman top\` header: ${JSON.stringify(header)}`);
+	return rows.filter(l => l.trim() !== '').map(l => {
+		const cols = l.trim().split(/\s+/);
+		if (cols.length !== 3) throw new Error(`unexpected \`podman top\` row: ${JSON.stringify(l)}`);
+		return { pid: cols[0], user: cols[1], huser: cols[2] };
+	});
+};
+
+// The names `podman top … user` may print for the image's USER: the value itself, its uid, and every passwd name
+// with that uid (read from the running container, so the image's own /etc/passwd decides).
+const configuredIdentity = (container: string, userPart: string): { names: Set<string>; uids: string[] } => {
+	const passwd = podman(['exec', container, 'cat', '/etc/passwd']).stdout.split('\n').filter(l => l !== '').map(l => l.split(':'));
+	const matches = passwd.filter(f => f[0] === userPart || f[2] === userPart);
+	const uids = [...new Set([...(/^\d+$/.test(userPart) ? [userPart] : []), ...matches.map(f => f[2])])];
+	if (uids.length === 0) throw new Error(`the image's USER ${userPart} is neither numeric nor in the container's /etc/passwd`);
+	const names = new Set([userPart, ...uids, ...passwd.filter(f => uids.includes(f[2])).map(f => f[0])]);
+	return { names, uids };
+};
+
+// Host identities that mean "root in the container": host root (rootful podman) and the user running podman
+// (rootless podman maps container uid 0 to it).
+const hostRootLike = new Set(['root', '0', userInfo().username, String(userInfo().uid)]);
 
 describe('M1-S4 static bundle responses of the web image (M1-AC12, M1-AC28 image)', () => {
 	let stack: Stack | undefined;
@@ -129,14 +164,35 @@ describe('M1-S4 static bundle responses of the web image (M1-AC12, M1-AC28 image
 		}
 	});
 
-	it('ac12-s7: the image runs as a non-root uid with a read-only root filesystem (ADR-0006 hardening as run here)', () => {
+	it('ac12-s7: the image runs as its configured non-root user with a read-only root filesystem (ADR-0006 hardening as run here)', () => {
 		const { image } = webImageInfo();
-		const user = podman(['image', 'inspect', '--format', '{{.Config.User}}', image]).stdout.trim();
-		expect(user).not.toBe('');
-		expect(user.split(':')[0]).not.toMatch(/^(0|root)$/);
-		const uids = podman(['top', web.name, 'uid']).stdout.trim().split('\n').slice(1).map(l => l.trim()).filter(l => l !== '');
-		expect(uids.length).toBeGreaterThan(0);
-		expect(uids.filter(uid => uid === '0')).toEqual([]);
+		const configured = podman(['image', 'inspect', '--format', '{{.Config.User}}', image]).stdout.trim();
+		expect(configured).not.toBe('');
+		const userPart = configured.split(':')[0];
+		expect(userPart).not.toMatch(/^(0|root)$/);
+		const identity = configuredIdentity(web.name, userPart);
+		expect(identity.uids.filter(uid => uid === '0')).toEqual([]);
+		const processes = processUsers(web.name);
+		expect(processes.length).toBeGreaterThan(0);
+		// Container side: every process runs as exactly the image's USER (by uid or its passwd name), so not root.
+		expect(processes.filter(p => !identity.names.has(p.user))).toEqual([]);
+		// Host side: no process maps to host root or to the user running podman (rootless: container root's host uid).
+		expect(processes.filter(p => hostRootLike.has(p.huser))).toEqual([]);
 		expect(podman(['inspect', '--format', '{{.HostConfig.ReadonlyRootfs}}', web.name]).stdout.trim()).toBe('true');
+	});
+
+	it('ac12-s7-neg: the same image started with --user 0:0 is reported as root by the same probe, on both sides', async () => {
+		const { image } = webImageInfo();
+		const userPart = podman(['image', 'inspect', '--format', '{{.Config.User}}', image]).stdout.trim().split(':')[0];
+		const asRoot = await startWeb(stack as Stack, {
+			role: 'web-root', host: 22, env: webEnvFor(`http://${ipOf(stack as Stack, 99)}:22300`), extraArgs: ['--user', '0:0'],
+		});
+		const identity = configuredIdentity(asRoot.name, userPart);
+		const processes = processUsers(asRoot.name);
+		expect(processes.length).toBeGreaterThan(0);
+		// The predicates of ac12-s7 flag every process here: none runs as the image's USER, all as root on both sides.
+		expect(processes.filter(p => identity.names.has(p.user))).toEqual([]);
+		expect(processes.filter(p => p.user !== 'root' && p.user !== '0')).toEqual([]);
+		expect(processes.filter(p => !hostRootLike.has(p.huser))).toEqual([]);
 	});
 });
