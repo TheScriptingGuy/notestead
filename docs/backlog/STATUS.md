@@ -8,7 +8,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A / M0:** architecture, ADRs, spikes S1–S5, backlog | done | `5a383c4`: S1–S5 all GO or GO-WITH-CONDITIONS; 10 ADRs; 93 acceptance criteria in M1–M6 |
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
-| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); next: M1-S8 |
+| M1 Walking skeleton + test harness | in progress | **M1-S1 merged** (APPROVE r1); **M1-S2 merged** (APPROVE r3); **M1-S3 merged** (APPROVE r1); **M1-S9 merged** (APPROVE r1); **first push done 2026-10-05** (`dc515fa`, ci + web-bundle green on x64 and arm64); **M1-S4 merged** (APPROVE r1); **first CI run verified** (V1–V8 PASS, `d550c16`); **M1-S5 merged** (APPROVE r1, `953fc2e`); **M1-S6 merged** (APPROVE r1, `4cbb8ff`); **M1-S6a merged** (harness hardening C1/C2/C4, APPROVE r1, `554702d`); **M1-S7 merged** (walking-skeleton E2E, APPROVE r1, `9b9122d`; no product change needed); **M1-S8 merged** (CI E2E on both architectures, APPROVE r1, `bc973ab`); next: verify the first `e2e.yml` run (X1–X9), then M1 close-out |
 | M2 Web app | not started | |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
@@ -44,10 +44,8 @@ The orchestrator (main Claude session) maintains this file.
 
 ## Pending CI verification
 - **Closed 2026-10-05:** QA verified the first CI run (`d550c16`) against V1–V8. That closes M1-AC5, M1-AC8 (x64), M1-AC9, M1-AC27, and M1-S9's x64 ACs including M1-AC29's T90 notices checks. Evidence: `~/joplin-web-app-work/ci-evidence/<run-id>/`.
-- **Still open:** M1-S4, M1-S5, M1-S6, M1-S6a and M1-S7 x64 (contract and E2E suites), gated by M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
-- **CI follow-ups for M1-S8:**
-  - record `df`/`free` after T90;
-  - optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7).
+- **Still open:** M1-S4, M1-S5, M1-S6, M1-S6a, M1-S7 and M1-S8 x64 (contract and E2E suites), and M1-AC22 in CI with the X1–X9 evidence. These are verified by the first `e2e.yml` run after merging M1-S8. An x64 failure reopens the story (M1-S5: M1-AC14–17, M1-AC23 amd64; M1-S6: M1-AC18–20, M1-AC34).
+- **CI follow-ups:** optionally a Jest JUnit reporter (QA accepted suite-level Jest evidence for V7). Recording `df`/`free` after T90 in `web-bundle.yml` was done in M1-S8.
 
 ## Follow-ups from reviews (route into the named story when it starts)
 - **M1-S8 (or earlier):** `check:workflows` gaps from review M1-S3:
@@ -124,6 +122,21 @@ The orchestrator (main Claude session) maintains this file.
   - Nits: C-N1, the guard should check that the element is really a password `<input>`, not just its `type` attribute; C-N2 (M2), check in the UI that the web app decrypted the body; C-N3, a spec using Playwright's own `page`/`context` gets no trace, with no warning.
   - **Node 24 workaround:** Playwright's own trace merge hangs on the Pi's Node 24.17, so the browser fixture records its own trace (no screenshots) on every platform. The lead advises keeping it everywhere.
   - Upstream issues the user may file: the web app's "Joplin Server URL" field loses focus after the first keystroke; the Playwright trace merge hangs on Node 24.
+- **M1-S8 review follow-ups (`docs/reviews/M1-S8-r1.md`):**
+  - **First CI run (ci-cd collects, QA verifies X1–X9):**
+    - podman setup on both runners;
+    - healthchecks (`ac18`);
+    - Docker Hub anonymous pulls;
+    - timings against the timeouts (contract 75 min, E2E 45 min);
+    - where the bundle came from;
+    - `ci.yml` green on x64 with the new binary hashes.
+
+    Fixes go on `fix/M1-S8-<slug>`. If Docker Hub limits bite, a mirror or authenticated pulls needs the user's approval and must not be exposed to fork pull requests.
+  - **C1 (ci-cd, minor):** `.github/actions/podman/action.yml:37-49` should fail or warn when lingering produces no user bus, and record the podman network backend.
+  - **C2 (QA, minor):** `tests/contract/m1-s6/ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values (like `c1r1`), and optionally add the harness password pattern to the gate.
+  - **P1 (process):** `79546b0 fix(web)` is shellcheck-only and repeats P-R1. Add it to the release-please `bootstrap-sha`/`exclude-paths` at M5-S3.
+  - **Architect:** amend ADR-0007 §CI to record that Chromium is installed on the runner (accepted pending architect).
+  - Nits: C3, `df`/`free` after T90 in the `bundle` job; C4, the wording about "throwaway passwords" in the `e2e.yml` header; C5, the `noSleepMessage` wording.
 - **Process (P1):** QA writes or hands over test-runner configs (`jest.config.js`, `playwright.config.ts`) *before* implementation starts.
 - **Process (P2):** the orchestrator keeps unrelated decisions out of story commits (`4277bff` mixed the MCP-exposure decision into M1-S1).
 
