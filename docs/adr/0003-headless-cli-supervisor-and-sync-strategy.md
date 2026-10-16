@@ -1,7 +1,7 @@
 # ADR-0003: Headless Data API = pinned `joplin` CLI under a Node supervisor, with a pluggable `SyncStrategy` (default: stop-the-world)
 
 ## Status
-**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`). Proposed in Phase A (2026-10-03).
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended on 2026-10-16 with the sync-success rule as built in M1-S5 (see Amendments). Proposed in Phase A (2026-10-03).
 
 Spike S3 (`docs/spikes/S3-headless-sync-strategy.md`):
 - Stop-the-world: **GO-WITH-CONDITIONS**, ~16–19 s outage per cycle on the Pi.
@@ -99,8 +99,47 @@ Spike S3 (`docs/spikes/S3-headless-sync-strategy.md`):
 
 ## Upgrade impact
 - **The interfaces consumed are CLI commands and flags**, the settings keys `sync.*`, `encryption.masterPassword`, `api.token`, `api.port`, `mcp.enabled` and `ai.tool.*.enabled`, and the files `clipper-pid.txt` and `log-clipper.txt`.
+  - *Amended 2026-10-16:* also the `locale` setting, the `Completed:`/`Last error:` report lines of `joplin sync`, and the Joplin Server's public `GET /api/ping` response. See Amendments (2026-10-16).
 - **The `headless` contract suite detects drift on every bump:** sync round trip, decrypt, search freshness, settings integrity, token rotation and `syncVersion` guard.
 
 ## Verification
 - **S3:** CLI install on arm64, E2EE decrypt with `encryption.masterPassword` (non-interactive), search freshness, settings integrity, outage per cycle, internal-network egress.
 - **Backlog:** M1-AC14–17, M3-AC1–16.
+
+## Amendments (2026-10-16, M1 as built)
+This records the sync-success rule from M1-S5 (`docs/worklog/M1-S5.md` §How sync success is detected). Review `docs/reviews/M1-S5-r1.md` finding 2 accepted it pending the architect, and `docs/reviews/M1-closeout-r1.md` C2 asked for it. The text above stays as history.
+
+### A1. How the supervisor decides that a `joplin sync` succeeded
+**The problem.** `joplin sync` (CLI 3.7.1) exits 0 even when the sync failed, and upstream leaves "retryable" network errors out of its report (`upstream:packages/lib/Synchronizer.ts`, the `fetchRequestCanBeRetried` branch of the catch in `start()`; `command-sync.ts` never sets an exit code). For example, against a target that refuses every connection it retries for about 2 minutes and then prints only `Completed: … (112s)` (`docs/test-plans/M1-S5.md` §Findings). Neither the exit code nor the output alone proves that the sync worked.
+
+**The decision.** The verdict lives in `packages/headless/src/syncOutcome.ts`, behind `SyncStrategy`, and it **fails closed**. A sync counts as successful only if all of these hold:
+1. The sync target's public `GET <JOPLIN_SERVER_URL>/api/ping` returns HTTP 200 with `{"status":"ok",…}` **right before** the sync. If it doesn't, no sync is started.
+2. The `sync` process exits with code 0, not from a signal.
+3. Its output has **no `Last error:` line**. This line carries non-retryable errors such as authentication or HTTP failures and an unreachable network.
+4. Its output **has the report's `Completed:` line**, matched as `(^|\s)Completed: `, because the report can put it mid-line.
+5. The same `/api/ping` returns `ok` again **right after** the sync.
+
+**Making the output stable.** `config --import` sets `locale` to `en_GB` on every start, so the report strings don't depend on `LANG`.
+
+**What follows from the verdict.** `e2ee decrypt --force` must then exit 0 before `server start`. This is a separate requirement, not part of the sync signal. Accounts without E2EE are an open architect decision, tracked in STATUS: `decrypt --force` exits 1 there.
+
+The supervisor reports `ready` only after a successful verdict, decrypt, and the Data API's `/ping` returning `JoplinClipperServer`. In M1 a failed attempt is logged with its reason and retried after 30 s, with the state left at `starting`. M3-AC1 replaces this with backoff and `degraded`, and it should treat an authentication `Last error:` as non-retryable.
+
+**Rejected signals:**
+- The `sync.9.context`/`syncInfoCache` settings. They live in the profile's SQLite `settings` table, so reading them means an internal schema or a CLI command outside Decision 1's list. After a restart they also still hold the old value.
+- The CLI's `log.txt`, whose message texts are internal.
+
+**Residual window.** The rule can be fooled by a target that drops out and comes back strictly inside one sync, so that retryable errors are swallowed and both pings succeed. The next cycle repairs the data, but the initial `ready` can come too early in that case. This is accepted for M1. M3-AC1 adds a contract case in which `/api/ping` answers while the sync routes fail, and `ready` must never be reported.
+
+**Upgrade impact.** This rule adds three consumed upstream interfaces:
+- the Joplin Server `GET /api/ping` response shape;
+- the English `Completed:` and `Last error:` report lines of `joplin sync`;
+- the `locale` setting key and its value `en_GB`.
+
+If a CLI bump rewords or re-localises the report, or changes the ping shape, the supervisor never becomes ready. That is fail-safe, not silent: the M1-S5 `headless` contract suite (`ac14`/`ac15`, with `ac15-neg`) and `packages/headless/src/syncOutcome.test.ts` fail on the bump. Whoever does the bump should check these strings first when the headless suite times out waiting for `ready`.
+
+**Upstream-first.** If `joplin sync` exited non-zero, or printed the error, on any failed sync, retryable network errors included, conditions 1, 3, 4 and 5 could go. The verdict would then reduce to the exit code. The orchestrator files this proposal (STATUS, M1-S5 follow-ups).
+
+**Verification:**
+- `packages/headless/src/syncOutcome.test.ts` (unit, every branch);
+- M1-AC15 and `ac15-neg` (contract: a refused target never reaches `ready` within 300 s), on arm64 and x64 (`docs/test-plans/M1-S5.md`, CI run 38881804121).

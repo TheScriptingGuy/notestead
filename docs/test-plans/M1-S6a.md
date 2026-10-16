@@ -121,7 +121,7 @@ node --test --test-concurrency=1 --test-reporter=spec 'tests/acceptance/m1-s6/*.
 ## Out of scope
 - C3, C5 and the `e2eeAccount` seeding gap: see the story line above and STATUS.md.
 - Redacting pixels (screenshots, video, screencast frames): see the residual risks above.
-- x64: PENDING-CI (M1-S8).
+- x64: PENDING-CI (M1-S8). (superseded 2026-10-16: see §x64 (CI))
 
 ## Disputes
 The engineer filed no dispute (`docs/worklog/M1-S6a.md` §Disputes: none). Their worklog lists three deviations from R1 and three known gaps, and QA rules on each here. The evidence is a QA probe of the committed block: ESLint's `Linter` with the TypeScript parser, 28 one-line cases, report counts compared, 28/28 as expected (`test-results/verify/m1-s6a/qa-probe.mjs`, `qa-probe.log`). QA also re-ran the engineer's probe of 42 cases on the committed config: 42/42 (`qa-rerun-se-probe.log`).
@@ -241,7 +241,7 @@ C2 stays RED until the engineer's R1. Logs are under `test-results/verify/m1-s6a
 | Lint and types | `corepack yarn lint` | exit 0 | 53 s | `lint.log` |
 | Leftovers | `podman ps -a`, `network ls`, `volume ls` before vs after; `podman images` | **identical**; images are back to the starting set (the kept `notestead-*` images were removed); no `/tmp/nst-*` or descriptor files | | `podman-before.txt`, `podman-after-all.txt` |
 | Contract M1-S5 | not re-run | The only shared code it uses that changed is `removeLabelled(run)` in the contract globalTeardown. Every contract run above ran it, and the leftover checks prove it. | | |
-| x64 | n/a | **PENDING-CI (M1-S8)** | | |
+| x64 (CI) | `e2e.yml` contract step and `ci.yml` acceptance on `ubuntu-24.04` | **PASS** (§x64 (CI)) | | `~/joplin-web-app-work/ci-evidence/38874722165/`, `…/38874722176/` |
 
 ## Results (VERIFY, 2026-10-10, Pi arm64)
 These results are for branch `feat/M1-S6a-harness-hardening` at `e1c910c`: QA's C1/C4 harness work plus the engineer's R1 (`e1910f8`, `e1c910c`).
@@ -271,10 +271,21 @@ These results are for branch `feat/M1-S6a-harness-hardening` at `e1c910c`: QA's 
 | Contract M1-S4 (regression) | `corepack yarn test:contract --verbose tests/contract/m1-s4` | 4 suites, **28 passed** | 102 s | `verify-contract-m1-s4.log` |
 | Contract M1-S5 | **not re-run, on purpose** | The reasoning from the GREEN section still holds, and R1 adds nothing to it. R1 changes only `eslint.config.js`, which runs at lint time only and is not loaded by any test at run time. The only shared code M1-S5 uses that this story changed is `removeLabelled(run)` in the contract globalTeardown, and both contract runs above ran it, as the leftover check below shows. | | |
 | Leftovers | `podman ps -a`, `network ls`, `volume ls`, `images`, before vs after (after removing the two kept test images) | **identical**: only `byparr` and its network and images, untouched. No `/tmp/notestead-stacks` descriptors and no `/tmp/nst-*` dirs. | | `podman-before-verify.txt`, `podman-after-verify.txt` |
-| x64 | n/a | **PENDING-CI (M1-S8)** | | |
+| x64 (CI) | `e2e.yml` contract step and `ci.yml` acceptance on `ubuntu-24.04` | **PASS** (§x64 (CI)) | | `~/joplin-web-app-work/ci-evidence/38874722165/`, `…/38874722176/` |
 
 **Test integrity.** `git log --format='%h %s%n%b' -- tests/` shows only QA commits. The engineer did not modify `tests/**` (§Disputes).
 
 **Defects found:** none that block the story. The QA probe found one more gap, `scheduler.wait` (G2b), and one cosmetic double report (`export { setTimeout }`). Both are recorded under §Disputes, and G2b goes into follow-up FU-S6a-1.
 
-**Sign-off (QA): YES** for C1, C2 and C4 on arm64. x64 is PENDING-CI (M1-S8). Follow-up FU-S6a-1 (lint: `require`/`import()` of the timers modules and `scheduler`) and accepted risk A1 are recorded under §Disputes for the orchestrator to track in `docs/backlog/STATUS.md`.
+**Sign-off (QA): YES** for C1, C2 and C4 on arm64, and on x64 since 2026-10-16 (§x64 (CI)). Follow-up FU-S6a-1 (lint: `require`/`import()` of the timers modules and `scheduler`) and accepted risk A1 are recorded under §Disputes for the orchestrator to track in `docs/backlog/STATUS.md`.
+
+## x64 (CI, M1-S8 X4; 2026-10-16)
+| Item | Tests | x64 | Run, evidence |
+|---|---|---|---|
+| **C1** | `c1-ran`, `c1-planted`, `c1-redacted-{trace,stdout,errors,steps,attachments,reports,console}`, `c1-redacted-all`, `c1-neg` | **PASS 11/11** (87 s on arm64 runner, 90 s x64) | [38874722165](https://github.com/TheScriptingGuy/notestead/actions/runs/38874722165), `test (ubuntu-24.04)`, `contract/jest-results.json` |
+| **C4** | `c4-keep-dev`, `c4-keep-live`, `c4-sweep-dead`, `c4-sweep-orphan`, `c4-sweep-contract` | **PASS 5/5** | the same |
+| **C2** | `C2-T01`…`C2-T03-*` (10) | **PASS 10/10**, the 236 x64 acceptance testcases have 0 failures | [38874722176](https://github.com/TheScriptingGuy/notestead/actions/runs/38874722176), `acceptance-X64.xml` |
+
+The same contract tests also passed on `ubuntu-24.04-arm`. The `c1-pertest-secrets` and `c4-sweep` test code and the product didn't change between `cf053b4` and `4dc0cf5`. [38881804121](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804121) at `4dc0cf5` ran the contract layer green on x64, and `ci.yml` [38881804157](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804157) succeeded on both runners. **QA sign-off x64: YES** for C1, C2 and C4.
+
+**Per-test confirmation at `4dc0cf5`** (2026-10-16): in [38881804121](https://github.com/TheScriptingGuy/notestead/actions/runs/38881804121), `contract/jest-results.json` shows the same tests passed per test on `ubuntu-24.04` and `ubuntu-24.04-arm`: 16/16 (C1 11, C4 5), one invocation each, in a run of 87/87 (M1-S8 §Second CI run).

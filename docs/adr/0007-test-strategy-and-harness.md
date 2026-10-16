@@ -1,7 +1,7 @@
 # ADR-0007: Test strategy and harness
 
 ## Status
-**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day (see Amendments). Proposed in Phase A (2026-10-03). The QA specialist owns and expands it in `docs/testing/strategy.md` once the plan is approved.
+**Accepted** at gate 1 (2026-10-04, tag `plan-approved-v1`), amended the same day and on 2026-10-16 for M1 as built (see Amendments). Proposed in Phase A (2026-10-03). The QA specialist owns and expands it in `docs/testing/strategy.md` once the plan is approved.
 
 ## Context
 - **Upstream has no tests for the web build and no CI job builds it** (findings §1). Our suite is therefore the only gate between an upstream bump and the user's notes.
@@ -48,6 +48,8 @@
 - Offline reload; bundle upgrade.
 
 ### Fixtures and isolation
+*Amended 2026-10-16: the E2E stack is one per run, the fixture is `headlessService`, and a serial rule applies. See Amendments (2026-10-16).*
+
 - **`joplinServer`** (per worker): a container from the pinned tag, run with the command `node dist/index.js --env dev --env-file /dev/null` and `JOPLIN_IS_TESTING=1`.
   - The rate-limiter contract tests (M1-AC11) start a second server **without** `JOPLIN_IS_TESTING`.
   - **Per test:** a fresh user is created through the admin API (`admin@localhost`, created by `createTestUsers`). This isolates tests without restarting the server.
@@ -74,7 +76,7 @@
 - **CI (GitHub Actions):** `ubuntu-24.04` (x64) and `ubuntu-24.04-arm` (arm64) run lint, unit, integration, contract and E2E. The web bundle is built **once on x64** (ADR-0001) and both architectures consume it as an artifact.
 - **Pi:** the same commands, one heavy job at a time, Playwright with `workers: 1`.
   - Locally, Playwright uses the installed Chromium (`~/.cache/ms-playwright`). An explicit `executablePath` is allowed when the revision differs, which S4 proved works.
-  - CI uses the official multi-arch Playwright container image at the pinned Playwright version.
+  - CI uses the official multi-arch Playwright container image at the pinned Playwright version. *(Superseded 2026-10-16: Chromium is installed on the runner. See Amendments (2026-10-16).)*
 
 ## Alternatives considered
 - **Reuse upstream tests as-is (run upstream's Jest/Playwright suites against our build).** Upstream has no web-build tests. Its lib tests are coupled to the monorepo (hard-coded `app-cli/tests` paths, findings §5), and the desktop Playwright suite targets Electron. Only the patterns transfer.
@@ -96,3 +98,34 @@
 
 ## Amendments (2026-10-04, gate 1)
 - The `proxy` contract suite gains C9 (Cloudflare Access headers not forwarded), C10 (`no-store, no-transform`) and the tunnel-mode client-IP test with negative control R5-neg (ADR-0002 rule 4, S6). Real-Cloudflare checks happen only in the user's manual smoke test (M5-AC11); automated tests never need a Cloudflare account.
+
+## Amendments (2026-10-16, M1 as built)
+These record deviations that the M1 reviews accepted "pending architect" (`docs/reviews/M1-S6-r1.md` C3, `M1-S8-r1.md` §5, `M1-closeout-r1.md` C2). The 2026-10-04 text above stays as history. Where they disagree, this section wins.
+
+### A1. One compose stack per Playwright run (replaces the per-worker `joplinServer` and `clearDatabase` in worker teardown)
+- **Playwright's globalSetup** (`tests/e2e/support/globalSetup.ts`) runs the real-server guard (M1-AC19). It then brings up **one compose stack for the whole run** (`tests/stack/`): `server`, `web`, a default E2EE account and its headless service. Every service must be `healthy` before any test starts, or the run aborts and names the service (M1-AC18 and its NEG). Its teardown removes everything the run created.
+- **The workers never own the stack.** They attach to it through `NOTESTEAD_E2E_STACK` (worker fixture `stack`, which re-runs the guard). `joplinServer` stays a worker fixture, but it is a view of the shared server (`url`, `proxiedUrl`, `publicUrl`, `request`), not a container per worker.
+- **`clearDatabase` is not used.** The whole stack is thrown away at the end of each run.
+- **Reuse mode.** A `JOPLIN_SERVER_URL` that names a stack the harness started attaches to that stack and never tears it down. Any other value aborts before a request is made (unchanged rule).
+- **Isolation stays per test.** Each test gets a fresh server user (`e2eeAccount`), a fresh headless compose project and profile volume (`headlessService`), and a fresh `BrowserContext` and OPFS (`webApp`). A test that needs a differently configured service gets its **own extra container** next to the shared ones. The example is `webWithoutHostRewrite` for the M1-AC21 NEG, which never touches the shared `web`.
+- **The contract layer is separate and unchanged in spirit.** `jest.contract.config.js` uses one worker. Its globalSetup builds the images once, and suites start their own labelled containers (`tests/contract/support/`). Harness self-tests run an inner Playwright process with `tests/harness/playwright.selftest.config.ts` (`workers: 1`).
+- **Why:** "healthy before any test starts" can only hold literally if the stack exists before the workers do, and one stack is cheaper on the Pi. Per-test users and per-test headless projects keep the tests independent.
+
+### A2. The headless fixture is named `headlessService`
+Playwright reserves `headless` for its own browser option, so a fixture with that name breaks the fixture types. Read every `headless` fixture reference in this ADR and in `docs/backlog/M*.md` as `headlessService`. It depends on `e2eeAccount`, re-registers the Data API token in teardown (a CLI restart rotates it), and attaches `supervisor.log` on failure. `dataApi` is built on it.
+
+`e2eeAccount` currently seeds a folder and one note only, not the to-do with `todo_due`, tag and attachment that §Fixtures promises. QA adds those when the first story asserts on them (M2-S2/S3 or M4). Until then, tests must not assume them.
+
+### A3. Serial rule for tests that disrupt shared services
+- A test that **stops, restarts or reconfigures a shared service** of the run's stack (`server`, `web`, or the default headless service) must do one of two things. Either it runs in a **serial Playwright project** (its own `projects` entry with `workers: 1`, or `fullyParallel: false` plus `test.describe.configure({ mode: 'serial' })`, and with no other project running at the same time), or it brings up **its own containers or its own stack**.
+- Prefer its own containers (the `webWithoutHostRewrite` pattern). Use the serial project only when the shared service itself is under test.
+- **This already matters in CI.** `playwright.config.ts` sets `workers: 1` only locally. In CI (`CI` set) it uses Playwright's default worker count, which is more than one on the GitHub runners.
+- In M1 no `tests/e2e` spec disrupts a shared service. The one test that stops the server, the M1-AC20 self-test (`tests/harness/selftest/attachments.spec.ts`), runs under the single-worker self-test config.
+- **Enforcement:** the QA test plan names each disruptive test and how it is isolated, and the lead checks it in review. Writing a lint rule for this is not worth it yet.
+
+### A4. CI installs Playwright's pinned Chromium on the runner (replaces "the official Playwright container image" in §Where things run)
+- **As built** (M1-S8, `.github/workflows/e2e.yml`, step "Playwright's Chromium"): the contract and E2E jobs run directly on `ubuntu-24.04` and `ubuntu-24.04-arm`. They install the browser with `corepack yarn playwright install --with-deps chromium`. That is the browser revision that the repo's pinned `@playwright/test` (`package.json`, 1.59.1) expects, with the OS packages from Playwright's own dependency list. It is the same revision the matching container image would carry.
+- **`NOTESTEAD_CHROMIUM` is never set in CI.** With `CI` set, `tests/e2e/support/chromium.ts` uses the pinned Playwright browser and never falls back to another revision. The acceptance test `M1-S8-E07` checks that the workflow installs only Playwright's own Chromium and sets no `NOTESTEAD_CHROMIUM`. Locally, the S4 rule is unchanged: the installed revision, through `executablePath` when it differs.
+- **Why not the container image:** the harness's globalSetup starts the stack with rootless podman compose. A job container can't host nested rootless podman unless we grant it privileges we must not grant (`docs/worklog/M1-S8.md` §ADR deviations).
+- **Upgrade impact:** a Playwright bump changes the CI browser revision in the same commit, because it's tied to the lockfile. `--with-deps` also pulls apt packages at job time, which is a moving input. If that breaks a run, the fix is in CI, not in the product.
+- **Verification:** M1-S8 X1–X9 on runs 38874722165 and 38881804121 (`docs/test-plans/M1-S8.md`). Both runners showed 3/3 E2E with no retry.
