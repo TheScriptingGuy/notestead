@@ -1,7 +1,9 @@
 // Playwright fixtures of the Notestead harness (ADR-0007 §Fixtures and isolation; docs/test-plans/M1-S6.md):
 //   worker  stack         the compose test stack globalSetup started (or attached to), read from NOTESTEAD_E2E_STACK
 //           joplinServer  that stack's throwaway Joplin Server: direct URL, the proxied URL through web, a request helper
-//   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and a note
+//   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and notes
+//                         (option `e2eeSeed`: { notes }, default one note)
+//           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
@@ -71,6 +73,8 @@ interface WorkerFixtures {
 interface TestFixtures {
 	stackLogs: undefined;
 	e2eeAccount: Account;
+	e2eeSeed: { notes: number };
+	plainAccount: Account;
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
@@ -161,9 +165,15 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		if (stack.defaultHeadless?.container) await attachText(testInfo, 'supervisor-default.log', containerLog(stack, stack.defaultHeadless.container, since, secrets));
 	}, { auto: true }],
 
-	e2eeAccount: async ({ stack }, use, testInfo) => {
-		const account = enableE2ee(stack, await createAccount(stack), shortId(testInfo));
+	e2eeSeed: [{ notes: 1 }, { option: true }],
+
+	e2eeAccount: async ({ stack, e2eeSeed }, use, testInfo) => {
+		const account = enableE2ee(stack, await createAccount(stack), shortId(testInfo), e2eeSeed);
 		await use(account);
+	},
+
+	plainAccount: async ({ stack }, use) => {
+		await use(await createAccount(stack));
 	},
 
 	headlessService: async ({ stack, e2eeAccount }, use, testInfo) => {
