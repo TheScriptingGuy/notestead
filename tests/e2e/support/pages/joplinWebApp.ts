@@ -170,9 +170,11 @@ export class SyncSettings {
 		return this.page.getByText(/^Error\. Please check that URL, username, password, etc\. are correct/);
 	}
 
-	// The whole error block: upstream's line and the reported error.
+	// The whole error block: upstream's line and, in a sibling element, the reported error ("Invalid email or password
+	// (Code 403)"). The block is the parent of the line: a `div` filter with `has` returned the line alone (observed
+	// at v3.7.21, docs/test-plans/M2-S1.md §Results).
 	public async configCheckError(): Promise<string> {
-		return this.page.locator('div').filter({ has: this.errorHeading() }).last().innerText();
+		return this.errorHeading().locator('xpath=..').innerText();
 	}
 
 	public saveButton(): Locator {
