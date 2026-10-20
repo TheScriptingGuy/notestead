@@ -6,6 +6,8 @@
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
+//           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
+//                         attaches network.log (query strings removed). It only observes, it never routes.
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -29,6 +31,8 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { stackEnv } from './globalSetup.ts';
+import { recordNetwork } from './network.ts';
+import type { NetworkRecorder } from './network.ts';
 
 export interface JoplinServerHandle {
 	// http://127.0.0.1:<published port>; needs the Host of APP_BASE_URL (use `request`)
@@ -70,6 +74,7 @@ interface TestFixtures {
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
 }
 
@@ -194,6 +199,13 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			if (web && failed(testInfo)) await attachText(testInfo, 'web-without-host-rewrite.log', containerLog(stack, web.container, undefined, workerSecrets(stack)));
 			if (web) removeContainer(stack, web.container);
 		}
+	},
+
+	// The network log of the webApp context, for the policy checks and as an attachment on failure (M2-S1).
+	webNetwork: async ({ webApp, stack }, use, testInfo) => {
+		const recorder = recordNetwork(webApp.context);
+		await use(recorder);
+		if (failed(testInfo)) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
 	},
 
 	webApp: async ({ browser, stack }, use, testInfo) => {
