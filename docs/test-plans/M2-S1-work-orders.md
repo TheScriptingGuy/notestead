@@ -457,3 +457,105 @@ Run these in order, one at a time. Logs go under `test-results/verify/m2-s1/`.
 
     Commit: `docs(test-plans): M2-S1 RED, harness validation and arm64 results`.
 11. Report to the orchestrator: the commit hashes per WO, the per-criterion status, any stop/report items, and the podman before/after result.
+
+---
+
+## Addendum (planner, 2026-10-20): WO-13 to WO-17, after the executor's first run
+These orders implement the F5 decision (plan §Planner decisions, D1 and D2). The rules above still hold. Keep the strings and assertions not named here exactly as they are.
+
+## WO-13: `localProfileScan`, the OPFS search (harness)
+**Files:**
+- `tests/e2e/support/localProfile.ts` (new):
+  ```ts
+  // The web app's local profile (OPFS of the app origin), searched for a needle, value-free (docs/test-plans/M2-S1.md D2).
+  export interface ProfileScan { files: number; bytes: number; hits: string[]; errors: string[] }
+  export const scanLocalProfile = async (webApp: WebApp, needle: string, opts?: { timeoutMs?: number }): Promise<ProfileScan>
+  ```
+  1. `await webApp.page.close()`. The app's worker ends and its OPFS sync access handles are released. The caller must not use the app page afterwards.
+  2. Open `const probe = await webApp.context.newPage()` and `await probe.goto(new URL('/manifest.json', webApp.baseURL).href)`. That is the same origin, so the same OPFS, and no app code runs there.
+  3. Run `waitFor('the local profile to be readable', …, { timeoutMs: opts?.timeoutMs ?? 30_000, intervalMs: 1_000 })` around `probe.evaluate(async n => { … }, needle)`, which:
+     - walks `navigator.storage.getDirectory()` recursively (`entries()`), with `globalThis` casts as in `perFrame`;
+     - for each file runs `getFile()`, then `new Uint8Array(await f.arrayBuffer())`, and a byte search for `new TextEncoder().encode(n)`;
+     - counts `files` and `bytes`, pushes the path to `hits` on a match, and pushes `path: error.name` to `errors` when a read throws.
+     The probe returns `undefined` (retry) while `errors.length > 0`. If it times out, the last `errors` list is in the message.
+  4. Return the result. It carries file paths and counts only, never file content.
+- `tests/e2e/support/pages/joplinWebApp.ts`, `EncryptionSettings`:
+  - `masterKeyHeading(prefix6: string): Locator` → `getByRole('heading', { name: \`Master Key ${prefix6}\`, exact: true })`.
+  - `invalidKeyPasswordMarker(): Locator` → `masterKeySection().getByRole('img', { name: 'Invalid password', exact: true })`. Upstream: `accessibilityRole='image'`, `accessibilityLabel={_('Invalid password')}`.
+  - `pollDecryptedStats(timeoutMs = 30_000): Promise<{ done: number; total: number }>`: `waitFor` until `decryptedStats()` is defined. Upstream fills it in every 3 s.
+
+**Check:** lint and tsc on the changed files. The positive control is `M2-AC2` step `7.` (WO-14).
+
+**Commit:** `test(harness): search the web app's local profile (OPFS) for seeded text, and master-key page objects (M2-S1 D2)`.
+
+## WO-14: Rewrite the M2-AC2 positive test
+**File:** `tests/e2e/m2-s1/e2ee-unlock.spec.ts`. Keep the title, steps `0.`, `1.`, `2.`, `5.` (titles and folder) and `6.` (bodies) as they are, except for the changes below. The steps become:
+1. **Steps `0.` to `2.`:** unchanged. In step `0.`, also keep `activeKey = info.activeMasterKeyId.value`. Assert `typeof activeKey === 'string'` and `/^[0-9a-f]{32}$/`, and that `info.masterKeys` holds exactly one entry with `id === activeKey`. If the field shape differs, stop and report the `info.json` keys (not the values).
+2. **Step `3. the app reports that the data is encrypted and asks for the master password`**:
+   - remove the `encryptedNotesInList() >= 3` poll and the `t - d >= 4` poll;
+   - `expect(noSeedIn(await app.frameHtml(), seed)).toBeUndefined()`;
+   - `encryption = await app.openEncryptionSettingsFromBanner()`;
+   - `expect(await encryption.encryptionStatus()).toBe('Encryption is: Enabled')`;
+   - `await expect(encryption.masterKeyHeading(activeKey.slice(0, 6))).toBeVisible()`;
+   - `await expect(encryption.invalidKeyPasswordMarker()).toBeVisible()`;
+   - `expect(await encryption.masterPasswordState()).toBe('pending')`;
+   - `totalBefore = (await encryption.pollDecryptedStats()).total`;
+   - **data level**: put a shared helper `serverSeedEncrypted(stack, account, seed)` in the spec. It returns the map `name → content` of the `md(serverItemNames)` items. Assert:
+     - at least 4 items;
+     - every content matches `/^encryption_applied: 1$/m`;
+     - no content contains `seed.tag`.
+3. **Step `4.`:** unchanged up to the `accepted` poll. Replace the stats poll with a probe that returns `'all'` when `s.done === s.total && s.total >= totalBefore + 4`, else `` `${s.done} / ${s.total} (before: ${totalBefore})` ``. Keep the timeout at 3 min.
+4. **Step `5.`:** replace `expect(await app.encryptedNotesInList().count()).toBe(0)` with `await expect.poll(() => app.encryptedNotesInList().count(), { timeout: 60_000, intervals: [1_000] }).toBe(0)`.
+5. **New step `7. the local profile holds the decrypted seed (positive control of the NEG's scan)`:**
+   - `const scan = await scanLocalProfile(webApp, seed.tag)`;
+   - `expect(scan.files).toBeGreaterThan(0)`;
+   - `expect(scan.hits.length, \`seed tag in the local profile (${scan.files} files, ${scan.bytes} bytes)\`).toBeGreaterThan(0)`.
+   - Step 7 must come after every UI step, because it closes the app page.
+6. **Steps `8. network policy` and `9. data level after`:** the old steps 7 and 8, unchanged.
+
+## WO-15: Rewrite the M2-AC2 NEG
+**File:** `tests/e2e/m2-s1/e2ee-unlock.spec.ts`. Keep the title and stages 1 and 2 (steps `3.` and `4.`) as they are.
+1. **Step `1.`:** `before = await serverSeedEncrypted(stack, e2eeAccount, seed)`, with the same assertions as AC2 step `3.`'s data level. Also read `activeKey` from `info.json`, as in AC2 step `0.`.
+2. **Step `2. configure the web app: it reports that the data is encrypted`:** the same UI assertions as AC2 step `3.`, from `noSeedIn` to `masterPasswordState() === 'pending'`. No placeholder count, and no stats.
+3. **Steps `3.` and `4.`:** unchanged.
+4. **Step `5.`, the 60 s window:** the probe keeps the `noSeedIn(frameHtml)` and banner checks. Remove the `encryptedCountAtLeast` check, and delete the now unused helper.
+5. **Step `6.`:** open the encryption screen from the banner. `expect(await encryption.masterPasswordState()).toBe('rejected')`. Remove the stats assertion.
+6. **New step `7. nothing decrypted in the local profile`:**
+   - `const scan = await scanLocalProfile(webApp, seed.tag)`;
+   - `expect(scan.files).toBeGreaterThan(0)`;
+   - `expect(scan.hits).toEqual([])`.
+7. **Step `8.` (the old step 7, server byte-identical and network):** unchanged.
+
+The file's header comment says "reports the items as encrypted". Change it to the D1 reading and cite plan §Planner decisions.
+
+**Commit (WO-14 and WO-15 together, one spec file):** `test(e2e): M2-AC2 asserts what upstream exposes before the master password, and scans the local profile (F5, D1/D2)`.
+
+## WO-16: Runs and sensitivity
+Reuse the kept images. Logs go under `test-results/verify/m2-s1/`.
+1. `run verify2/lint.log corepack yarn lint`. Must be exit 0.
+2. `T=40m run verify2/e2e-ac2.log <images> corepack yarn playwright test tests/e2e/m2-s1/e2ee-unlock.spec.ts`. Expect both tests to pass. If step `7.` of the positive test finds 0 files or no hit, or the scan times out on `errors`, stop and report the scan result and `browser-console.log`. Do not change the needle or drop the step.
+3. **Sensitivity runs.** Make temporary edits, then `git checkout -- <file>` and confirm with `git status`.
+   - **S1:** NEG stage 1 types `e2eeAccount.masterPassword` instead of `wrong1`. Run `-g "M2-AC2 NEG"` into `sens/s1.log`. Must fail at the `'rejected'` poll (`Received: "accepted"`).
+   - **S3:** in the positive test, comment out `screen.enterMasterPassword(…)` in step `4.`. Run `-g "M2-AC2 the web app"` into `sens/s3.log`. Must fail at the `'accepted'` poll (`Received: "pending"`).
+   - **S4:** in the NEG, insert `await screen.enterMasterPassword(e2eeAccount.masterPassword)` and an `'accepted'` poll right before step `5.`, which decrypts for real. Keep stages 1 and 2, and every assertion. Run `-g "M2-AC2 NEG"` into `sens/s4.log`. Must fail in the step-5 window (`a seeded value is in the page or a frame`) or, at the latest, at step 7 (`hits` not empty). This proves the window and the scan catch a real decryption.
+
+   For each failing run, check that `network.log`, `browser-console.log`, `server.log` and `trace` are attached.
+4. `T=100m run verify2/e2e-full.log <images> corepack yarn playwright test`. Expect all 7 tests to pass: `C1-R1-guard`, `M1-AC21` and its NEG, `M2-AC1` and its NEG, `M2-AC2` and its NEG.
+5. `podman-after2.txt`, compared with the before file. Remove the kept test images (`localhost/notestead-web:stack-test`, `localhost/notestead-headless:stack-test`) and the two dangling test `<none>` images, but only images with the label `io.github.thescriptingguy.notestead.test`. Check with `podman image inspect --format '{{index .Labels "io.github.thescriptingguy.notestead.test"}}'` first. Never remove anything else.
+
+## WO-17: Plan update and report
+`docs/test-plans/M2-S1.md`:
+- `## RED`: add a row for WO-13 to WO-15, "not a RED run (unmodified upstream); evidence: the sensitivity runs S1, S3, S4 and the step-7 positive control".
+- `## Harness validation`: add S1, S3 and S4 with their failure lines.
+- `## Results`: replace the two `M2-AC2` rows with the new runs (PASS/FAIL, command, duration, log). Add the `verify2/` layers. Update the E2E "everything" row and the podman section.
+- `### Test integrity`: re-run `git log --format='%h %s%n%b' b615653..HEAD -- tests/ playwright.config.ts`.
+- **QA sign-off on arm64:** only if all rows pass. x64 stays PENDING-CI.
+
+**Commit:** `docs(test-plans): M2-S1 arm64 results after the F5 redesign`.
+
+Report to the orchestrator:
+- the commit hashes;
+- the per-criterion status;
+- the sensitivity outcomes;
+- the podman before/after result;
+- any stop/report item.
