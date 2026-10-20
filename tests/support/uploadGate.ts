@@ -144,7 +144,7 @@ export const sameContent = (a: Buffer, b: Buffer): boolean => {
 // the packaged viewer file of the same name; anything else under trace/ is redacted like any file (review M1-S6a-r1
 // C1-R4).
 const viewerDir = (): string => join(findRepoRoot(), 'node_modules', 'playwright-core', 'lib', 'vite', 'traceViewer');
-const isPackagedViewerFile = (path: string, data: Buffer): boolean => {
+export const isPackagedViewerFile = (path: string, data: Buffer): boolean => {
 	const marker = `${sep}trace${sep}`;
 	const at = path.lastIndexOf(marker);
 	if (at < 0) return false;
