@@ -1,0 +1,5 @@
+containerLog(stack, stack.containers.web ?? '', since)
+await webRequest(stack, '/app.bundle.js')
+await serverRequest(stack, '/api/ping')
+await syncHeadlessOnce(stack, headlessService)
+const s = stack.defaultHeadless?.container;

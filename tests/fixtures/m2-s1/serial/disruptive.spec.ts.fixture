@@ -1,0 +1,6 @@
+podmanSync(['restart', stack.containers.server ?? '']); // NEG
+podmanSync(['stop', stack.containers.web ?? '']); // NEG
+removeContainer(stack, stack.containers.web ?? ''); // NEG
+await syncHeadlessOnce(stack, stack.defaultHeadless as HeadlessService); // NEG
+downHeadless(stack, stack.defaultHeadless); // NEG
+downStack(stack); // NEG
