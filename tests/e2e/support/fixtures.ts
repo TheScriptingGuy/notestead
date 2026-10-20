@@ -101,7 +101,20 @@ const runProbe = (container: string, probe: string, args: string[]): DataApiResu
 	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
 };
 
+export const builtinFixtureMessage = (name: 'page' | 'context'): string => `the built-in \`${name}\` fixture is disabled in this harness: it records no trace and no browser console (use.trace is off). Use the \`webApp\` fixture (webApp.page, webApp.context) instead.`;
+
 export const test = base.extend<TestFixtures, WorkerFixtures>({
+	// Playwright's built-in page and context have no trace and no console log in this harness (use.trace is off; the
+	// webApp fixture records both; review M1-S7-r1 C-N3, docs/testing/strategy.md §4).
+	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
+	page: async ({}, _use) => {
+		throw new Error(builtinFixtureMessage('page'));
+	},
+	// eslint-disable-next-line no-empty-pattern -- as above
+	context: async ({}, _use) => {
+		throw new Error(builtinFixtureMessage('context'));
+	},
+
 	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
 	stack: [async ({}, use) => {
 		// The guard again, in the worker: a worker can be started with a different environment than globalSetup.
