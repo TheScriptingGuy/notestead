@@ -9,25 +9,26 @@ import { registerSecrets } from '../../support/secrets.ts';
 const form = '<main><form>'
 	+ '<label>Visible <input type="text" name="visible"></label>'
 	+ '<label>Notes <textarea name="notes"></textarea></label>'
+	+ '<label>Fake masked <textarea type="password" name="fakemasked"></textarea></label>'
 	+ '<label>Masked <input type="password" name="masked"></label>'
 	+ '</form></main>';
 
 test.describe('C1-R1 type-like-a-user secret guard', () => {
-	test('C1-R1-guard a registered secret is refused for a text input and a textarea, and typed into a password input', async ({ webApp }) => {
+	test('C1-R1-guard a registered secret is refused for a text input, a textarea and a textarea carrying type=password, and typed into a password input', async ({ webApp }) => {
 		const value = `nstsecret${randomBytes(12).toString('hex')}`;
 		registerSecrets([{ label: 'c1r1_guard_secret', value }]);
 		const { page } = webApp;
 		await page.setContent(form);
 
-		for (const name of ['Visible', 'Notes']) {
-			const field = page.getByLabel(name);
+		for (const name of ['Visible', 'Notes', 'Fake masked']) {
+			const field = page.getByLabel(name, { exact: true });
 			const refused = await typeLikeUser(field, value).then(() => undefined, (error: unknown) => error);
 			expect(refused, `${name}: refused`).toBeInstanceOf(SecretInVisibleFieldError);
 			await expect(field, `${name}: no key reached the field`).toHaveValue('');
 		}
 
 		// Positive control: the same helper and secret, into the masked field.
-		const masked = page.getByLabel('Masked');
+		const masked = page.getByLabel('Masked', { exact: true });
 		await typeLikeUser(masked, value);
 		expect(await masked.evaluate(e => (e as unknown as { value: string }).value.length)).toBe(value.length);
 	});

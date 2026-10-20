@@ -52,13 +52,16 @@ export const knownSecretsNow = (): KnownSecret[] => mergeSecrets(registeredSecre
 // The label of the first known secret `text` contains, if any.
 export const secretIn = (text: string, secrets: KnownSecret[]): string | undefined => secrets.find(s => s.value.length >= 6 && text.includes(s.value))?.label;
 
-const fieldType = async (field: Locator): Promise<string> => (await field.getAttribute('type')) ?? '(none)';
+// What the element is, not what its attribute says (review M1-S7-r1 C-N1): a <textarea type="password"> or a custom
+// element with that attribute renders its text in clear.
+const describeField = async (field: Locator): Promise<{ masked: boolean; what: string }> => field.evaluate(e => {
+	const el = e as unknown as { localName?: unknown; type?: unknown };
+	return { masked: el.localName === 'input' && el.type === 'password', what: `<${String(el.localName)}> of type "${String(el.type)}"` };
+});
 
 const requireMasked = async (field: Locator, what: string, when: string): Promise<void> => {
-	const type = await fieldType(field);
-	if (type !== 'password') {
-		throw new SecretInVisibleFieldError(`C1-R1: refusing to type ${what} into a field of type "${type}" (${when}): a secret is only ever typed into an <input type="password">, because the trace's screencast frames cannot be redacted`);
-	}
+	const f = await describeField(field);
+	if (!f.masked) throw new SecretInVisibleFieldError(`C1-R1: refusing to type ${what} into ${f.what} (${when}): a secret is only ever typed into an <input type="password">, because the trace's screencast frames cannot be redacted`);
 };
 
 export const typeLikeUser = async (field: Locator, text: string, opts: TypeOptions = {}): Promise<void> => {

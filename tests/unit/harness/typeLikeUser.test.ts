@@ -9,6 +9,8 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { registeredSecrets } from '../../support/secrets.ts';
 
 interface FakeOptions {
+	// the element's local name (default: input)
+	tag?: string;
 	type: string | null;
 	// the type after the first pressSequentially (a show-password toggle)
 	typeAfterTyping?: string | null;
@@ -30,6 +32,10 @@ const fakeField = (opts: FakeOptions): Fake => {
 	let typed = 0;
 	const calls: string[] = [];
 	const element = {
+		localName: opts.tag ?? 'input',
+		get type() {
+			return type;
+		},
 		get value() {
 			return value;
 		},
@@ -90,7 +96,7 @@ describe('typeLikeUser', () => {
 			const text = fakeField({ type: 'text' });
 			await expect(typeLikeUser(text.field, 'unregistered-value-123', { ...quick, secrets: [], secret: true })).rejects.toThrow(/marked secret/);
 			const textarea = fakeField({ type: null });
-			await expect(typeLikeUser(textarea.field, secret.value, quick)).rejects.toThrow(/type "\(none\)"/);
+			await expect(typeLikeUser(textarea.field, secret.value, quick)).rejects.toThrow(/<input> of type "null"/);
 			expect([...keys(text), ...keys(textarea)]).toEqual([]);
 		});
 
@@ -127,6 +133,26 @@ describe('typeLikeUser', () => {
 			await typeLikeUser(fake.field, text, { ...quick, secrets: [], secret: true });
 			const entry = registeredSecrets().find(s => s.value === text);
 			expect({ atFirstKey: registeredAtFirstKey, label: entry?.label }).toEqual({ atFirstKey: true, label: 'typed_secret' });
+		});
+
+		// Review M1-S7-r1 C-N1: the guard reads the element, not its `type` attribute (a textarea or a custom element that
+		// carries type="password" renders its text in clear).
+		test('c-n1-unit-1 refuses a textarea that carries type="password", before any key', async () => {
+			const fake = fakeField({ tag: 'textarea', type: 'password' });
+			await expect(typeLikeUser(fake.field, secret.value, quick)).rejects.toThrow(SecretInVisibleFieldError);
+			expect(keys(fake)).toEqual([]);
+		});
+
+		test('c-n1-unit-2 refuses a custom element that carries type="password"', async () => {
+			const fake = fakeField({ tag: 'x-secret-field', type: 'password' });
+			await expect(typeLikeUser(fake.field, secret.value, quick)).rejects.toThrow(SecretInVisibleFieldError);
+			expect(keys(fake)).toEqual([]);
+		});
+
+		test('c-n1-unit-3 types a secret into an input of type password in one go', async () => {
+			const fake = fakeField({ tag: 'input', type: 'password' });
+			await typeLikeUser(fake.field, secret.value, quick);
+			expect(fake.calls.filter(c => c.startsWith('pressSequentially'))).toHaveLength(1);
 		});
 
 		test('c1r1-unit-7 values shorter than 6 characters are never treated as secrets', () => {
