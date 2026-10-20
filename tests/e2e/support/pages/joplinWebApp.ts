@@ -5,6 +5,7 @@
 // accessibilityLabel and accessibilityLabelledBy to ARIA); the strings are upstream's en_GB UI texts at the pinned ref.
 // Every text goes in through typeLikeUser (real key events; secrets only into password fields, C1-R1).
 import type { Locator, Page } from '@playwright/test';
+import { waitFor } from '../../../support/poll.ts';
 import { typeLikeUser } from '../typeLikeUser.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
@@ -218,6 +219,20 @@ export class EncryptionSettings {
 
 	public async back(): Promise<void> {
 		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+	}
+
+	public masterKeyHeading(prefix6: string): Locator {
+		return this.page.getByRole('heading', { name: `Master Key ${prefix6}`, exact: true });
+	}
+
+	// The ❌ next to the key's empty password field (accessibilityRole image, label "Invalid password").
+	public invalidKeyPasswordMarker(): Locator {
+		return this.masterKeySection().getByRole('img', { name: 'Invalid password', exact: true });
+	}
+
+	// Upstream fills the statistics in every 3 s; "-" until then.
+	public async pollDecryptedStats(timeoutMs = 30_000): Promise<{ done: number; total: number }> {
+		return waitFor('the decrypted-items statistics', async () => this.decryptedStats(), { timeoutMs, intervalMs: 500 });
 	}
 
 	public async encryptionStatus(): Promise<string> {
