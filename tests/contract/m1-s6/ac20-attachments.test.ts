@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findLeaks, textViews } from '../../support/redact.ts';
 import type { KnownSecret, Leak } from '../../support/redact.ts';
-import { scannedFiles } from '../support/leakScan.ts';
+import { leakLines, scannedFiles } from '../support/leakScan.ts';
 import { snapshot } from '../../stack/stack.ts';
 import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
 import type { PwAttachment, PwResult, SelftestRun } from '../support/selftest.ts';
@@ -125,6 +125,7 @@ describe('M1-AC20 log attachments of a failing test', () => {
 			}
 		}
 		expect(seen.size).toBeGreaterThan(5);
-		expect(leaks).toEqual([]);
+		// Value-free (M1-S8 C2): a Leak carries an excerpt of the leaked text, and CI logs of a public repo are public.
+		expect(leakLines(leaks, out)).toEqual([]);
 	});
 });

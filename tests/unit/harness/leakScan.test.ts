@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from '@jest/globals';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { scannedFiles } from '../../contract/support/leakScan.ts';
+import { leakLines, scannedFiles } from '../../contract/support/leakScan.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 
 const write = (path: string, data: string | Buffer): void => {
@@ -43,5 +43,11 @@ describe('leak scan file selection', () => {
 		write(join(out, 'output', 'a.txt'), 'a');
 		write(join(out, 'junit.xml'), '<x/>');
 		expect(scannedFiles(out).map(f => relative(out, f)).sort()).toEqual(['junit.xml', 'output/a.txt']);
+	});
+
+	test('c2-unit-1 leak lines name the place and kind, never the leaked text', () => {
+		const result = leakLines([{ where: '/x/run/a.txt', kind: 'token=', excerpt: 'before nstmarker0123 after' }], '/x/run');
+		expect(result).toEqual(['<run>/a.txt: token=']);
+		expect(JSON.stringify(result)).not.toContain('nstmarker0123');
 	});
 });

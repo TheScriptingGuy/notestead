@@ -98,4 +98,7 @@ export const scannedFiles = (out: string): string[] => {
 // console log), zips opened; the report's data is html/data/ and the zip inside index.html, both scanned.
 export const fileViews = (run: SelftestRun): View[] => scannedFiles(run.out).flatMap(f => textViews(f, readFileSync(f)));
 
+// Value-free lines for a leak assertion (review M1-S8 C2): where and what kind, never the excerpt around the value.
+export const leakLines = (leaks: Leak[], out?: string): string[] => leaks.map(l => `${out ? l.where.split(out).join('<run>') : l.where}: ${l.kind}`);
+
 export const leaksIn = (views: View[], secrets: KnownSecret[], forbidden: RegExp[] = []): Leak[] => views.flatMap(v => findLeaks(v.where, v.text, { secrets, forbidden }));

@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KnownSecret } from '../../support/redact.ts';
 import { snapshot } from '../../stack/stack.ts';
-import { channelViews, fileViews, harnessPassword, leaksIn } from '../support/leakScan.ts';
+import { channelViews, fileViews, harnessPassword, leakLines, leaksIn } from '../support/leakScan.ts';
 import type { JsonResult, View } from '../support/leakScan.ts';
 import { repoRoot, webImageInfo } from '../support/podman.ts';
 import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
@@ -122,7 +122,7 @@ describe('M1-S7 C1-R1 the real login and unlock flow leaves no secret in any art
 	for (const channel of ['trace-actions', 'trace-network', 'error-context', 'html-report', 'junit-report', 'json-report', 'console', 'output-files'] as const) {
 		test(`c1r1-redacted-${channel} no password and no session id in the ${channel}`, () => {
 			const p = positive();
-			expect(leaksIn(views(p)[channel], p.secrets, [harnessPassword]).map(l => `${l.where.replace(p.run.out, '<run>')}: ${l.kind}`)).toEqual([]);
+			expect(leakLines(leaksIn(views(p)[channel], p.secrets, [harnessPassword]), p.run.out)).toEqual([]);
 		});
 	}
 
