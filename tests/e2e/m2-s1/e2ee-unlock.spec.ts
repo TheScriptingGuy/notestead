@@ -92,7 +92,7 @@ const readReference = (dataApi: DataApi, seed: Seed): Record<string, unknown>[] 
 test.describe('M2-S1 E2EE unlock in the web app', () => {
 	test.use({ e2eeSeed: { notes: 3 } });
 
-	test('M2-AC2 the web app reports the seeded items as encrypted, and after the master password shows every seeded title and body as the headless REST API has them', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {
+	test('M2-AC2 the web app reports the account as end-to-end encrypted and asks for the master password, and after the master password shows every seeded title and body as the headless REST API has them', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {
 		await requireUpstreamBundle(stack, 'M2-S1');
 		const seed = seedOf(e2eeAccount);
 		const app = new JoplinWebApp(webApp.page);
@@ -184,7 +184,7 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 		});
 	});
 
-	test('M2-AC2 NEG a wrong master password leaves every seeded item encrypted and shows upstream\'s error; nothing is decrypted', async ({ stack, joplinServer, e2eeAccount, webApp, webNetwork }) => {
+	test('M2-AC2 NEG a wrong master password keeps every seeded item unreadable and shows upstream\'s error; nothing is decrypted', async ({ stack, joplinServer, e2eeAccount, webApp, webNetwork }) => {
 		await requireUpstreamBundle(stack, 'M2-S1');
 		const seed = seedOf(e2eeAccount);
 		const app = new JoplinWebApp(webApp.page);
