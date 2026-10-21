@@ -8,7 +8,8 @@
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
-//           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
+//           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin,
+//                         en-GB, in the time zone of the option `webTimezone` (default Europe/Amsterdam)
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
 //                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
 //                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
@@ -34,6 +35,7 @@ import { redactText } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
+import { userTimeZone } from './dueDate.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
@@ -80,6 +82,7 @@ interface TestFixtures {
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	webTimezone: string;
 	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
 }
@@ -224,12 +227,15 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		expect(late, 'network policy over the whole test, checked at its end (M2-S1 r1 C2)').toEqual([]);
 	},
 
-	webApp: async ({ browser, stack }, use, testInfo) => {
+	// Europe/Amsterdam: the user's zone (gate 1, Q9); M2-AC5 asserts due dates as epochs in it (docs/test-plans/M2-S2.md D5).
+	webTimezone: [userTimeZone, { option: true }],
+
+	webApp: async ({ browser, stack, webTimezone }, use, testInfo) => {
 		if (!stack.webUrl) throw new Error('the stack has no web URL');
 		// 127.0.0.1, never localhost: upstream's environment.js turns on dev mode for any origin containing "localhost".
 		// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
 		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
-		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB' });
+		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB', timezoneId: webTimezone });
 		const lines: string[] = [];
 		const watch = (page: Page): void => {
 			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));
