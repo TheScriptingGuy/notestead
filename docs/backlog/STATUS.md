@@ -9,7 +9,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
 | M1 Walking skeleton + test harness | **done 2026-10-16** | Stories S1–S9 and S6a merged, each approved in review (S2 in r3, the rest in r1). Every acceptance criterion passes on arm64 and x64 (`e2e.yml` 38881804121, `ci.yml` 38881804157). Close-out `docs/reviews/M1-closeout-r2.md` APPROVE r2; tag `m1-done` |
-| M2 Web app | in progress | next: M2-S1 (sync through the proxy and E2EE unlock) |
+| M2 Web app | in progress | M2-S1 merged 2026-10-21 (`docs/reviews/M2-S1-r1.md` APPROVE r1; test-only story, product unchanged; arm64 pass, x64 PENDING-CI). New limitation L18 (no sync before the master password on E2EE accounts). Next: M2-S2 (notes, notebooks, tags and to-dos) |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
 | M5 Release | not started | |
@@ -60,13 +60,15 @@ Done in M1 (detail in the reviews and test plans):
 - the ADR-0007 (C3 harness rules, Chromium in CI) and ADR-0003 (sync-success) amendments, and the M1-AC21 rewording (`55a4be9`, `21389c2`).
 
 Open, grouped by when they are due, following the classification in `docs/reviews/M1-closeout-r1.md`:
-- **M2-S1 QA (the next harness change):**
-  - CI's Playwright already runs more than one worker, so ADR-0007's serial rule applies: any spec that stops, restarts or reconfigures a shared service needs a serial project or its own containers.
-  - M1-S8 C2: `ac20-attachments.test.ts:133` prints the text around each leaked value. Report leaks without values; CI logs of a public repo are public.
-  - Nits: C-N1 (the password-input guard checks the element), C-N3 (warn when a spec uses Playwright's own `page`), C1-R4 (`html/trace/` checked against the viewer files), C2-R5 (strategy wording).
+- **M2-S1 QA:** ~~serial rule, M1-S8 C2, C-N1, C-N3, C1-R4, C2-R5~~ (done in M2-S1, 2026-10-21).
+- **Pending CI:** after the push of the M2-S1 merge, QA records the x64 `e2e.yml`/`ci.yml` run for M2-S1 (run id, junit counts, `flaky: 0`, `retry: 0`, durations).
 - **M2-S2/S3:**
+  - M2-S1 r1 C1: `noSeedIn` returns the seeded value, so a failure prints it in CI logs; make it value-free (M2-S2 QA).
+  - M2-S1 r1 C2: the M2-AC1 network policy is evaluated once; re-check at the end of longer sessions (M2-S2 QA).
+  - M2-S1 r1 nit C5: shorten the header comment in `e2ee-unlock.spec.ts`.
   - `e2eeAccount` seeds a to-do with `todo_due`, a tag and an attachment.
   - C-N2: check in the UI that the body is decrypted (covered by M2-AC2).
+- **M2-S5 plan:** M2-S1 r1 C3: `chromium-serial` depends on `chromium`, so a red parallel run hides the first disruptive spec as "not run".
 - **Before M3/M4 mix sync and MCP:**
   - The "one headless sync" helper (a restart, which rotates the token) moves to M3's manual sync trigger.
   - QA, M3-AC1: a contract test where `/api/ping` answers but sync fails, so the stack never reports ready. A wrong sync password is a hard failure.
@@ -100,11 +102,15 @@ Open, grouped by when they are due, following the classification in `docs/review
   - accepted risk A1, the lint-ban bypasses;
   - the Node 24 trace workaround stays everywhere.
 - **Upstream proposals (the user may file them):**
+  - U13/L18: on the first web login to an E2EE account the upload of the welcome notes fails ("Master key is not loaded") and aborts the whole sync, so nothing downloads before the master password;
   - `joplin sync` exits non-zero when it fails;
   - the web app's "Joplin Server URL" field loses focus;
   - the Playwright trace merge hangs on Node 24;
   - `tkwidgets` has no licence field.
 - **Process:**
+  - M2-S1 r1 P1: report a running stack you did not start before removing it; add the rule to `docs/testing/strategy.md` at the next QA touch.
+  - M2-S1 r1 P2: in harness work orders, commit the failing unit test before its support code.
+  - Team pattern since 2026-10-21: Opus QA planner and architect; Sonnet QA executor, senior engineer, ci-cd and lead.
   - P1: QA hands over runner configs before implementation.
   - P2: keep unrelated decisions out of story commits.
   - P-R1: test- or docs-only commits use `test`/`chore`/`docs(test-plans)`.
