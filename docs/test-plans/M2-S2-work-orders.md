@@ -800,3 +800,70 @@ Append to `docs/test-plans/M2-S2.md`, in the M2-S1 format:
 - the sensitivity outcomes;
 - any stop/report item (F6, F7, the resource names, a leftover stack);
 - the podman before/after result.
+
+---
+
+## Addendum (planner, 2026-10-21): WO-19 to WO-22, after the review of `d1963d9`
+These orders implement the planner's decisions on O1, O2 and F8 (plan §Planner review and decisions). Every rule above still holds. **No test image is kept right now**, so the first heavy run rebuilds them: add `NOTESTEAD_KEEP_IMAGE=1` and leave out `$IMG`. Later runs use `$IMG`. Remove the kept images only after the planner's sign-off.
+
+## WO-19: M2-AC4 collapse-and-expand check, and note 1 untouched (one commit)
+File: `tests/e2e/m2-s2/notebooks-tags.spec.ts`.
+1. **Step `0.`:** also keep `note1Before = pick(ok(dataApi.get(\`/notes/${note1.id}?fields=id,title,body,parent_id\`), 'GET note 1'), ['id', 'title', 'body', 'parent_id'])`.
+2. **Step `5.`:** replace the three lines between `app.openSidebar()` and `app.closeSidebar()` with:
+   ```ts
+   const toggle = app.expandFolder(P2);
+   await expect(toggle, 'the parent notebook starts expanded').toHaveAttribute('aria-pressed', 'true');
+   await expect(app.folderInSideMenu(C, 1), 'the child shows at level 1 under the expanded parent').toBeVisible();
+   await toggle.click();
+   await expect(toggle, 'collapsed').toHaveAttribute('aria-pressed', 'false');
+   await expect(app.folderInSideMenu(C, 1), 'the child is hidden under the collapsed parent').toHaveCount(0);
+   await toggle.click();
+   await expect(toggle, 'expanded again').toHaveAttribute('aria-pressed', 'true');
+   await expect(app.folderInSideMenu(C, 1)).toBeVisible();
+   ```
+   Keep the comment above them, and extend it by one line: `// The collapse shows the level-1 child belongs to this parent (plan §Planner review, O2).`
+   - If the child stays visible while collapsed, or the toggle's name changes with its state, stop and report the `ariaSnapshot()` of the side menu.
+   - Don't drop the assertion.
+3. **Step `6.`:** add at the end `expect(pick(ok(dataApi.get(\`/notes/${note1.id}?fields=id,title,body,parent_id\`), 'GET note 1'), ['id', 'title', 'body', 'parent_id']), 'note 1 itself is unchanged: the web app changed only its tags').toEqual(note1Before)`.
+4. **Run** (first run of the addendum, so it rebuilds the images): `T=60m run test-results/verify/m2-s2/green/wo19-notebooks-tags.log env NOTESTEAD_KEEP_IMAGE=1 corepack yarn playwright test tests/e2e/m2-s2/notebooks-tags.spec.ts`. It must pass.
+   - If the note-1 check fails, stop and report the diff. A changed body points to the F8 focus spill, and that is a harness bug to fix test-first.
+
+**Commit:** `test(e2e): M2-AC4 collapses and expands the parent notebook, and checks note 1 is unchanged (O2)`.
+
+## WO-20: Sensitivity runs S1c and S1d (no commit)
+Make temporary edits to `tests/e2e/m2-s2/notes.spec.ts`. After each run, `git checkout -- tests/e2e/m2-s2/notes.spec.ts`, and `git status` must be clean. Use `env $IMG`, `T=40m` and `-g "M2-AC3"`.
+
+| Run | Edit | Must fail at |
+|---|---|---|
+| **S1c** | step `6.`: put `await webApp.context.setOffline(true);` before `await cycle('edit');` | in `syncWebOnce` (step 6): `Expected: "completed"`, with `Received` either `"no delta request since the press"` or `"the sync reported an error: …"`. Record which |
+| **S1d** | step `5.`: put `await webApp.context.setOffline(true);` before `await app.openNote(T1);`. Step `6.`: replace `await cycle('edit');` with `await syncHeadlessOnce(stack, headlessService);` (import it from `../../stack/stack.ts`) | the step-6 `readNote` poll: `title` and `body` received T1 and B1 |
+
+- **If S1d does not fail:** search its `network.log` for a `PUT` of `…/<note id>.md` stamped after the `setOffline` call (`grep` the timestamps), and report what you find. It tells us whether requests from a service worker or worker bypass `setOffline`. Don't try other seams.
+- **For both runs:** check that `network.log`, `browser-console.log`, `trace`, `server.log` and `supervisor.log` are attached.
+
+## WO-21: Strategy note for the focus stabilisation (`docs(testing)`)
+In `docs/testing/strategy.md` §3, extend the "Absence over a window" bullet by one sentence:
+
+> A **stabilisation** is the same rule at a small scale: "nothing changes for N polls" after an observed event, such as the note editor's load before typing a new note's title (`NoteScreen.waitSettled`, 10 × 100 ms; M2-S2 F8).
+
+**Commit:** `docs(testing): a short stabilisation window anchored to an event is an absence window (M2-S2 F8)`.
+
+## WO-22: Plan update and report (`docs(test-plans)`)
+`docs/test-plans/M2-S2.md`:
+- **§Harness validation:**
+  - mark the S1 row **superseded (O1, F9)**;
+  - keep S1b;
+  - add S1c and S1d with their failure lines and logs.
+- **§Results, Per criterion:** replace the M2-AC4 row with the WO-19 run (PASS/FAIL, command, duration, log). Mention the collapse step and the note-1 check.
+- **§Results, Podman:** add the before/after state of the addendum runs, including which images were kept and removed. Remove them only after the planner signs off.
+- **§Test integrity:** re-run `git log --format='%h %an %s%n%b' 7b19554..HEAD -- tests/ playwright.config.ts`.
+- **Don't** write a sign-off line; the planner records it after review.
+
+**Commit:** `docs(test-plans): M2-S2 addendum results (collapse step, S1c, S1d)`.
+
+**Report to the orchestrator:**
+- the commit hashes;
+- the WO-19 result;
+- S1c's `Received` value;
+- S1d's outcome (and, if it did not fail, the `network.log` finding);
+- the podman state.
