@@ -6,7 +6,7 @@
 // Needs the real upstream bundle in the web image: NOTESTEAD_WEB_ARTIFACT=<CI artifact dir> (or NOTESTEAD_WEB_IMAGE).
 import { randomBytes } from 'node:crypto';
 import { requireUpstreamBundle } from '../support/bundle.ts';
-import { restGet } from '../support/dataApi.ts';
+import { ok, pick, restGet } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
@@ -41,6 +41,7 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 		};
 
 		let seedTagId = '';
+		let note1Before: Record<string, unknown> = {};
 		let pId = '';
 		let cId = '';
 		let aId = '';
@@ -51,6 +52,7 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 			const seedTags = tagsTitled(get, seedTag);
 			expect(seedTags, 'exactly one seed tag').toHaveLength(1);
 			seedTagId = String(seedTags[0].id);
+			note1Before = pick(ok(dataApi.get(`/notes/${note1.id}?fields=id,title,body,parent_id`), 'GET note 1'), ['id', 'title', 'body', 'parent_id']);
 		});
 
 		await test.step('1. open the web app and unlock it', async () => {
@@ -107,8 +109,16 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 
 			// Upstream lists a parent notebook expanded unless its id is in collapsedFolderIds (empty at start), and its "Expand"
 			// button is a toggle (aria-pressed): the nested child shows at (level 1) under the expanded parent.
+			// The collapse shows the level-1 child belongs to this parent (plan §Planner review, O2).
 			await app.openSidebar();
-			await expect(app.expandFolder(P2), 'the parent notebook is expanded').toHaveAttribute('aria-pressed', 'true');
+			const toggle = app.expandFolder(P2);
+			await expect(toggle, 'the parent notebook starts expanded').toHaveAttribute('aria-pressed', 'true');
+			await expect(app.folderInSideMenu(C, 1), 'the child shows at level 1 under the expanded parent').toBeVisible();
+			await toggle.click();
+			await expect(toggle, 'collapsed').toHaveAttribute('aria-pressed', 'false');
+			await expect(app.folderInSideMenu(C, 1), 'the child is hidden under the collapsed parent').toHaveCount(0);
+			await toggle.click();
+			await expect(toggle, 'expanded again').toHaveAttribute('aria-pressed', 'true');
 			await expect(app.folderInSideMenu(C, 1)).toBeVisible();
 			await app.closeSidebar();
 
@@ -139,6 +149,7 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 			expect(tagsTitled(get, seedTag).map(t => t.id), 'the device\'s tag keeps its id').toEqual([seedTagId]);
 			expect(tagNoteIds(get, seedTagId), 'and its note').toEqual([note1.id]);
 			expect(noteTagTitles(get, note1.id)).toEqual([B2, seedTag].sort());
+			expect(pick(ok(dataApi.get(`/notes/${note1.id}?fields=id,title,body,parent_id`), 'GET note 1'), ['id', 'title', 'body', 'parent_id']), 'note 1 itself is unchanged: the web app changed only its tags').toEqual(note1Before);
 		});
 
 		await test.step('7. network policy', async () => {
