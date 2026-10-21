@@ -3,11 +3,12 @@
 // value; the 502 path's error entry is in the attached web log without any of its marker values.
 // The inner test is tests/harness/selftest/attachments.spec.ts. docs/test-plans/M1-S6.md.
 import { beforeAll, describe, expect, test } from '@jest/globals';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findLeaks, textViews } from '../../support/redact.ts';
 import type { KnownSecret, Leak } from '../../support/redact.ts';
+import { leakLines, scannedFiles } from '../support/leakScan.ts';
 import { snapshot } from '../../stack/stack.ts';
 import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
 import type { PwAttachment, PwResult, SelftestRun } from '../support/selftest.ts';
@@ -19,11 +20,6 @@ interface Planted {
 	markers: Record<string, string>;
 	secrets: KnownSecret[];
 }
-
-const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap(name => {
-	const path = join(dir, name);
-	return statSync(path).isDirectory() ? filesUnder(path) : [path];
-});
 
 describe('M1-AC20 log attachments of a failing test', () => {
 	let run: SelftestRun | undefined;
@@ -115,12 +111,11 @@ describe('M1-AC20 log attachments of a failing test', () => {
 		const leaks: Leak[] = [];
 		const seen = new Set<string>();
 		// Every attachment of the report, and every file the run wrote (output dir, stack logs, console log, the HTML and
-		// JUnit reports), except html/trace/ (Playwright's trace viewer app, copied
-		// verbatim into every HTML report; the report's data is html/data/ and is scanned).
+		// JUnit reports), except the unchanged copies of Playwright's trace viewer app in html/trace/ (C1-R4: scannedFiles).
 		const out = run?.out ?? '.';
 		const sources: { where: string; data: Buffer }[] = [
 			...(result?.attachments ?? []).map(a => ({ where: `attachment ${a.name}`, data: content(a) })),
-			...filesUnder(out).filter(f => !f.startsWith(join(out, 'html', 'trace'))).map(f => ({ where: f, data: readFileSync(f) })),
+			...scannedFiles(out).map(f => ({ where: f, data: readFileSync(f) })),
 		];
 		for (const source of sources) {
 			for (const view of textViews(source.where, source.data)) {
@@ -130,6 +125,7 @@ describe('M1-AC20 log attachments of a failing test', () => {
 			}
 		}
 		expect(seen.size).toBeGreaterThan(5);
-		expect(leaks).toEqual([]);
+		// Value-free (M1-S8 C2): a Leak carries an excerpt of the leaked text, and CI logs of a public repo are public.
+		expect(leakLines(leaks, out)).toEqual([]);
 	});
 });

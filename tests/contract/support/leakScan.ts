@@ -3,9 +3,10 @@
 // the JSON report's results (errors, stdout/stderr, steps, attachments), the trace zip entry by entry, the JUnit and HTML
 // reports (the HTML report's data zip decoded from index.html), the console log, and every file under the run's dir.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { findLeaks, textViews } from '../../support/redact.ts';
 import type { KnownSecret, Leak } from '../../support/redact.ts';
+import { isPackagedViewerFile } from '../../support/uploadGate.ts';
 import type { PwAttachment, SelftestRun } from './selftest.ts';
 
 // Every password the harness generates (tests/stack/stack.ts strongPassword), of any account of the run.
@@ -86,11 +87,18 @@ export const channelViews = (run: SelftestRun, result: JsonResult | undefined): 
 	};
 };
 
+// The files of the run's dir that are scanned: all of them except unchanged copies of Playwright's trace viewer
+// under html/trace/ (review M1-S6a-r1 C1-R4; the comparator is the upload gate's).
+export const scannedFiles = (out: string): string[] => {
+	const viewer = join(out, 'html', 'trace') + sep;
+	return filesUnder(out).filter(f => !(f.startsWith(viewer) && isPackagedViewerFile(f, readFileSync(f))));
+};
+
 // Every file the run wrote (the reports, the output dir with the originals of attached files, the stack logs, the
-// console log), zips opened. Not html/trace/: that is Playwright's trace viewer app, copied verbatim into every HTML
-// report (its code has `cookie=x.value`); the report's data is html/data/ and the zip inside index.html, both scanned.
-export const fileViews = (run: SelftestRun): View[] => filesUnder(run.out)
-	.filter(f => !f.startsWith(join(run.out, 'html', 'trace')))
-	.flatMap(f => textViews(f, readFileSync(f)));
+// console log), zips opened; the report's data is html/data/ and the zip inside index.html, both scanned.
+export const fileViews = (run: SelftestRun): View[] => scannedFiles(run.out).flatMap(f => textViews(f, readFileSync(f)));
+
+// Value-free lines for a leak assertion (review M1-S8 C2): where and what kind, never the excerpt around the value.
+export const leakLines = (leaks: Leak[], out?: string): string[] => leaks.map(l => `${out ? l.where.split(out).join('<run>') : l.where}: ${l.kind}`);
 
 export const leaksIn = (views: View[], secrets: KnownSecret[], forbidden: RegExp[] = []): Leak[] => views.flatMap(v => findLeaks(v.where, v.text, { secrets, forbidden }));

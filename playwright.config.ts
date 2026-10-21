@@ -7,9 +7,12 @@
 // - Reports: the redacting reporter first (it redacts every attachment, the trace included, before anything copies
 //   it), then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
 // - Traces: recorded by the `webApp` fixture (no screenshots) and kept on failure; see `use.trace` below.
+// - Projects: `chromium` (parallel) and `chromium-serial` (*.serial.spec.ts: specs that disrupt a shared service, one
+//   worker, after `chromium`; tests/e2e/support/projects.ts, ADR-0007 A3).
 // - Browser: tests/e2e/support/chromium.ts (the installed Chromium locally when Playwright's revision is missing).
 import { defineConfig, devices } from '@playwright/test';
 import { chooseChromium } from './tests/e2e/support/chromium.ts';
+import { e2eProjects } from './tests/e2e/support/projects.ts';
 
 const ci = !!process.env.CI;
 const chromium = chooseChromium();
@@ -39,7 +42,5 @@ export default defineConfig({
 		video: 'off',
 		launchOptions: chromium.executablePath ? { executablePath: chromium.executablePath } : {},
 	},
-	projects: [
-		{ name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-	],
+	projects: e2eProjects(devices['Desktop Chrome']),
 });

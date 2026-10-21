@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KnownSecret } from '../../support/redact.ts';
 import { snapshot } from '../../stack/stack.ts';
-import { channelViews, fileViews, harnessPassword, leaksIn } from '../support/leakScan.ts';
+import { channelViews, fileViews, harnessPassword, leakLines, leaksIn } from '../support/leakScan.ts';
 import type { JsonResult, View } from '../support/leakScan.ts';
 import { allSpecs, describeRun, runSelftest, stackImagesEnv } from '../support/selftest.ts';
 import type { SelftestRun } from '../support/selftest.ts';
@@ -113,7 +113,7 @@ describe('M1-S6a C1 per-test secrets are redacted in every channel', () => {
 		test(`c1-redacted-${channel} no per-test secret in the ${channel}`, () => {
 			const p = positive();
 			expect(p.secrets).toHaveLength(3);
-			expect(leaksIn(channels(p)[channel], p.secrets).map(l => `${l.where}: ${l.kind}`)).toEqual([]);
+			expect(leakLines(leaksIn(channels(p)[channel], p.secrets))).toEqual([]);
 		});
 	}
 
@@ -121,7 +121,7 @@ describe('M1-S6a C1 per-test secrets are redacted in every channel', () => {
 		const p = positive();
 		const views = everything(p);
 		expect(views.length).toBeGreaterThan(10);
-		expect(leaksIn(views, p.secrets, [harnessPassword]).map(l => `${l.where}: ${l.kind}`)).toEqual([]);
+		expect(leakLines(leaksIn(views, p.secrets, [harnessPassword]))).toEqual([]);
 	});
 
 	test('c1-neg with the per-test secret feed off, the scan finds the planted secrets in every channel', () => {

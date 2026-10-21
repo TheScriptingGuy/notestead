@@ -1,11 +1,15 @@
 // Playwright fixtures of the Notestead harness (ADR-0007 §Fixtures and isolation; docs/test-plans/M1-S6.md):
 //   worker  stack         the compose test stack globalSetup started (or attached to), read from NOTESTEAD_E2E_STACK
 //           joplinServer  that stack's throwaway Joplin Server: direct URL, the proxied URL through web, a request helper
-//   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and a note
+//   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and notes
+//                         (option `e2eeSeed`: { notes }, default one note)
+//           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
+//           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
+//                         attaches network.log (query strings removed). It only observes, it never routes.
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -29,6 +33,8 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { stackEnv } from './globalSetup.ts';
+import { recordNetwork } from './network.ts';
+import type { NetworkRecorder } from './network.ts';
 
 export interface JoplinServerHandle {
 	// http://127.0.0.1:<published port>; needs the Host of APP_BASE_URL (use `request`)
@@ -67,9 +73,12 @@ interface WorkerFixtures {
 interface TestFixtures {
 	stackLogs: undefined;
 	e2eeAccount: Account;
+	e2eeSeed: { notes: number };
+	plainAccount: Account;
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
 }
 
@@ -101,7 +110,20 @@ const runProbe = (container: string, probe: string, args: string[]): DataApiResu
 	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
 };
 
+export const builtinFixtureMessage = (name: 'page' | 'context'): string => `the built-in \`${name}\` fixture is disabled in this harness: it records no trace and no browser console (use.trace is off). Use the \`webApp\` fixture (webApp.page, webApp.context) instead.`;
+
 export const test = base.extend<TestFixtures, WorkerFixtures>({
+	// Playwright's built-in page and context have no trace and no console log in this harness (use.trace is off; the
+	// webApp fixture records both; review M1-S7-r1 C-N3, docs/testing/strategy.md §4).
+	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
+	page: async ({}, _use) => {
+		throw new Error(builtinFixtureMessage('page'));
+	},
+	// eslint-disable-next-line no-empty-pattern -- as above
+	context: async ({}, _use) => {
+		throw new Error(builtinFixtureMessage('context'));
+	},
+
 	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
 	stack: [async ({}, use) => {
 		// The guard again, in the worker: a worker can be started with a different environment than globalSetup.
@@ -143,9 +165,15 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		if (stack.defaultHeadless?.container) await attachText(testInfo, 'supervisor-default.log', containerLog(stack, stack.defaultHeadless.container, since, secrets));
 	}, { auto: true }],
 
-	e2eeAccount: async ({ stack }, use, testInfo) => {
-		const account = enableE2ee(stack, await createAccount(stack), shortId(testInfo));
+	e2eeSeed: [{ notes: 1 }, { option: true }],
+
+	e2eeAccount: async ({ stack, e2eeSeed }, use, testInfo) => {
+		const account = enableE2ee(stack, await createAccount(stack), shortId(testInfo), e2eeSeed);
 		await use(account);
+	},
+
+	plainAccount: async ({ stack }, use) => {
+		await use(await createAccount(stack));
 	},
 
 	headlessService: async ({ stack, e2eeAccount }, use, testInfo) => {
@@ -181,6 +209,13 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			if (web && failed(testInfo)) await attachText(testInfo, 'web-without-host-rewrite.log', containerLog(stack, web.container, undefined, workerSecrets(stack)));
 			if (web) removeContainer(stack, web.container);
 		}
+	},
+
+	// The network log of the webApp context, for the policy checks and as an attachment on failure (M2-S1).
+	webNetwork: async ({ webApp, stack }, use, testInfo) => {
+		const recorder = recordNetwork(webApp.context);
+		await use(recorder);
+		if (failed(testInfo)) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
 	},
 
 	webApp: async ({ browser, stack }, use, testInfo) => {

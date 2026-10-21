@@ -11,12 +11,14 @@
 // the note never appears within the window.
 // Needs the real upstream bundle in the web image: NOTESTEAD_WEB_ARTIFACT=<CI artifact dir> (or NOTESTEAD_WEB_IMAGE).
 import { randomUUID } from 'node:crypto';
+import { requireUpstreamBundle } from '../support/bundle.ts';
+import { notesTitled, ok, pick } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
-import type { DataApi, DataApiResult } from '../support/fixtures.ts';
+import type { DataApi } from '../support/fixtures.ts';
 import { configureJoplinServerSync, firstSyncTimeoutMs, unlockE2ee } from '../support/flows.ts';
 import { JoplinWebApp, decryptionBannerText } from '../support/pages/joplinWebApp.ts';
 import { holdsFor } from '../../support/poll.ts';
-import { containerLog, serverItemContent, serverItemNames, syncHeadlessOnce, webRequest } from '../../stack/stack.ts';
+import { containerLog, serverItemContent, serverItemNames, syncHeadlessOnce } from '../../stack/stack.ts';
 import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
 import { request } from '../../contract/support/http.ts';
 
@@ -30,36 +32,6 @@ interface SkeletonNote {
 // decryption banner ~2 s after its first sync and the title ~16 s after the master password (Pi, arm64); 60 s is more
 // than 4x either (docs/testing/strategy.md §3 "Absence over a window"; docs/test-plans/M1-S7.md §NEG window).
 const negWindowMs = 60_000;
-
-// The web image must serve upstream's app, not the M1-S4 fixture F3 (whose app.bundle.js is a 64 KiB synthetic file).
-const requireUpstreamBundle = async (stack: StackState): Promise<void> => {
-	const res = await webRequest(stack, '/app.bundle.js');
-	const synthetic = res.text.includes('Notestead M1-S4 synthetic fixture');
-	if (res.status !== 200 || synthetic || res.text.length < 1024 * 1024) {
-		throw new Error(`M1-S7 needs the upstream web bundle in the web image, but GET /app.bundle.js returned ${res.status}, ${res.text.length} bytes${synthetic ? ', the M1-S4 synthetic fixture F3' : ''}. `
-			+ 'Run with NOTESTEAD_WEB_ARTIFACT=<a CI web-bundle artifact dir> (docs/test-plans/M1-S7.md §How to run).');
-	}
-};
-
-const ok = (r: DataApiResult, what: string): Record<string, unknown> => {
-	expect(r.error, `${what}: the Data API probe failed`).toBeUndefined();
-	expect(r.status, `${what}: HTTP status`).toBe(200);
-	return r.body as Record<string, unknown>;
-};
-
-// The named fields of a Data API item (the API adds `type_`, the item's model type).
-const pick = (item: Record<string, unknown>, keys: string[]): Record<string, unknown> => Object.fromEntries(keys.map(k => [k, item[k]]));
-
-// Every note with `title`, conflicts included, from the headless Data API (paginated).
-const notesTitled = (dataApi: DataApi, title: string): Record<string, unknown>[] => {
-	const found: Record<string, unknown>[] = [];
-	for (let page = 1; page <= 50; page++) {
-		const body = ok(dataApi.get(`/notes?fields=id,title,is_conflict&limit=100&page=${page}`), 'GET /notes');
-		found.push(...(body.items as Record<string, unknown>[]).filter(n => n.title === title));
-		if (!body.has_more) return found;
-	}
-	throw new Error('more than 50 pages of notes');
-};
 
 // Steps 1 and 2, shared by the walking skeleton and its NEG.
 const createAndSyncNote = async (stack: StackState, account: Account, headlessService: HeadlessService, dataApi: DataApi): Promise<SkeletonNote> => {

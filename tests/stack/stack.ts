@@ -40,6 +40,8 @@ export interface Account {
 	password: string;
 	masterPassword: string;
 	e2ee?: string;
+	// the random tag in the titles and bodies the E2EE device seeded (enableE2ee)
+	seedTag?: string;
 	folder?: string;
 	notes?: { id: string; title: string; body: string }[];
 }
@@ -367,10 +369,13 @@ export const createAccount = async (state: StackState): Promise<Account> => {
 
 // The CLI "other device" (tests/fixtures/m1-s5/device): joins the account through web's public proxy, turns E2EE on,
 // seeds a folder and notes, syncs. Everything secret travels on stdin.
-export const enableE2ee = (state: StackState, account: Account, label: string): Account => {
+// `seed.notes` notes (default 1): the first has the title and body of the single-note seed of M1; note i (2 and up) has
+// a title that is not a prefix of another and a body with non-ASCII text (M2-S1).
+export const enableE2ee = (state: StackState, account: Account, label: string, seed: { notes?: number } = {}): Account => {
 	const tag = randomBytes(5).toString('hex');
 	const folder = `Notestead folder ${tag}`;
 	const notes = [{ title: `Notestead note ${tag}`, body: `Seeded body ${tag} zebracorn` }];
+	for (let i = 2; i <= (seed.notes ?? 1); i++) notes.push({ title: `Notestead note ${i} ${tag}`, body: `Seeded body ${i} ${tag} zebracorn Δ ✓ ünïcödé` });
 	const name = `${state.project}-device-${label}`;
 	const r = spawnSync('podman', ['run', '--rm', '-i', '--name', name, '--network', state.frontNetwork,
 		'--label', `${testLabel}=stack`, '--label', `${runLabel}=${state.run}`, state.images.device], {
@@ -383,6 +388,7 @@ export const enableE2ee = (state: StackState, account: Account, label: string): 
 	if (r.status !== 0 || !line) throw new Error(`the E2EE device failed (exit ${r.status}; log ${join(state.logsDir, `device-${label}.log`)}): ${redactText(`${r.stdout}\n${r.stderr}`, knownSecrets(state)).slice(-1500)}`);
 	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[] };
 	account.e2ee = result.e2ee;
+	account.seedTag = tag;
 	account.folder = folder;
 	account.notes = result.notes.map(n => ({ ...n, body: notes.find(s => s.title === n.title)?.body ?? '' }));
 	if (state.owned) saveDescriptor(state);
