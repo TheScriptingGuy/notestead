@@ -5,10 +5,7 @@ import { createHash } from 'node:crypto';
 import { ok, pick, restGet } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { allItems, noteTagTitles, tagNoteIds, tagsTitled } from '../support/restQueries.ts';
-import { serverItemContent, serverItemNames } from '../../stack/stack.ts';
-// RED only: a namespace import, because a named import of an export that does not exist yet fails at module link time,
-// before step 1 can show the missing feature.
-import * as stackModule from '../../stack/stack.ts';
+import { seedTodoDue, serverItemContent, serverItemNames } from '../../stack/stack.ts';
 
 test.describe('M2-S2 e2eeAccount seed extras', () => {
 	test.use({ e2eeSeed: { notes: 1, extras: true } });
@@ -32,7 +29,7 @@ test.describe('M2-S2 e2eeAccount seed extras', () => {
 			const parentId = ok(dataApi.get(`/notes/${note1!.id}?fields=parent_id`), 'GET note 1').parent_id;
 			const fields = 'id,title,is_todo,todo_due,todo_completed,parent_id';
 			expect(pick(ok(dataApi.get(`/notes/${todo!.id}?fields=${fields}`), 'GET the seeded to-do'), fields.split(','))).toEqual({
-				id: todo!.id, title: todo!.title, is_todo: 1, todo_due: stackModule.seedTodoDue, todo_completed: 0, parent_id: parentId,
+				id: todo!.id, title: todo!.title, is_todo: 1, todo_due: seedTodoDue, todo_completed: 0, parent_id: parentId,
 			});
 		});
 

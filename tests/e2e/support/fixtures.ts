@@ -2,7 +2,8 @@
 //   worker  stack         the compose test stack globalSetup started (or attached to), read from NOTESTEAD_E2E_STACK
 //           joplinServer  that stack's throwaway Joplin Server: direct URL, the proxied URL through web, a request helper
 //   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and notes
-//                         (option `e2eeSeed`: { notes }, default one note)
+//                         (option `e2eeSeed`: { notes, extras }, default one note; extras: a to-do with todo_due, a tag
+//                         on note 1 and a text attachment on a note of its own, M2-S2 D7)
 //           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
@@ -74,7 +75,7 @@ interface WorkerFixtures {
 interface TestFixtures {
 	stackLogs: undefined;
 	e2eeAccount: Account;
-	e2eeSeed: { notes: number };
+	e2eeSeed: { notes: number; extras?: boolean };
 	plainAccount: Account;
 	headlessService: HeadlessService;
 	dataApi: DataApi;
