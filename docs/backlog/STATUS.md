@@ -61,13 +61,16 @@ Done in M1 (detail in the reviews and test plans):
 
 Open, grouped by when they are due, following the classification in `docs/reviews/M1-closeout-r1.md`:
 - **M2-S1 QA:** ~~serial rule, M1-S8 C2, C-N1, C-N3, C1-R4, C2-R5~~ (done in M2-S1, 2026-10-21).
-- **Pending CI:** after the push of the M2-S1 merge, QA records the x64 `e2e.yml`/`ci.yml` run for M2-S1 (run id, junit counts, `flaky: 0`, `retry: 0`, durations).
+- **Pending CI:** the x64 `e2e.yml` run for the M2-S1 merge (39568721933) never reached E2E: the runner's `packages.microsoft.com` apt source returned 403 and the browser install failed. Fixed in CI-e2e-browser-gate (merged 2026-10-21, `docs/reviews/CI-e2e-browser-gate-r1.md` APPROVE r1). QA records CI-EBG-4 and the missing M2-S1 x64 rows from the first run after that merge.
+- **CI-e2e-browser-gate r1 follow-ups:** C1 keep apt sources by content, not by file name (fix at once if the post-merge arm64 run shows the guard removing the archive); C2 QA tightens `browserGate.mts` so non-guarding scripts fail (next QA touch of CI tests); C3/C4 nits (directory in `sources.list.d`; skip unless `RUNNER_ENVIRONMENT=github-hosted`); P1 QA notes that VERIFY was recorded before `0aa81a9`.
 - **M2-S2/S3:**
   - M2-S1 r1 C1: `noSeedIn` returns the seeded value, so a failure prints it in CI logs; make it value-free (M2-S2 QA).
   - M2-S1 r1 C2: the M2-AC1 network policy is evaluated once; re-check at the end of longer sessions (M2-S2 QA).
   - M2-S1 r1 nit C5: shorten the header comment in `e2ee-unlock.spec.ts`.
   - `e2eeAccount` seeds a to-do with `todo_due`, a tag and an attachment.
   - C-N2: check in the UI that the body is decrypted (covered by M2-AC2).
+- **M2-S2 architect (not blocking):** ADR-0007 A2 says `e2eeAccount` seeds a to-do, tag and attachment; M2-S2 makes them opt-in (`e2eeSeed.extras`). Amend A2.
+- **M3-S1 (supervisor):** `packages/headless/src/supervisor.test.ts:70` and `:109` (M1-S1-T04) run a full supervisor cycle on Jest's default 5 s timeout and failed once under load (2026-10-21). Move them to the integration layer or give them a measured timeout (QA plan, SE change).
 - **M2-S5 plan:** M2-S1 r1 C3: `chromium-serial` depends on `chromium`, so a red parallel run hides the first disruptive spec as "not run".
 - **Before M3/M4 mix sync and MCP:**
   - The "one headless sync" helper (a restart, which rotates the token) moves to M3's manual sync trigger.
