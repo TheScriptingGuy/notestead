@@ -4,14 +4,22 @@
 // upstream code is copied. Locators use roles and accessible names (react-native-web maps accessibilityRole,
 // accessibilityLabel and accessibilityLabelledBy to ARIA); the strings are upstream's en_GB UI texts at the pinned ref.
 // Every text goes in through typeLikeUser (real key events; secrets only into password fields, C1-R1).
+// M2-S2 adds the note, notebook, tag and alarm screens (docs/test-plans/M2-S2.md §Page objects, F3 to F7).
 import type { Locator, Page } from '@playwright/test';
 import { waitFor } from '../../../support/poll.ts';
-import { typeLikeUser } from '../typeLikeUser.ts';
+import { datetimeLocalValue } from '../dueDate.ts';
+import type { LocalParts } from '../dueDate.ts';
+import { SecretInVisibleFieldError, clearLikeUser, knownSecretsNow, secretIn, typeLikeUser } from '../typeLikeUser.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
 export const appStartTimeoutMs = 3 * 60_000;
 
 export const decryptionBannerText = 'Press to set the decryption password.';
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A dropdown's button (upstream's Dropdown.tsx): named by the current choice, with the "▼" arrow beside it.
+const dropdownButton = (page: Page, current: string): Locator => page.getByRole('button', { name: current, exact: true }).filter({ has: page.getByText('▼', { exact: true }) });
 
 export class JoplinWebApp {
 	public readonly page: Page;
@@ -91,9 +99,85 @@ export class JoplinWebApp {
 		return this.page.getByRole('button', { name: '🔑 Encrypted', exact: true });
 	}
 
-	// A folder in the side menu (open it with openSidebar): a button whose accessibility label is the title at depth 0.
-	public folderInSideMenu(title: string): Locator {
-		return this.page.getByRole('button', { name: title, exact: true });
+	// A notebook in the side menu (open it with openSidebar): a button whose accessibility label is the title at depth 0;
+	// a nested notebook carries upstream's " (level n)" in its accessible name (side-menu-content.tsx:272).
+	public folderInSideMenu(title: string, depth = 0): Locator {
+		if (depth === 0) return this.page.getByRole('button', { name: title, exact: true });
+		return this.page.getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}\\s+\\(level ${depth}\\)$`) });
+	}
+
+	public expandFolder(title: string): Locator {
+		return this.page.getByRole('button', { name: `Expand ${title}`, exact: true });
+	}
+
+	// The note list's header names the notebook that is open.
+	public notesHeading(title: string): Locator {
+		return this.page.getByRole('heading', { name: title, exact: true });
+	}
+
+	public async openFolder(title: string, depth = 0): Promise<void> {
+		await this.openSidebar();
+		await this.folderInSideMenu(title, depth).click();
+		await this.notesHeading(title).waitFor();
+	}
+
+	// The side menu's "New Notebook" opens upstream's notebook screen (the same one that edits a notebook).
+	public async createNotebook(title: string): Promise<void> {
+		await this.openSidebar();
+		await this.page.getByRole('button', { name: 'New Notebook', exact: true }).click();
+		const screen = new FolderScreen(this.page);
+		await screen.heading().waitFor();
+		await typeLikeUser(screen.titleField(), title);
+		await screen.save();
+		await this.notesHeading(title).waitFor();
+	}
+
+	// Right click is upstream's long press (onContextMenu): a menu with "Edit", then the notebook screen (F3: nesting is
+	// done from the child's edit screen, where the parent is listed).
+	public async editNotebook(title: string, depth = 0): Promise<FolderScreen> {
+		await this.openSidebar();
+		await this.folderInSideMenu(title, depth).click({ button: 'right' });
+		const menu = this.page.getByTestId('menu-content-open');
+		await menu.getByRole('heading', { name: `Notebook: ${title}`, exact: true }).waitFor();
+		await menu.getByRole('button', { name: 'Edit', exact: true }).click();
+		const screen = new FolderScreen(this.page);
+		await screen.heading().waitFor();
+		return screen;
+	}
+
+	public async openTagsScreen(): Promise<TagsScreen> {
+		await this.openSidebar();
+		await this.page.getByRole('button', { name: 'Tags', exact: true }).click();
+		const screen = new TagsScreen(this.page);
+		await screen.heading().waitFor();
+		return screen;
+	}
+
+	public addNewButton(): Locator {
+		return this.page.getByRole('button', { name: 'Add new', exact: true });
+	}
+
+	// The FAB's menu (NewNoteButton.tsx): a provisional note in the current notebook, opened in the note screen.
+	public async newNote(): Promise<NoteScreen> {
+		return this.createFromFab('New note');
+	}
+
+	public async newTodo(): Promise<NoteScreen> {
+		return this.createFromFab('New to-do');
+	}
+
+	private async createFromFab(item: 'New note' | 'New to-do'): Promise<NoteScreen> {
+		await this.addNewButton().click();
+		await this.page.getByRole('button', { name: item, exact: true }).click();
+		const screen = new NoteScreen(this.page);
+		await screen.waitOpen();
+		await screen.waitSettled();
+		return screen;
+	}
+
+	// A to-do's checkbox in the note list (NoteItem.tsx: "to-do: <title>").
+	public todoCheckbox(title: string): Locator {
+		return this.page.getByRole('checkbox', { name: `to-do: ${title}`, exact: true });
 	}
 
 	public async openNote(title: string): Promise<void> {
@@ -272,5 +356,282 @@ export class EncryptionSettings {
 		await typeLikeUser(field, password, { secret: true });
 		const save = this.page.getByRole('button', { name: 'Save', exact: true });
 		await this.page.locator('div').filter({ has: field }).filter({ has: save }).last().getByRole('button', { name: 'Save', exact: true }).click();
+	}
+}
+
+// The note screen (upstream Note.tsx): title field, Markdown editor (CodeMirror in an iframe), the header's notebook
+// dropdown and the Actions menu (plan §Page objects; docs/test-plans/M2-S2.md F4, F7).
+export class NoteScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public titleField(): Locator {
+		return this.page.getByPlaceholder('Add title', { exact: true });
+	}
+
+	public async waitOpen(): Promise<void> {
+		await this.titleField().waitFor({ timeout: 60_000 });
+	}
+
+	// A new note opens in edit mode, and the focus moves when the Markdown editor's frame has loaded (a few seconds after
+	// the title field on the Pi): in the first full M2-S2 run the first characters of a title went into the title field and
+	// the rest into the body. So a test waits for the editor frame, then for the focus to stay with the same element for
+	// a second of polls (a stabilisation anchored to the editor's load, not a sleep), before it types.
+	public async waitSettled(): Promise<void> {
+		await this.editor();
+		let last = '';
+		let steady = 0;
+		await waitFor('the focus to settle after the editor loaded', async () => {
+			const owner = await this.focusOwner();
+			steady = owner === last ? steady + 1 : 0;
+			last = owner;
+			return steady >= 10 ? true : undefined;
+		}, { timeoutMs: 60_000, intervalMs: 100 });
+	}
+
+	// Who holds the focus in the page's own document: the title field, or another element (an iframe holds it while the
+	// editor's frame is focused).
+	private async focusOwner(): Promise<string> {
+		return this.titleField().evaluate(title => {
+			const active = (title as unknown as { ownerDocument: { activeElement: { localName?: string } | null } }).ownerDocument.activeElement;
+			return (active as unknown) === title ? 'title' : String(active?.localName ?? 'none');
+		});
+	}
+
+	// replace: select all and Backspace first (clearLikeUser), then type; the text goes in through typeLikeUser.
+	public async typeTitle(text: string, opts: { replace?: boolean } = {}): Promise<void> {
+		if (opts.replace) await clearLikeUser(this.titleField());
+		await typeLikeUser(this.titleField(), text);
+	}
+
+	public editToggle(): Locator {
+		return this.page.getByRole('button', { name: 'Edit', exact: true });
+	}
+
+	// Upstream's Markdown editor is CodeMirror in an iframe (ExtendedWebView on web, MarkdownEditor.tsx): found as the one
+	// frame that has a .cm-content.
+	public async editor(): Promise<Locator> {
+		return waitFor('the Markdown editor (a frame with a .cm-content)', async () => {
+			for (const frame of this.page.frames()) {
+				try {
+					const content = frame.locator('.cm-content');
+					if ((await content.count()) === 1) return content;
+				} catch {
+					// a frame that detached while it was read
+				}
+			}
+			return undefined;
+		}, { timeoutMs: 60_000, intervalMs: 250 });
+	}
+
+	public async startEditing(): Promise<Locator> {
+		if (await this.editToggle().isVisible()) await this.editToggle().click();
+		return this.editor();
+	}
+
+	// The editor's lines, joined with newlines.
+	public async editorText(): Promise<string> {
+		const content = await this.editor();
+		return content.evaluate(el => {
+			const root = el as unknown as { querySelectorAll: (selector: string) => ArrayLike<{ textContent: string | null }> };
+			return Array.from(root.querySelectorAll('.cm-line')).map(line => line.textContent ?? '').join('\n');
+		});
+	}
+
+	// Typed with real key events into the editor (Enter for a newline); never a secret (the trace's frames cannot be
+	// redacted, C1-R1). replace: select all and Backspace first, until the editor is empty; otherwise the text goes at the
+	// end. Done when the editor's lines equal the old text plus the typed text.
+	public async typeBody(text: string, opts: { replace?: boolean } = {}): Promise<void> {
+		const known = secretIn(text, knownSecretsNow());
+		if (known) throw new SecretInVisibleFieldError(`C1-R1: refusing to type a secret ([${known}]) into the note body: the trace's screencast frames cannot be redacted`);
+		const editor = await this.startEditing();
+		await editor.click();
+		if (opts.replace) {
+			await this.page.keyboard.press('ControlOrMeta+a');
+			await this.page.keyboard.press('Backspace');
+			await waitFor('the editor to be empty', async () => ((await this.editorText()) === '' ? true : undefined), { timeoutMs: 30_000, intervalMs: 100 });
+		} else {
+			await this.page.keyboard.press('ControlOrMeta+End');
+		}
+		const before = await this.editorText();
+		await editor.pressSequentially(text);
+		await waitFor('the editor to hold the typed body', async () => ((await this.editorText()) === before + text ? true : undefined), { timeoutMs: 30_000, intervalMs: 100 });
+	}
+
+	// Upstream's own test id for the header menu trigger (ScreenHeader/Menu.tsx; its Note.test.tsx uses it too).
+	public actionsButton(): Locator {
+		return this.page.getByTestId('screen-header-menu-trigger');
+	}
+
+	public async menuAction(title: string): Promise<void> {
+		await this.actionsButton().click();
+		await this.page.getByTestId('menu-content-open').getByRole('button', { name: title, exact: true }).click();
+	}
+
+	// The header's notebook dropdown: a button named by the current notebook, with upstream's "▼".
+	public folderPicker(current: string): Locator {
+		return dropdownButton(this.page, current);
+	}
+
+	public async moveTo(current: string, target: string): Promise<void> {
+		await this.folderPicker(current).click();
+		await this.page.getByRole('menuitem', { name: target, exact: true }).click();
+		await this.folderPicker(target).waitFor();
+	}
+
+	public async openTags(): Promise<TagsDialog> {
+		await this.menuAction('Tags');
+		const dialog = new TagsDialog(this.page);
+		await dialog.searchField().waitFor();
+		return dialog;
+	}
+
+	public async openAlarm(): Promise<AlarmDialog> {
+		await this.menuAction('Set alarm');
+		const dialog = new AlarmDialog(this.page);
+		await dialog.input().waitFor();
+		return dialog;
+	}
+
+	// To the trash, with no confirmation; the screen stays on the note (F4).
+	public async deleteToTrash(): Promise<void> {
+		await this.menuAction('Delete');
+	}
+}
+
+// Upstream's "Set alarm" dialog (SelectDateTimeDialog.tsx, web branch): a native datetime-local input.
+export class AlarmDialog {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	// No ARIA role exists for it.
+	public input(): Locator {
+		return this.page.locator('input[type="datetime-local"]');
+	}
+
+	// Typed segment by segment, as a user does in Chromium's en-GB datetime-local (dd/mm/yyyy, hh:mm): the focus starts on
+	// the day; day and month advance by themselves; ArrowRight leaves the year. Done when the input holds the full value.
+	public async enterLocal(parts: LocalParts): Promise<void> {
+		const want = datetimeLocalValue(parts);
+		await this.input().pressSequentially(`${parts.day}${parts.month}${parts.year}`);
+		await this.page.keyboard.press('ArrowRight');
+		await this.page.keyboard.type(`${parts.hour}${parts.minute}`);
+		await waitFor(`the date input to hold ${want}`, async () => ((await this.input().inputValue()) === want ? true : undefined), { timeoutMs: 10_000, intervalMs: 100 });
+	}
+
+	// "Save alarm", then upstream's web-only alert (Note.tsx:1220): its message is returned and it is accepted. The alert
+	// blocks the click until it is handled, so the handler runs beside the click.
+	public async save(): Promise<string> {
+		const handled = this.page.waitForEvent('dialog', { timeout: 30_000 }).then(async dialog => {
+			const message = dialog.message();
+			await dialog.accept();
+			return message;
+		});
+		await Promise.all([handled, this.page.getByRole('button', { name: 'Save alarm', exact: true }).click()]);
+		return handled;
+	}
+}
+
+// The note's "Tags" dialog (NoteTagsDialog.tsx, TagEditor.tsx, ComboBox.tsx).
+export class TagsDialog {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public searchField(): Locator {
+		return this.page.getByPlaceholder('Search tags', { exact: true });
+	}
+
+	public removeButton(title: string): Locator {
+		return this.page.getByRole('button', { name: `Remove ${title}`, exact: true });
+	}
+
+	public async addNew(title: string): Promise<void> {
+		await typeLikeUser(this.searchField(), title);
+		await this.page.getByRole('option', { name: 'Add new', exact: true }).click();
+		await this.removeButton(title).waitFor();
+	}
+
+	public async remove(title: string): Promise<void> {
+		await this.removeButton(title).click();
+		await this.removeButton(title).waitFor({ state: 'detached' });
+	}
+
+	public async apply(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Apply', exact: true }).click();
+		await this.searchField().waitFor({ state: 'detached' });
+	}
+}
+
+// The side menu's "Tags" screen (screens/tags.tsx): a long press (right click) opens a menu with "Rename".
+export class TagsScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public heading(): Locator {
+		return this.page.getByRole('heading', { name: 'Tags', exact: true });
+	}
+
+	public tagItem(title: string): Locator {
+		return this.page.getByRole('button', { name: title, exact: true });
+	}
+
+	public async rename(oldTitle: string, newTitle: string): Promise<void> {
+		await this.tagItem(oldTitle).click({ button: 'right' });
+		await this.page.getByTestId('prompt-dialog').getByRole('button', { name: 'Rename', exact: true }).click();
+		const field = this.page.getByTestId('prompt-dialog').getByRole('textbox', { name: 'Rename tag:', exact: true });
+		await clearLikeUser(field);
+		await typeLikeUser(field, newTitle);
+		await this.page.getByTestId('prompt-dialog').getByRole('button', { name: 'OK', exact: true }).click();
+		await this.tagItem(newTitle).waitFor();
+	}
+}
+
+// Upstream's notebook screen (screens/folder.tsx): "Edit notebook" for a new and for an existing notebook (F3).
+export class FolderScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public heading(): Locator {
+		return this.page.getByRole('heading', { name: 'Edit notebook', exact: true });
+	}
+
+	public titleField(): Locator {
+		return this.page.getByPlaceholder('Enter notebook title', { exact: true });
+	}
+
+	// A top-level notebook shows the placeholder 'Select parent notebook'.
+	public parentPicker(current: string): Locator {
+		return dropdownButton(this.page, current);
+	}
+
+	public async rename(newTitle: string): Promise<void> {
+		await clearLikeUser(this.titleField());
+		await typeLikeUser(this.titleField(), newTitle);
+	}
+
+	public async setParent(current: string, parent: string): Promise<void> {
+		await this.parentPicker(current).click();
+		await this.page.getByRole('menuitem', { name: parent, exact: true }).click();
+		await this.parentPicker(parent).waitFor();
+	}
+
+	public async save(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Save changes', exact: true }).click();
+		await this.heading().waitFor({ state: 'detached' });
 	}
 }

@@ -2,14 +2,17 @@
 //   worker  stack         the compose test stack globalSetup started (or attached to), read from NOTESTEAD_E2E_STACK
 //           joplinServer  that stack's throwaway Joplin Server: direct URL, the proxied URL through web, a request helper
 //   test    e2eeAccount   a fresh server user whose E2EE "other device" turned E2EE on and seeded a folder and notes
-//                         (option `e2eeSeed`: { notes }, default one note)
+//                         (option `e2eeSeed`: { notes, extras }, default one note; extras: a to-do with todo_due, a tag
+//                         on note 1 and a text attachment on a note of its own, M2-S2 D7)
 //           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
-//           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
+//           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin,
+//                         en-GB, in the time zone of the option `webTimezone` (default Europe/Amsterdam)
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
-//                         attaches network.log (query strings removed). It only observes, it never routes.
+//                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
+//                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -19,7 +22,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test as base } from '@playwright/test';
+import { expect, test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
@@ -32,8 +35,9 @@ import { redactText } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
+import { userTimeZone } from './dueDate.ts';
 import { stackEnv } from './globalSetup.ts';
-import { recordNetwork } from './network.ts';
+import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
 
 export interface JoplinServerHandle {
@@ -73,11 +77,12 @@ interface WorkerFixtures {
 interface TestFixtures {
 	stackLogs: undefined;
 	e2eeAccount: Account;
-	e2eeSeed: { notes: number };
+	e2eeSeed: { notes: number; extras?: boolean };
 	plainAccount: Account;
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	webTimezone: string;
 	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
 }
@@ -215,15 +220,22 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	webNetwork: async ({ webApp, stack }, use, testInfo) => {
 		const recorder = recordNetwork(webApp.context);
 		await use(recorder);
-		if (failed(testInfo)) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
+		// The whole test's traffic, checked as the context is about to close (review M2-S1-r1 C2): a request the app makes
+		// late, such as a periodic re-sync, is seen too.
+		const late = endOfTestViolations(recorder.entries(), new URL(webApp.baseURL).origin, recorder.allowed());
+		if (failed(testInfo) || late.length > 0) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
+		expect(late, 'network policy over the whole test, checked at its end (M2-S1 r1 C2)').toEqual([]);
 	},
 
-	webApp: async ({ browser, stack }, use, testInfo) => {
+	// Europe/Amsterdam: the user's zone (gate 1, Q9); M2-AC5 asserts due dates as epochs in it (docs/test-plans/M2-S2.md D5).
+	webTimezone: [userTimeZone, { option: true }],
+
+	webApp: async ({ browser, stack, webTimezone }, use, testInfo) => {
 		if (!stack.webUrl) throw new Error('the stack has no web URL');
 		// 127.0.0.1, never localhost: upstream's environment.js turns on dev mode for any origin containing "localhost".
 		// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
 		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
-		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB' });
+		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB', timezoneId: webTimezone });
 		const lines: string[] = [];
 		const watch = (page: Page): void => {
 			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));
@@ -254,4 +266,4 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	},
 });
 
-export { expect } from '@playwright/test';
+export { expect };

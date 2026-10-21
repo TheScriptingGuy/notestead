@@ -12,7 +12,7 @@
 // The JOPLIN_SERVER_URL guard runs before anything else, and every request to the server goes through `serverRequest`,
 // which only accepts this stack's own published port.
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -35,6 +35,9 @@ export const coreServices = ['server', 'web'] as const;
 export const publicHost = 'joplin.example.test';
 export const publicUrl = `https://${publicHost}`;
 
+// The seeded to-do's due date (epoch ms): fixed and in the future (M2-S2 D7).
+export const seedTodoDue = Date.UTC(2031, 0, 15, 8, 30);
+
 export interface Account {
 	email: string;
 	password: string;
@@ -44,6 +47,11 @@ export interface Account {
 	seedTag?: string;
 	folder?: string;
 	notes?: { id: string; title: string; body: string }[];
+	// the seed extras (enableE2ee with extras: true; M2-S2 D7): a to-do with todo_due, a tag on note 1, and a text
+	// attachment on a note of its own, with the sha256 and byte size of the attached file
+	seedTodo?: { id: string; title: string; due: number };
+	seedTagTitle?: string;
+	seedAttachment?: { noteId: string; noteTitle: string; fileName: string; sha256: string; size: number };
 }
 
 export interface HeadlessService {
@@ -371,26 +379,45 @@ export const createAccount = async (state: StackState): Promise<Account> => {
 // seeds a folder and notes, syncs. Everything secret travels on stdin.
 // `seed.notes` notes (default 1): the first has the title and body of the single-note seed of M1; note i (2 and up) has
 // a title that is not a prefix of another and a body with non-ASCII text (M2-S1).
-export const enableE2ee = (state: StackState, account: Account, label: string, seed: { notes?: number } = {}): Account => {
+// `seed.extras` (M2-S2 D7): the device also seeds a to-do `Notestead todo <tag>` with todo_due = seedTodoDue, the tag
+// `nst-seed-<tag>` on note 1, and a note `Notestead attachment note <tag>` with a text attachment `nst-seed-<tag>.txt`.
+export interface SeedOptions { notes?: number; extras?: boolean }
+
+export const enableE2ee = (state: StackState, account: Account, label: string, seed: SeedOptions = {}): Account => {
 	const tag = randomBytes(5).toString('hex');
 	const folder = `Notestead folder ${tag}`;
 	const notes = [{ title: `Notestead note ${tag}`, body: `Seeded body ${tag} zebracorn` }];
 	for (let i = 2; i <= (seed.notes ?? 1); i++) notes.push({ title: `Notestead note ${i} ${tag}`, body: `Seeded body ${i} ${tag} zebracorn Δ ✓ ünïcödé` });
+	const text = `Notestead seeded attachment ${tag}\n`.repeat(64);
+	const extras = seed.extras ? {
+		todo: { title: `Notestead todo ${tag}`, due: seedTodoDue },
+		tag: { title: `nst-seed-${tag}`, note: notes[0].title },
+		attachment: { note: `Notestead attachment note ${tag}`, fileName: `nst-seed-${tag}.txt`, contentBase64: Buffer.from(text, 'utf8').toString('base64') },
+	} : undefined;
 	const name = `${state.project}-device-${label}`;
 	const r = spawnSync('podman', ['run', '--rm', '-i', '--name', name, '--network', state.frontNetwork,
 		'--label', `${testLabel}=stack`, '--label', `${runLabel}=${state.run}`, state.images.device], {
-		input: JSON.stringify({ syncUrl: 'http://web:8080/joplin-server', email: account.email, password: account.password, masterPassword: account.masterPassword, folder, notes }),
+		input: JSON.stringify({ syncUrl: 'http://web:8080/joplin-server', email: account.email, password: account.password, masterPassword: account.masterPassword, folder, notes, ...(extras ? { extras } : {}) }),
 		encoding: 'utf8', timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024,
 	});
 	mkdirSync(state.logsDir, { recursive: true });
 	writeFileSync(join(state.logsDir, `device-${label}.log`), redactText(`# exit ${r.status}\n${r.stdout ?? ''}\n--- stderr ---\n${r.stderr ?? ''}`, knownSecrets(state)));
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (r.status !== 0 || !line) throw new Error(`the E2EE device failed (exit ${r.status}; log ${join(state.logsDir, `device-${label}.log`)}): ${redactText(`${r.stdout}\n${r.stderr}`, knownSecrets(state)).slice(-1500)}`);
-	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[] };
+	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[]; todo?: { id: string }; attachmentNote?: { id: string } };
 	account.e2ee = result.e2ee;
 	account.seedTag = tag;
 	account.folder = folder;
 	account.notes = result.notes.map(n => ({ ...n, body: notes.find(s => s.title === n.title)?.body ?? '' }));
+	if (extras) {
+		if (!result.todo || !result.attachmentNote) throw new Error(`the E2EE device did not report the seeded to-do and attachment note (log ${join(state.logsDir, `device-${label}.log`)})`);
+		account.seedTodo = { id: result.todo.id, title: extras.todo.title, due: extras.todo.due };
+		account.seedTagTitle = extras.tag.title;
+		account.seedAttachment = {
+			noteId: result.attachmentNote.id, noteTitle: extras.attachment.note, fileName: extras.attachment.fileName,
+			sha256: createHash('sha256').update(text, 'utf8').digest('hex'), size: Buffer.byteLength(text),
+		};
+	}
 	if (state.owned) saveDescriptor(state);
 	return account;
 };

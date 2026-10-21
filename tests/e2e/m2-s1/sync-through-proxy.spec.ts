@@ -70,6 +70,8 @@ test.describe('M2-S1 sync through the proxy', () => {
 		});
 
 		await test.step('7. control: a planted cross-origin request is seen and flagged', async () => {
+			// The planted control is named, so the end-of-test check (C2) leaves out exactly this request.
+			webNetwork.allow('https://notestead-control.invalid/');
 			// Step 6 has already been evaluated, so this control cannot hide a real violation.
 			await webApp.page.evaluate(() => fetch('https://notestead-control.invalid/m2-ac1', { mode: 'no-cors' }).then(() => 'sent', () => 'failed'));
 			await expect.poll(() => violationLines(classifyRequests(webNetwork.entries(), origin)).some(l => l.includes('notestead-control.invalid/m2-ac1'))).toBe(true);
