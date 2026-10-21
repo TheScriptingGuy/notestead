@@ -105,3 +105,4 @@ Artifacts on failure: `test-results/**`, `playwright-report/**`, traces, contain
 - QA writes `docs/test-plans/<story>.md` and failing tests first (RED), then verifies and appends `## Results`.
 - Engineers never edit `tests/**`; disagreements go to `## Disputes` in the test plan and QA decides in writing.
 - When a test needs a production seam (a flag, an env var, an injectable clock), the test plan describes it and the engineer implements it.
+- **Leftover stacks (review M2-S1-r1 P1).** A running stack or container you did not start, test-labelled or not, is reported to the orchestrator (compose project, age, labels) before anything removes it; it is removed only after the answer.
