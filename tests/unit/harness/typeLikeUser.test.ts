@@ -4,7 +4,7 @@
 import { describe, expect, test } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
 import type { Locator } from '@playwright/test';
-import { SecretInVisibleFieldError, secretIn, typeLikeUser } from '../../e2e/support/typeLikeUser.ts';
+import { SecretInVisibleFieldError, clearLikeUser, secretIn, typeLikeUser } from '../../e2e/support/typeLikeUser.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { registeredSecrets } from '../../support/secrets.ts';
 
@@ -17,6 +17,8 @@ interface FakeOptions {
 	// what the app keeps of each pressSequentially call (default: everything); also whether focus is lost afterwards
 	accept?: (typed: string, call: number) => { keep: string; loseFocus?: boolean };
 	initialValue?: string;
+	// Backspace does nothing (a field that refuses to clear)
+	refuseClear?: boolean;
 }
 
 interface Fake {
@@ -30,6 +32,8 @@ const fakeField = (opts: FakeOptions): Fake => {
 	let type = opts.type;
 	let focused = false;
 	let typed = 0;
+	// ControlOrMeta+a selects the whole value; Backspace then removes it
+	let selected = false;
 	const calls: string[] = [];
 	const element = {
 		localName: opts.tag ?? 'input',
@@ -56,6 +60,11 @@ const fakeField = (opts: FakeOptions): Fake => {
 		},
 		press: async (key: string) => {
 			calls.push(`press ${key}`);
+			if (key === 'ControlOrMeta+a') selected = true;
+			if (key === 'Backspace' && selected && !opts.refuseClear) {
+				value = '';
+				selected = false;
+			}
 		},
 		pressSequentially: async (text: string) => {
 			calls.push(`pressSequentially ${text}`);
@@ -179,6 +188,23 @@ describe('typeLikeUser', () => {
 		test('f1-unit-3 gives up after the allowed number of resumes', async () => {
 			const fake = fakeField({ type: 'text', accept: t => ({ keep: t.slice(0, 1), loseFocus: true }) });
 			await expect(typeLikeUser(fake.field, 'abcdefghij', { ...quick, maxResumes: 2 })).rejects.toThrow(/after 2 resumes/);
+		});
+	});
+
+	describe('clearLikeUser', () => {
+		test('clear-01 empties the field with select-all and Backspace, as real keys', async () => {
+			const fake = fakeField({ type: 'text', initialValue: 'old title' });
+			await clearLikeUser(fake.field, { timeoutMs: 300 });
+			expect(fake.value()).toBe('');
+			expect(keys(fake)).toEqual(['click', 'press ControlOrMeta+a', 'press Backspace']);
+		});
+
+		test('clear-02 fails, without the value, when the field stays filled', async () => {
+			const fake = fakeField({ type: 'text', initialValue: 'old title', refuseClear: true });
+			const failure = clearLikeUser(fake.field, { timeoutMs: 300 });
+			await expect(failure).rejects.toThrow(/the field to be empty/);
+			const message = await failure.then(() => '', (error: unknown) => String(error));
+			expect(message).not.toContain('old title');
 		});
 	});
 });
