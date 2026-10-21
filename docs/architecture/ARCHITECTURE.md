@@ -126,6 +126,7 @@ flowchart TB
 2. The user picks the "Joplin Server" sync target with URL `https://<host>/joplin-server` and their credentials.
 3. Upstream's sync client calls `/joplin-server/api/*`. Caddy forwards to the server with the Host rewritten (S2 C1–C3).
 4. Items arrive encrypted. The app asks for the master password and decrypts them in the browser (WebCrypto).
+   - *Amended 2026-10-21 (M2-S1 F5):* on a fresh web profile the order is the reverse. The app reads the master keys from `info.json` and asks for the master password, but its first sync aborts while uploading its welcome notes and downloads nothing. Items arrive (encrypted, then decrypted) only after the password is entered (L18).
 5. Plaintext lives only in OPFS on that device.
 6. Local edits are encrypted before upload.
 7. Sync runs only while the tab is open.
