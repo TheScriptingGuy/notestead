@@ -1,8 +1,10 @@
 // The network-policy classifier of the web app (tests/e2e/support/network.ts; docs/test-plans/M2-S1.md Interpretation 2):
 // only same-origin /joplin-server/api/* reaches the sync target, the sole cross-origin exception is
-// `HEAD https://joplinapp.org/connection_check/`, anything else is a violation.
+// `HEAD https://joplinapp.org/connection_check/`, anything else is a violation. net-13 to net-15: the policy over a whole
+// test, minus the requests a test plants on purpose (review M2-S1-r1 C2).
 import { describe, expect, test } from '@jest/globals';
-import { classifyRequests, violationLines } from '../../e2e/support/network.ts';
+import type { BrowserContext } from '@playwright/test';
+import { classifyRequests, endOfTestViolations, recordNetwork, violationLines } from '../../e2e/support/network.ts';
 import type { NetEntry, NetVerdict } from '../../e2e/support/network.ts';
 
 const app = 'http://127.0.0.1:41234';
@@ -66,5 +68,33 @@ describe('network policy classifier', () => {
 		const lines = violationLines(classify('GET', 'https://example.invalid/leak?token=abc'));
 		expect(lines).toEqual(['GET https://example.invalid/leak: cross-origin request']);
 		expect(lines.join('\n')).not.toMatch(/token|abc/);
+	});
+
+	describe('over a whole test', () => {
+		const allowed = ['https://notestead-control.invalid/'];
+
+		test('net-13 end of test: an allowed planted request is left out, every other violation is reported', () => {
+			const entries = [
+				entry('GET', 'https://notestead-control.invalid/m2-ac1'),
+				entry('GET', `${app}/joplin-server/shares/x`),
+				entry('GET', 'https://evil.example/x'),
+			];
+			expect(endOfTestViolations(entries, app, allowed)).toEqual([
+				'GET http://127.0.0.1:41234/joplin-server/shares/x: same-origin request to the sync target outside /joplin-server/api/',
+				'GET https://evil.example/x: cross-origin request',
+			]);
+		});
+
+		test('net-14 an allowed prefix never covers another host', () => {
+			const entries = [entry('GET', 'https://notestead-control.invalid.evil.example/x')];
+			expect(endOfTestViolations(entries, app, allowed)).toEqual(['GET https://notestead-control.invalid.evil.example/x: cross-origin request']);
+		});
+
+		test('net-15 the recorder only allows prefixes that end in a slash', () => {
+			const rec = recordNetwork({ on: () => undefined } as unknown as BrowserContext);
+			expect(() => rec.allow('https://x.invalid')).toThrow(/must end with "\/"/);
+			rec.allow('https://x.invalid/');
+			expect(rec.allowed()).toEqual(['https://x.invalid/']);
+		});
 	});
 });
