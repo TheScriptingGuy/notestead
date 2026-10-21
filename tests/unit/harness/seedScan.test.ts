@@ -39,9 +39,9 @@ describe('seed scan', () => {
 			const values = [seed.tag, seed.folder, ...seed.notes.flatMap(n => [n.title, n.body])];
 			for (const v of values) {
 				const r = seedLabelIn(`pre ${v} post`, seed);
-				expect(r, 'a label is found').toBeDefined();
+				expect(r).toBeDefined();
 				const shown = JSON.stringify(r);
-				for (const other of values) expect(shown.includes(other), 'the result holds no seeded value').toBe(false);
+				for (const other of values) expect(shown.includes(other)).toBe(false);
 			}
 		}
 	});

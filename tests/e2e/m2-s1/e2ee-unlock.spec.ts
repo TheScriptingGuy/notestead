@@ -18,6 +18,7 @@ import { configureJoplinServerSync, firstSyncTimeoutMs } from '../support/flows.
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { scanLocalProfile } from '../support/localProfile.ts';
 import { JoplinWebApp } from '../support/pages/joplinWebApp.ts';
+import { seedLabelIn } from '../support/seedScan.ts';
 import { holdsFor } from '../../support/poll.ts';
 import { registerSecrets } from '../../support/secrets.ts';
 import { serverItemContent, serverItemNames, syncHeadlessOnce } from '../../stack/stack.ts';
@@ -36,9 +37,6 @@ const seedOf = (account: Account): Seed => {
 	expect(seed.notes, 'the account has three seeded notes').toHaveLength(3);
 	return seed;
 };
-
-// The first seeded value found in `html`, or undefined (absence check over the page and every frame).
-const noSeedIn = (html: string, seed: Seed): string | undefined => [seed.tag, seed.folder, ...seed.notes.map(n => n.title), ...seed.notes.map(n => n.body)].find(v => html.includes(v));
 
 const md = (names: string[]): string[] => names.filter(n => /^[0-9a-f]{32}\.md$/.test(n));
 
@@ -121,7 +119,7 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 
 		let totalBefore = 0;
 		const screen = await test.step('3. the app reports that the data is encrypted and asks for the master password', async () => {
-			expect(noSeedIn(await app.frameHtml(), seed), 'no seeded value in the page or any frame while encrypted').toBeUndefined();
+			expect(seedLabelIn(await app.frameHtml(), seed), 'no seeded value in the page or any frame while encrypted').toBeUndefined();
 			const encryption = await app.openEncryptionSettingsFromBanner();
 			expect(await encryption.encryptionStatus()).toBe('Encryption is: Enabled');
 			await expect(encryption.masterKeyHeading(activeKey.slice(0, 6))).toBeVisible();
@@ -154,9 +152,10 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 		});
 
 		await test.step('6. every seeded body is shown decrypted', async () => {
-			for (const n of reference) {
+			for (const [i, n] of reference.entries()) {
 				await app.openNote(String(n.title));
-				await expect.poll(() => app.frameText(), { timeout: 60_000, intervals: [500] }).toContain(String(n.body));
+				await expect.poll(async () => ((await app.frameText()).includes(String(n.body)) ? 'shown' : 'not shown'),
+					{ message: `the body of seeded note ${i + 1} is shown decrypted`, timeout: 60_000, intervals: [500] }).toBe('shown');
 				await app.backToList();
 			}
 		});
@@ -201,7 +200,7 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 		const screen = await test.step('2. configure the web app: it reports that the data is encrypted', async () => {
 			await configureJoplinServerSync(app, webApp.baseURL, joplinServer.proxiedUrl, e2eeAccount);
 			await expect(app.decryptionBanner(), 'the web app synced and asks for the master password').toBeVisible({ timeout: firstSyncTimeoutMs });
-			expect(noSeedIn(await app.frameHtml(), seed), 'no seeded value in the page or any frame while encrypted').toBeUndefined();
+			expect(seedLabelIn(await app.frameHtml(), seed), 'no seeded value in the page or any frame while encrypted').toBeUndefined();
 			const encryption = await app.openEncryptionSettingsFromBanner();
 			expect(await encryption.encryptionStatus()).toBe('Encryption is: Enabled');
 			await expect(encryption.masterKeyHeading(activeKey.slice(0, 6))).toBeVisible();
@@ -233,8 +232,8 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 		await test.step('5. for 60 s every seeded item stays encrypted', async () => {
 			await screen.back();
 			await holdsFor('every seeded item stays encrypted', async () => {
-				const leaked = noSeedIn(await app.frameHtml(), seed);
-				if (leaked !== undefined) return 'a seeded value is in the page or a frame (decrypted)';
+				const leaked = seedLabelIn(await app.frameHtml(), seed);
+				if (leaked !== undefined) return `a seeded value (${leaked}) is in the page or a frame (decrypted)`;
 				if (!(await app.decryptionBanner().isVisible())) return 'the decryption banner is gone';
 				return undefined;
 			}, { windowMs: 60_000, intervalMs: 1_000 });
