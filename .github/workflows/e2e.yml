@@ -187,15 +187,32 @@ jobs:
         id: podman
         uses: ./.github/actions/podman
 
+      # `--with-deps` runs apt-get update over every configured source, and one broken preinstalled third-party source
+      # fails it (run 39568721933: packages.microsoft.com 403, "no longer signed", exit 100). The runner is ephemeral and
+      # nothing here uses those sources, so only the Ubuntu archive (ubuntu.sources) stays. A retry cannot fix a source
+      # that fails every time. Harmless where there is nothing to remove (the arm64 image).
+      - name: Keep apt to the Ubuntu archive (runner's third-party sources out of the way)
+        run: |
+          shopt -s nullglob
+          for f in /etc/apt/sources.list.d/*; do
+            if [ "$(basename "$f")" != "ubuntu.sources" ]; then
+              echo "removing third-party apt source: $f"
+              sudo rm -f -- "$f"
+            fi
+          done
+          ls -l /etc/apt/sources.list.d
+
+      # The contract layer and the E2E layer both drive Playwright's Chromium, so a failed install fails the job here
+      # (no continue-on-error) and both layers below require this step's success.
       - name: Playwright's Chromium (the repo's pinned Playwright)
         id: browser
         run: corepack yarn playwright install --with-deps chromium
 
       # The contract layer and the E2E layer run one after the other (one heavy job per runner), and the second runs
-      # even when the first failed, so one run reports both.
+      # even when the first failed, so one run reports both (but neither runs without the browser).
       - name: Contract layer, every tests/contract file (Jest JSON)
         id: contract
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' && steps.browser.outcome == 'success' }}
         timeout-minutes: 75
         env:
           NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
