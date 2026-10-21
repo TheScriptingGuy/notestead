@@ -105,3 +105,12 @@ export const typeLikeUser = async (field: Locator, text: string, opts: TypeOptio
 		}, { timeoutMs });
 	}
 };
+
+// Empties a text field as a user does: select all, then Backspace (real key events, never fill), and waits until the
+// app shows it empty. Used before typing a new title or name over an old one (M2-AC3, M2-AC4).
+export const clearLikeUser = async (field: Locator, opts: { timeoutMs?: number } = {}): Promise<void> => {
+	await field.click();
+	await field.press('ControlOrMeta+a');
+	await field.press('Backspace');
+	await waitFor('the field to be empty', async () => ((await field.inputValue()) === '' ? true : undefined), { timeoutMs: opts.timeoutMs ?? 30_000, intervalMs: 100 });
+};
