@@ -1,13 +1,8 @@
-// M2-S1 / M2-AC2 (docs/backlog/M2.md §M2-S1; docs/test-plans/M2-S1.md): an E2EE account (E2EE turned on by another device,
-// which seeded one folder and three notes, one with non-ASCII text). The web app, configured through the proxy, reports that
-// the account's data is end-to-end encrypted and asks for the master password (banner, encryption screen with the account's
-// master key not unlocked), and no seeded content is readable: planner decision D1 (plan §Planner decisions; upstream
-// downloads nothing before the key is loaded, so there are no placeholders to count). After the master password, every seeded title and body is shown decrypted, and a data assertion
-// compares them with the seed through the headless REST API (before the web app syncs, and again after an unlock and one
-// headless sync, with exactly one note per title).
-// NEG: a wrong master password shows upstream's error (the master key's field, then upstream's master-password field with
-// its alert); no seeded item becomes readable: none of its text reaches the page or the web app's local profile (D2, OPFS
-// scan, with the positive test as its control), and the server's items stay byte-identical.
+// M2-S1 / M2-AC2 (docs/backlog/M2.md; docs/test-plans/M2-S1.md): another device turned E2EE on and seeded a folder and
+// three notes. Before the master password the web app shows that the data is encrypted and asks for it, and nothing
+// seeded is readable (plan D1); after it, every seeded title and body is shown and matches the headless REST API.
+// NEG: wrong master passwords show upstream's errors; no seeded text reaches the page or the local profile (D2), and
+// the server's items stay byte-identical.
 // Needs the real upstream bundle in the web image: NOTESTEAD_WEB_ARTIFACT=<CI artifact dir> (or NOTESTEAD_WEB_IMAGE).
 import { randomBytes } from 'node:crypto';
 import { requireUpstreamBundle } from '../support/bundle.ts';
