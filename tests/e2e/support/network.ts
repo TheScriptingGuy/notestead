@@ -75,9 +75,17 @@ export const violationLines = (v: NetVerdict): string[] => v.violations.map(({ e
 	return `${entry.method} ${where}: ${why}`;
 });
 
+// The policy over a whole test (review M2-S1-r1 C2): every violation recorded so far, except the requests a test plants
+// on purpose and names with `allow` (a URL prefix ending in "/", so it never covers another host).
+export const endOfTestViolations = (entries: NetEntry[], appOrigin: string, allowed: string[]): string[] =>
+	violationLines(classifyRequests(entries.filter(e => !allowed.some(p => e.url.startsWith(p))), appOrigin));
+
 export interface NetworkRecorder {
 	entries: () => NetEntry[];
 	text: () => string;
+	// Names a request the test plants on purpose (a control), so the end-of-test check leaves out exactly that prefix.
+	allow: (prefix: string) => void;
+	allowed: () => string[];
 }
 
 const withoutQuery = (url: string): string => url.replace(/\?[^#]*/, '?[query]');
@@ -98,7 +106,13 @@ export const recordNetwork = (context: BrowserContext): NetworkRecorder => {
 		const entry = byRequest.get(r);
 		if (entry) entry.failure = r.failure()?.errorText;
 	});
+	const allowedPrefixes: string[] = [];
 	return {
+		allow: prefix => {
+			if (!prefix.endsWith('/')) throw new Error(`an allowed prefix must end with "/": ${prefix}`);
+			allowedPrefixes.push(prefix);
+		},
+		allowed: () => [...allowedPrefixes],
 		entries: () => list.map(e => ({ ...e })),
 		text: () => list.map(e => [e.at, e.method, withoutQuery(e.url), e.resourceType, e.fromServiceWorker ? 'sw' : 'page', e.status ?? '', e.failure ?? ''].join(' ').trimEnd()).join('\n'),
 	};

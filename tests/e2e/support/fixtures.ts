@@ -9,7 +9,8 @@
 //           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
-//                         attaches network.log (query strings removed). It only observes, it never routes.
+//                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
+//                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -19,7 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test as base } from '@playwright/test';
+import { expect, test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
@@ -33,7 +34,7 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { stackEnv } from './globalSetup.ts';
-import { recordNetwork } from './network.ts';
+import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
 
 export interface JoplinServerHandle {
@@ -215,7 +216,11 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	webNetwork: async ({ webApp, stack }, use, testInfo) => {
 		const recorder = recordNetwork(webApp.context);
 		await use(recorder);
-		if (failed(testInfo)) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
+		// The whole test's traffic, checked as the context is about to close (review M2-S1-r1 C2): a request the app makes
+		// late, such as a periodic re-sync, is seen too.
+		const late = endOfTestViolations(recorder.entries(), new URL(webApp.baseURL).origin, recorder.allowed());
+		if (failed(testInfo) || late.length > 0) await attachText(testInfo, 'network.log', redactText(recorder.text(), workerSecrets(stack)));
+		expect(late, 'network policy over the whole test, checked at its end (M2-S1 r1 C2)').toEqual([]);
 	},
 
 	webApp: async ({ browser, stack }, use, testInfo) => {
@@ -254,4 +259,4 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	},
 });
 
-export { expect } from '@playwright/test';
+export { expect };
