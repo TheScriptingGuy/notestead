@@ -106,3 +106,4 @@ Artifacts on failure: `test-results/**`, `playwright-report/**`, traces, contain
 - Engineers never edit `tests/**`; disagreements go to `## Disputes` in the test plan and QA decides in writing.
 - When a test needs a production seam (a flag, an env var, an injectable clock), the test plan describes it and the engineer implements it.
 - **Leftover stacks (review M2-S1-r1 P1).** A running stack or container you did not start, test-labelled or not, is reported to the orchestrator (compose project, age, labels) before anything removes it; it is removed only after the answer.
+- **Test-first history in harness work (review M2-S1-r1 P2).** A harness change that has a unit or harness test lands as two commits: the failing test (RED, logged), then the support code (GREEN). The RED commit may not type-check when it imports a module that does not exist yet; that is the RED, never a stub.
