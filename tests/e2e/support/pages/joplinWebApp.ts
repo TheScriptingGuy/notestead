@@ -171,6 +171,7 @@ export class JoplinWebApp {
 		await this.page.getByRole('button', { name: item, exact: true }).click();
 		const screen = new NoteScreen(this.page);
 		await screen.waitOpen();
+		await screen.waitSettled();
 		return screen;
 	}
 
@@ -373,6 +374,31 @@ export class NoteScreen {
 
 	public async waitOpen(): Promise<void> {
 		await this.titleField().waitFor({ timeout: 60_000 });
+	}
+
+	// A new note opens in edit mode, and the focus moves when the Markdown editor's frame has loaded (a few seconds after
+	// the title field on the Pi): in the first full M2-S2 run the first characters of a title went into the title field and
+	// the rest into the body. So a test waits for the editor frame, then for the focus to stay with the same element for
+	// a second of polls (a stabilisation anchored to the editor's load, not a sleep), before it types.
+	public async waitSettled(): Promise<void> {
+		await this.editor();
+		let last = '';
+		let steady = 0;
+		await waitFor('the focus to settle after the editor loaded', async () => {
+			const owner = await this.focusOwner();
+			steady = owner === last ? steady + 1 : 0;
+			last = owner;
+			return steady >= 10 ? true : undefined;
+		}, { timeoutMs: 60_000, intervalMs: 100 });
+	}
+
+	// Who holds the focus in the page's own document: the title field, or another element (an iframe holds it while the
+	// editor's frame is focused).
+	private async focusOwner(): Promise<string> {
+		return this.titleField().evaluate(title => {
+			const active = (title as unknown as { ownerDocument: { activeElement: { localName?: string } | null } }).ownerDocument.activeElement;
+			return (active as unknown) === title ? 'title' : String(active?.localName ?? 'none');
+		});
 	}
 
 	// replace: select all and Backspace first (clearLikeUser), then type; the text goes in through typeLikeUser.
