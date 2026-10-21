@@ -187,15 +187,44 @@ jobs:
         id: podman
         uses: ./.github/actions/podman
 
+      # `--with-deps` runs apt-get update over every configured source, and one broken preinstalled third-party source
+      # fails it (run 39568721933 x64: packages.microsoft.com 403, "no longer signed", exit 100; the arm64 runner had the
+      # same source and it happened to answer). The runner is ephemeral and nothing here uses those sources, so only the
+      # Ubuntu archive stays (ubuntu.sources; in that run x64 reached it through file:/etc/apt/apt-mirrors.txt, arm64
+      # through ports.ubuntu.com). A retry cannot fix a source that fails every time. If a changed runner image keeps no
+      # Ubuntu archive source, the step fails loudly instead of leaving apt with nothing.
+      - name: Keep apt to the Ubuntu archive (runner's third-party sources out of the way)
+        run: |
+          shopt -s nullglob
+          for f in /etc/apt/sources.list.d/*; do
+            if [ "$(basename "$f")" != "ubuntu.sources" ]; then
+              echo "removing third-party apt source: $f"
+              sudo rm -f -- "$f"
+            fi
+          done
+          ls -l /etc/apt/sources.list.d
+          # An Ubuntu archive source must remain: an active URIs: line in ubuntu.sources (a mirror list file
+          # /etc/apt/apt-mirrors.txt or an ubuntu.com host), or an active deb line in /etc/apt/sources.list.
+          ubuntu_sources=/etc/apt/sources.list.d/ubuntu.sources
+          if { [ -s "$ubuntu_sources" ] && grep -Eq '^URIs:.*(apt-mirrors\.txt|ubuntu\.com)' "$ubuntu_sources"; } ||
+             { [ -s /etc/apt/sources.list ] && grep -Eq '^[[:space:]]*deb(-src)?[[:space:]]' /etc/apt/sources.list; }; then
+            echo "Ubuntu archive source kept"
+          else
+            echo "::error::no Ubuntu archive source is left in /etc/apt (ubuntu.sources or sources.list); the runner image layout changed"
+            exit 1
+          fi
+
+      # The contract layer and the E2E layer both drive Playwright's Chromium, so a failed install fails the job here
+      # (no continue-on-error) and both layers below require this step's success.
       - name: Playwright's Chromium (the repo's pinned Playwright)
         id: browser
         run: corepack yarn playwright install --with-deps chromium
 
       # The contract layer and the E2E layer run one after the other (one heavy job per runner), and the second runs
-      # even when the first failed, so one run reports both.
+      # even when the first failed, so one run reports both (but neither runs without the browser).
       - name: Contract layer, every tests/contract file (Jest JSON)
         id: contract
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' && steps.browser.outcome == 'success' }}
         timeout-minutes: 75
         env:
           NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
