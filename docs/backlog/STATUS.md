@@ -9,7 +9,7 @@ The orchestrator (main Claude session) maintains this file.
 | **Phase A:** delivery channel investigation (`docs/delivery/channels.md`) | done | `2aeb101` |
 | **User gate:** approve architecture, delivery channel plan and public name | **approved 2026-10-04** | tag `plan-approved-v1` |
 | M1 Walking skeleton + test harness | **done 2026-10-16** | Stories S1–S9 and S6a merged, each approved in review (S2 in r3, the rest in r1). Every acceptance criterion passes on arm64 and x64 (`e2e.yml` 38881804121, `ci.yml` 38881804157). Close-out `docs/reviews/M1-closeout-r2.md` APPROVE r2; tag `m1-done` |
-| M2 Web app | in progress | M2-S1 merged 2026-10-21 (`docs/reviews/M2-S1-r1.md` APPROVE r1; test-only story, product unchanged; arm64 pass, x64 PENDING-CI). New limitation L18 (no sync before the master password on E2EE accounts). Next: M2-S2 (notes, notebooks, tags and to-dos) |
+| M2 Web app | in progress | M2-S1 merged 2026-10-21 (`M2-S1-r1` APPROVE). M2-S2 merged 2026-10-21 (`M2-S2-r1` APPROVE; test-only, product unchanged; arm64 14/14 E2E). x64 PENDING-CI for both. New limitation L18. Next: M2-S3 (search, attachments, trash) |
 | M3 Headless Data API | not started | |
 | M4 MCP | not started | |
 | M5 Release | not started | |
@@ -63,12 +63,16 @@ Open, grouped by when they are due, following the classification in `docs/review
 - **M2-S1 QA:** ~~serial rule, M1-S8 C2, C-N1, C-N3, C1-R4, C2-R5~~ (done in M2-S1, 2026-10-21).
 - **Pending CI:** the x64 `e2e.yml` run for the M2-S1 merge (39568721933) never reached E2E: the runner's `packages.microsoft.com` apt source returned 403 and the browser install failed. Fixed in CI-e2e-browser-gate (merged 2026-10-21, `docs/reviews/CI-e2e-browser-gate-r1.md` APPROVE r1). QA records CI-EBG-4 and the missing M2-S1 x64 rows from the first run after that merge.
 - **CI-e2e-browser-gate r1 follow-ups:** C1 keep apt sources by content, not by file name (fix at once if the post-merge arm64 run shows the guard removing the archive); C2 QA tightens `browserGate.mts` so non-guarding scripts fail (next QA touch of CI tests); C3/C4 nits (directory in `sources.list.d`; skip unless `RUNNER_ENVIRONMENT=github-hosted`); P1 QA notes that VERIFY was recorded before `0aa81a9`.
-- **M2-S2/S3:**
-  - M2-S1 r1 C1: `noSeedIn` returns the seeded value, so a failure prints it in CI logs; make it value-free (M2-S2 QA).
-  - M2-S1 r1 C2: the M2-AC1 network policy is evaluated once; re-check at the end of longer sessions (M2-S2 QA).
-  - M2-S1 r1 nit C5: shorten the header comment in `e2ee-unlock.spec.ts`.
-  - `e2eeAccount` seeds a to-do with `todo_due`, a tag and an attachment.
-  - C-N2: check in the UI that the body is decrypted (covered by M2-AC2).
+- **M2-S2 (done 2026-10-21):** ~~M2-S1 r1 C1, C2, C5, P1, P2; `e2eeAccount` to-do/tag/attachment seeds (opt-in); C-N2 (covered by M2-AC2 step 6)~~.
+- **Pending CI:** QA records the x64 rows for M2-S1, M2-S2 and CI-EBG-4 from the first `e2e.yml` run after the M2-S2 merge (run id, junit counts, `flaky: 0`, `retry: 0`, durations). M2-S2 adds ~18 min single-worker Pi time; watch the E2E step's 45 min timeout (W1). M2-S2 r1 P3: S3/S4 and the final full run predate WO-19.
+- **M2-S3 QA (from `docs/reviews/M2-S2-r1.md`):**
+  - C1: `NoteScreen.waitSettled` (F8) has no sensitivity run, measured lag or unit test; consider waiting for the focus to land in the editor iframe.
+  - C2: a due time typed in the hour when summer time ends resolves to the first occurrence (1 h off); handle or document.
+  - C3: the M2-AC5 NEG asserts the spy only in the main frame; check `framesWithSpy` in the real app.
+  - C4: M2-AC2 steps 9 and 174 and the M2-S2 REST diffs print seeded or synthetic values on failure; add a strategy sentence and make them value-free.
+  - C5 (nit): `webReport` returned by `syncWebThenHeadless` is never read.
+  - P2 (nit): strategy §8 wording vs the `syncWebOnce` rule and `waitSettled`, which have no unit test.
+  - Architect + QA: empty and huge note bodies are in no M2 AC; decide where they go.
 - **M2-S2 architect (not blocking):** ADR-0007 A2 says `e2eeAccount` seeds a to-do, tag and attachment; M2-S2 makes them opt-in (`e2eeSeed.extras`). Amend A2.
 - **M3-S1 (supervisor):** `packages/headless/src/supervisor.test.ts:70` and `:109` (M1-S1-T04) run a full supervisor cycle on Jest's default 5 s timeout and failed once under load (2026-10-21). Move them to the integration layer or give them a measured timeout (QA plan, SE change).
 - **M2-S5 plan:** M2-S1 r1 C3: `chromium-serial` depends on `chromium`, so a red parallel run hides the first disruptive spec as "not run".
@@ -88,6 +92,7 @@ Open, grouped by when they are due, following the classification in `docs/review
   - Web-bundle tarball reproducibility (tar metadata).
   - Release-please `bootstrap-sha`/`exclude-paths` for the `fix(...)` commits that changed no behaviour: P-R1's three and `79546b0` (M5-S3).
 - **M6 or any pin-tooling story:**
+  - M2-S2 r1 C6: a static check that the upstream UI strings the E2E relies on (side menu toggle, `▼` glyph, alarm and tags dialogs, L1 alert) still exist in the pinned bundle, as an early signal on a 3.7.x bump.
   - M1-S9 C1: the `check:pin` alias hole.
   - C2: ADR-0010 says an exception's text wins.
   - C3: missing packages and banners that name no package fail.
@@ -111,8 +116,8 @@ Open, grouped by when they are due, following the classification in `docs/review
   - the Playwright trace merge hangs on Node 24;
   - `tkwidgets` has no licence field.
 - **Process:**
-  - M2-S1 r1 P1: report a running stack you did not start before removing it; add the rule to `docs/testing/strategy.md` at the next QA touch.
-  - M2-S1 r1 P2: in harness work orders, commit the failing unit test before its support code.
+  - ~~M2-S1 r1 P1, P2~~ (strategy §8, M2-S2).
+  - M2-S2 r1 P1: the executor removed test images before the planner's review twice (M2-S1, M2-S2 WO-17); orchestrator briefs now say to keep them and the orchestrator removes them after sign-off.
   - Team pattern since 2026-10-21: Opus QA planner and architect; Sonnet QA executor, senior engineer, ci-cd and lead.
   - P1: QA hands over runner configs before implementation.
   - P2: keep unrelated decisions out of story commits.
