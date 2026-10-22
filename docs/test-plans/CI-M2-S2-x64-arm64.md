@@ -188,3 +188,92 @@ If M2-AC3 or M1-AC21 NEG fails, the run now leaves a named locator, a failure li
 
 ## Disputes
 None.
+
+## RED (2026-10-22, Pi arm64)
+Logs are under `test-results/verify/ci-m2-s2/` (gitignored); each ends with `# duration <s> s; exit <code>`. Each RED commit came before its GREEN commit (P2). The C locale is `LANG=C.UTF-8 LC_ALL=C.UTF-8`.
+
+| WO | Test | Command | RED outcome | Log |
+|---|---|---|---|---|
+| 1 | `ci-loc-01…02` | `corepack yarn jest tests/unit/harness/browserLocale.test.ts` | 2 failed: `browserLocaleEnv is not a function` | `red/wo1-unit.log` |
+| 1 | `CI-M2S2-LOC-01…02` | `env LANG=C.UTF-8 LC_ALL=C.UTF-8 NOTESTEAD_KEEP_IMAGE=1 corepack yarn playwright test tests/e2e/harness/browser-locale.spec.ts` (the first heavy run: it built the three images; 473 s) | **LOC-01:** `Expected: "2026-10-21T22:04"`, `Received: ""`. **LOC-02 (control):** `Expected: not "2026-10-21T22:04"`, and it received exactly that value: the US-order keys fill the fields. So Chromium lays them out by the process locale, as diagnosed | `red/wo1-loc-c.log` |
+| 1 (S-D) | `M2-AC5` under the C locale | `env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test tests/e2e/m2-s2/todos.spec.ts` | fails at step 2 with CI's message: `timed out after 10000 ms waiting for the date input to hold 2026-10-22T02:23` (261 s) | `red/wo1-ac5-c.log` |
+| 2 | `CI-T-01…04` | `node --test … tests/acceptance/ci-m2-s2/timeouts.test.mts` | 4 failed: `tests/e2e/support/timeouts.ts does not exist` | `red/wo2.log` |
+| 3 | `ci-fail-01…03` | `corepack yarn jest tests/unit/harness/failureLine.test.ts` | suite failed to run: `Cannot find module '../../e2e/support/failureLine.ts'` | `red/wo3-unit.log` |
+| 3 (regression, see F-R1) | six existing tests, `ci-fail-05` | `corepack yarn jest tests/unit/harness` | after the GREEN `91d6256`: 6 failed in `secrets.test.ts`, `uploadGate.test.ts`, `derivedCredentials.test.ts` (`test.titlePath is not a function`); `ci-fail-05` pins it, `ci-fail-04` passes as the positive control | `red/wo3-regression-jest.log`, `red/wo3-reporter-unit.log` |
+| 5 (finding F-R2) | `press-01…03` | `corepack yarn jest tests/unit/harness/syncPress.test.ts` | suite failed to run: `Cannot find module '../../e2e/support/syncPress.ts'` (E2E evidence of the same defect: `verify/e2e-full-c-locale-run1-ac3-cancelled-press.log`, and the deterministic S-E below) | `red/wo5-press-unit.log` |
+
+## Harness validation (2026-10-22, Pi arm64)
+Temporary local edits, never committed (reverted after each; `git status` clean). Images reused (`$IMG`).
+
+| Run | Edit / command | Expected | Observed | Log |
+|---|---|---|---|---|
+| **S-A** | the WO-1 RED commands after the fix | LOC-01 and LOC-02 pass under the C locale | **As expected**: 2 passed (97 s). The CI proof run repeats it on the runners' own locale | `green/wo1-loc-c.log` |
+| **S-D** | the S-D RED command after the fix | M2-AC5 passes under the C locale | **As expected**: 1 passed (517 s) | `green/wo1-ac5-c.log` |
+| **S-B** | `type-like-user.spec.ts`: append `await page.getByRole('button', { name: 'nst-never-there' }).click();` | fails in about 60 s naming the locator, with the `[notestead] FAILED C1-R1-guard …` line before the summary | **As expected**: `TimeoutError: locator.click: Timeout 60000ms exceeded.` after 63 s (not the 10-minute test timeout); the error block shows `waiting for getByRole('button', { name: 'nst-never-there' })`; the `[notestead] FAILED C1-R1-guard … attempt 1, 63 s: TimeoutError: locator.click: Timeout 60000ms exceeded.` line is line 4 of the log, the summary starts at line 8. See F-B3 | `sens/s-b.log` |
+| **S-C** | `ciGlobalTimeoutMs = 10 * 60_000` and `globalTimeout: ciGlobalTimeoutMs` unconditionally; full suite | Playwright stops itself at 10 min, tests pending; globalTeardown still runs; `junit.xml` and `redaction-complete.json` exist; the `FAILED` lines name the interrupted tests; the gate reports `complete: true` and keeps `test-results/e2e/output` | **Partly as expected.** Stops itself: `Timed out waiting 600s for the test suite to run` (610 s; 9 passed, 7 did not run). `junit.xml` (16 tests, 7 skipped) and `redaction-complete.json` (`complete: true`) exist. The gate: `test-results/e2e: redaction complete`, `removed: []`, `output` kept (`filesRedacted: 0`, `artifactDirsRemoved: 1`, one raw `.playwright-artifacts` dir, which is the gate's normal rule). **Two expectations did not hold:** (1) globalTeardown did not run, see F-B1; (2) no `[notestead] FAILED` line names the interrupted test, see F-B2 | `sens/s-c.log`, `sens/s-c-gate.log`, `sens/s-c-upload-gate.json`, `sens/s-c-junit.xml` |
+| **T-02 mutation** | `ciGlobalTimeoutMs = 42 * 60_000` | CI-T-02 fails | **As expected**: CI-T-02 failed, T-01, T-03 and T-04 passed | `sens/t02-mutation.log` |
+| **S-E** (added, F-R2) | `flows.ts`: right after the first press in `syncWebOnce`, click the button's "Cancel" state (every first press is lost); `-g M2-AC3` | before the fix: fails like the local failure; after: passes | **Before the fix** (`2a906c9`): `Expected: "completed"`, `Received: "no delta request since the press"` at step 4 (437 s). **After** (`78d3c4d`): passes (426 s), each of the four cycles with a `sync-repress` annotation (2 presses) | `sens/s-e-red.log`, `sens/s-e-green.log`, `sens/s-e-green-junit.xml` |
+
+## Results (QA executor, 2026-10-22, Pi arm64)
+**CI proof: PENDING** (x64 and arm64 on the runners, after the orchestrator pushes the branch with the user's approval; §CI proof). Branch `test/M2-S2-ci-x64-arm64`, from `main` `961df09`; all commits by `qa-specialist`; `docs/test-plans/M2-S3.md` was never staged.
+
+### Layers
+| Layer | Command | Result | Duration | Log |
+|---|---|---|---|---|
+| Lint, tsc (3 configs) | `corepack yarn lint` | PASS (exit 0), after the last code commit `78d3c4d` | 64 s | `verify/lint.log` |
+| Jest harness (unit + integration) | `corepack yarn jest tests/unit/harness tests/integration/harness` | PASS: 16 suites, **97 tests** (87 before + `ci-loc` 2 + `ci-fail` 5 + `press` 3) | 23 s | `verify/jest.log` |
+| Acceptance, new | `node --test … tests/acceptance/ci-m2-s2/timeouts.test.mts` | PASS 4 of 4 | 2 s | `verify/acc-timeouts.log` |
+| Acceptance, M1-AC22 workflow coverage | `node --test … tests/acceptance/m1-s8/ac22-e2e-workflow.test.mts` | PASS 13 of 13 | 1 s | `verify/acc-ac22-e2e-workflow.log` |
+| Acceptance, serial rule | `node --test … tests/acceptance/m2-s1/serial-rule.test.mts` | PASS 4 of 4 | under 1 s | `verify/acc-serial-rule.log` |
+| E2E, everything under `C.UTF-8`, run 1 | `env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test` | 15 passed, **1 failed**: `M2-AC3` at step 10 (F-R2) | 2172 s | `verify/e2e-full-c-locale-run1-ac3-cancelled-press.log`, `verify/e2e-full-c-locale-ac3-failure/`, `verify/e2e-full-c-locale-run1-junit.xml` |
+| **E2E, everything under `C.UTF-8` (final)** | same command, after `78d3c4d` | **PASS 16 of 16**: the 14 of M2-S2 plus `CI-M2S2-LOC-01`, `-02`; no retry (`retries: 0` locally); no `[notestead] FAILED` line | 2025 s (33.7 min) | `verify/e2e-full-c-locale.log`, `verify/e2e-full-c-locale-junit.xml` |
+| Contract regression (the reporter changed) | `env $IMG corepack yarn test:contract --verbose tests/contract/m1-s6 tests/contract/m1-s6a tests/contract/m1-s7` | PASS: 8 suites, 45 tests (`c1-pertest-secrets`, `c1r1-realflow-secrets`, `ac20-*` among them) | 1175 s | `verify/contract-regression.log` |
+
+### Per item
+| Item | Status | Evidence |
+|---|---|---|
+| **A** browser locale pin | **PASS on the Pi under the C locale** | `ci-loc-01…02` pass; `CI-M2S2-LOC-01…02` pass under `C.UTF-8` (S-A); M2-AC5 passes under `C.UTF-8` (S-D, and 406 s in the final full run). CI proof: PENDING |
+| **B** bounded actions, specs and run | **PASS** (static and S-B); S-C partly (F-B1, F-B2) | `CI-T-01…04` pass; a stuck click fails in 63 s naming its locator (S-B); `playwright.config.ts` bounds are read from the real config by CI-T-01 |
+| **C, D** failure visible at once | **PASS** | `ci-fail-01…05` pass; the line appears before the summary (S-B); reporters finish and the gate keeps the output after a global timeout (S-C) |
+| **M2-AC3** | **PASS** in the final run (333 s); run 1 failed on the cancelled press (F-R2, fixed) | `verify/e2e-full-c-locale.log`; S-E |
+| **M2-AC4**, **M2-AC5** | **PASS** (259 s, 406 s) | same |
+
+### Full-run timings (final run, Pi, one worker)
+The per-test durations from `verify/e2e-full-c-locale-junit.xml`; the limit of each M2-S2 spec is now 15 min (900 s).
+
+| Test | Duration | Cycles (web ms + headless ms) |
+|---|---|---|
+| M2-AC3 | **333 s** | create 5250 + 34903, edit 12223 + 32152, move 4201 + 31381, delete 5086 + 29868 |
+| M2-AC4 | 259 s | create 5562 + 34217, change 4615 + 30346 |
+| M2-AC5 | **406 s** | create 6173 + 34243, done 4231 + 30485 |
+| M2-S2-SEED-01 | 68 s | |
+| M1-AC21, M1-AC21 NEG | 199 s, 236 s | |
+| M2-AC2, M2-AC2 NEG | 188 s, 142 s | |
+| M2-AC1, M2-AC1 NEG | 55 s, 38 s | |
+| LOC-01, LOC-02, SPY-01…03, C1-R1-guard | 0.6 to 1.4 s each | |
+
+The whole 16-test run took 2025 s (33.7 min) on one worker. The slowest M2-S2 test (M2-AC5) used 45% of its new 15-minute limit; run 1's failed M2-AC3 took 468 s.
+
+### Findings (executor, for the planner)
+- **F-R2 (harness race; fixed in `78d3c4d`): a press can cancel the app's own sync.** The first full run under `C.UTF-8` failed M2-AC3 at step 10 (the delete cycle) after `syncWebOnce` waited its 3 minutes: `Received: "no delta request since the press"`; the page showed an idle button and `Completed: … (885ms)`. From the console log and the trace (UTC): the delete was clicked at 01:24:30.058; the test's `Synchronise` click began at 31.757; the app started a sync **of its own** at 31.871 (about 1.8 s after the edit, F9); `Sync: cancelling` follows at 32.062 and `Synchronisation was cancelled.` at 32.760. The click was dispatched after the button had flipped to "Cancel", so it cancelled that sync, and nothing started another. The structure repeats after every quick edit followed at once by a cycle, so it is a flake, not a one-off. `syncWebOnce` now presses again (at most three presses) when the button is idle again, no delta request was seen since the last press and 3 s have passed (`syncPress.ts`, unit tests `press-01…03`); a re-press is recorded as a `sync-repress` annotation. Proof: S-E. **This is not finding B's 23-minute stall:** here the poll bounds the wait at 3 minutes and the test fails, so the stall in the arm64 run is still unexplained; with `actionTimeout` the next occurrence names its locator.
+- **F-R1 (my regression; fixed in `86aeb98`).** The WO-3 GREEN made the reporter call `test.titlePath()` for every non-passing result, and three existing suites call `onTestEnd` with a partial `{}` test object, so six existing tests failed. I had only run `failureLine.test.ts` at that GREEN; the full Jest run in WO-5 found it. Process lesson: after a change to `redactingReporter.ts`, run the whole `tests/unit/harness tests/integration/harness` set at the GREEN, and the contract self-tests (done here). `ci-fail-04…05` now cover the reporter path.
+- **F-B1 (plan expectation that does not hold): the global timeout also bounds `globalTeardown`.** In S-C, Playwright printed `Timed out waiting 600s for the test suite to run` and then `Timed out waiting 600s for the teardown for test suite to run`: one deadline covers setup, tests and teardown, so the teardown has no time left and the stack stayed up (four containers, mine; I removed them with `node tests/stack/cli.ts down <project>`, `sens/s-c-cleanup.log`). On a CI runner that is harmless (the VM goes away), and the reporters' `onEnd` and `onExit` did run (`junit.xml`, `redaction-complete.json` written, `complete: true`), which is what the margin is needed for. But the plan's reason for the margin ("covers `globalTeardown`'s stack removal", §Budget, `CI-T-02`) is not accurate: the margin covers the reporters and the gate. Locally the global timeout is off, so developers do not meet this.
+- **F-B2: an interrupted test gets no `[notestead] FAILED` line.** The test in flight when the global timeout hit (M2-AC2) is marked skipped in `junit.xml`, but Playwright never calls `onTestEnd` for it, so the job log does not name it. A fix would track `onTestBegin` and print `[notestead] INTERRUPTED <title>` for tests without a result in `onEnd`; not done, since the order is fixed. Planner decision.
+- **F-B3: the failure line does not name the locator.** It keeps only the first line of the error (`TimeoutError: locator.click: Timeout 60000ms exceeded.`); the locator is in the `Call log` below (`waiting for getByRole(…)`). In a run that finishes, the summary shows it (S-B); in a run killed before the summary, the line alone does not. The format is the plan's. Planner decision: add the first `waiting for` line to the failure line.
+- **Contract teardown untags the device image.** As in M2-S1, the contract run left the device image untagged (dangling); I re-tagged it as `localhost/notestead-test-device:3.7.1` (entrypoint `node /fixture/device.mjs`, label `stack`, checked first).
+
+### Test integrity
+`git log --format='%h %an %s%n%b' 961df09..HEAD -- tests/ playwright.config.ts`: **10 commits**, all with the trailer `Agent: qa-specialist` (counted with `%(trailers:key=Agent)`); the engineer made none; `.github/**` was not touched (CC-1 is the ci-cd-specialist's). RED before GREEN, in order: `1976aa2`→`a7d8d0e` (locale), `f9af122`→`d88b36c` (bounds), `449673a`→`91d6256` (failure line), `49104f9`→`86aeb98` (the F-R1 fix), `2a906c9`→`78d3c4d` (the F-R2 fix). Two docs commits (`095627e`, and the plan `bf3832c` before this work). `docs/test-plans/M2-S3.md` is still untracked and untouched. No `.only`, `.skip`, `fixme`, `waitForTimeout` or `fill()`; the three Jest slips (a message passed to `expect`) were corrected in the GREEN commits.
+
+### Podman
+`podman-before.txt`: `byparr` (exited), `byparr_default`, the default `podman` network, no volumes, and the five pre-existing unlabelled images (`caddy`, `cloudflared`, `node` ×2 tags, `joplin/server:3.7.2`) plus `byparr`'s. `podman-after.txt`: containers, networks and volumes identical to before. **The test-labelled images are kept** until the sign-off:
+
+| Image | Id | Label (`io.github.thescriptingguy.notestead.test`) | Size |
+|---|---|---|---|
+| `localhost/notestead-test-device:3.7.1` | `5d1a82bfa27a` | `stack` | 518 MB |
+| `localhost/notestead-headless:stack-test` | `1ba8748a155a` | `stack` | 525 MB |
+| `localhost/notestead-web:stack-test` | `f8dfe49b2c6b` | `contract` | 142 MB |
+| `<none>:<none>` (headless build stage) | `827060fff071` | `stack` | 1.03 GB |
+
+The S-C run left a stack of its own (project `nst-e2e-mvitf1wm1697d5`, started by that run); I removed exactly that project with `node tests/stack/cli.ts down`. No stack that I had not started was found at any point.
+
