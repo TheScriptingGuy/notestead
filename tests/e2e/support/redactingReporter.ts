@@ -210,9 +210,15 @@ export default class RedactingReporter implements Reporter {
 		this.redactChunks(result.stdout, secrets);
 		this.redactChunks(result.stderr, secrets);
 		for (const step of result.steps) this.redactStep(step, secrets);
-		// One redacted line per failure, at once: `list` prints error details only at the end of the run, and a run killed by
-		// its step limit never gets there (docs/test-plans/CI-M2-S2-x64-arm64.md Decisions C, D).
-		if (result.status !== 'passed' && result.status !== 'skipped') {
+		this.printFailure(test, result, secrets);
+	}
+
+	// One redacted line per failure, at once: `list` prints error details only at the end of the run, and a run killed by
+	// its step limit never gets there (docs/test-plans/CI-M2-S2-x64-arm64.md Decisions C, D). It is a diagnostic: whatever
+	// goes wrong while building it (the unit tests call onTestEnd with partial objects) must never stop the redaction.
+	private printFailure(test: TestCase, result: TestResult, secrets: KnownSecret[]): void {
+		if (typeof result.status !== 'string' || result.status === 'passed' || result.status === 'skipped') return;
+		try {
 			process.stdout.write(`${failureLine({
 				title: test.titlePath().slice(-1)[0] ?? test.title,
 				file: relative(findRepoRoot(), test.location.file),
@@ -222,6 +228,8 @@ export default class RedactingReporter implements Reporter {
 				durationMs: result.duration,
 				error: result.error?.message ?? result.status,
 			}, secrets)}\n`);
+		} catch {
+			// not a line this time
 		}
 	}
 
