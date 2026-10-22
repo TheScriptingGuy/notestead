@@ -60,7 +60,7 @@ One page with `<input type="datetime-local">` in a context with `locale: 'en-GB'
   - this run, 14 tests: x64 568 s, with one failing test retried.
 - **Expected:** a healthy 14-test arm64 run with 2 workers takes roughly 12 to 18 min. That is an estimate; the CI proof run measures it.
 - **Runner resources** at the end of the arm64 job: 13.6 GB of 16 GB available, no swap used. 2 workers are not the problem, so **workers stay at Playwright's default (2)**.
-- **Decision:** keep the 45-minute step for this fix, with `globalTimeout` 40 min. `CI-T-02` locks the 5-minute margin, which covers `globalTeardown`'s stack removal and the reporters' `onEnd`.
+- **Decision:** keep the 45-minute step for this fix, with `globalTimeout` 40 min. `CI-T-02` locks the 5-minute margin, which covers the reporters' `onEnd`/`onExit` and the upload gate. *(Corrected 2026-10-22, F-B1: Playwright's one global deadline also bounds `globalTeardown`, so after a global timeout the stack stays up. On CI that is harmless, because the runner VM is discarded.)*
 - **CC-1 (ci-cd-specialist, conditional): raise the step to 60 min**, with QA moving `ciGlobalTimeoutMs` to 55 min in the same change (`CI-T-02` enforces the pairing), if either:
   - (a) the healthy arm64 E2E wall time in the proof run is over 20 min (half of 40); or
   - (b) M2-S3's attachment specs (5 MiB and 100 MiB, M2-AC7) are about to merge. Their upload, encryption and download times on the Pi decide it; M2-S3's plan names the number.
@@ -277,3 +277,42 @@ The whole 16-test run took 2025 s (33.7 min) on one worker. The slowest M2-S2 te
 
 The S-C run left a stack of its own (project `nst-e2e-mvitf1wm1697d5`, started by that run); I removed exactly that project with `node tests/stack/cli.ts down`. No stack that I had not started was found at any point.
 
+## Planner review and decisions (2026-10-22, after `c3dc4f0`)
+Reviewed `bf3832c..c3dc4f0` (12 commits, all `qa-specialist`). Every RED commit precedes its GREEN commit:
+- `1976aa2`→`a7d8d0e` locale;
+- `f9af122`→`d88b36c` bounds;
+- `449673a`→`91d6256` failure line;
+- `49104f9`→`86aeb98` its partial-object fix;
+- `2a906c9`→`78d3c4d` re-press.
+
+The locale pin, the timeouts module and its static checks, the failure line (redacted before it is cut, and never able to break the reporter's redaction) and the guard spec all match the plan. Nothing is weakened.
+- **F-B1: accepted.** The margin's reason above is corrected. The comment in `timeouts.ts` says the same wrong thing, and WO-8 fixes it. No change to the bounds.
+- **F-B2: accepted, no change.** With the global timeout, the run ends cleanly, so the `list` epilogue, JUnit and HTML report name the interrupted test (S-C: `junit.xml` with 7 skipped). The immediate line only matters for a hard kill, which the global timeout now prevents.
+- **F-B3: accepted. Routed to "Anytime, low priority":** the failure line could add the call log's first `waiting for …` line, to name the locator. The epilogue already does that whenever the run ends normally.
+- **F-R2: the re-press is accepted. It does not weaken `syncWebOnce` as an ordering barrier (F9), and fixing it test-first instead of stopping was right in this case.**
+  - **Why the barrier holds:** completion still needs a `delta` (200) after the **last** press, then an idle button and a report with `Completed:` and no `Last error:`. Every press comes after the caller's change, so the sync that completes still started after it.
+  - **What may trigger a re-press:** only an idle button, no delta since the last press, and at least 3 s gone. So it can't fire during a running sync. It allows at most 3 presses in all, so a web app that never syncs still fails, at the 3-minute poll.
+  - **Upstream behaviour:** the cancelled auto-sync is the residual race the M2-S2 design accepted (an auto-sync starting between the idle check and the click). It is upstream UI behaviour: the same button means `Cancel` while a sync runs.
+  - **Why accepting was right:** S-E reproduces the race deterministically (unfixed fails, fixed passes). The fix is harness-only and test-first, every re-press leaves a `sync-repress` annotation, and the change touches no assertion.
+  - **Process note:** WO-5 said to stop and report, and the executor should have reported before fixing. Accepted this time for the reasons above.
+  - Because the change touched `syncWebOnce`'s failure path, **S1c must be re-run** (WO-8). The M2-S2 fail-closed proof has to hold for the new code.
+  - **Not B's cause:** a cancelled press fails within 3 minutes and can't explain a 23-minute silence. B stays open until the CI proof run, which now has bounded actions and traces.
+- **Device image untagged by the contract teardown (twice): a harness defect, F-H1. Routed to M2-S3's QA**, to be fixed before M2-S3's heavy runs. The contract layer builds `localhost/notestead-test-device:3.7.1` under the tag the E2E run kept, then removes "its" image at teardown, which leaves the kept one untagged. Either the contract layer reuses `NOTESTEAD_DEVICE_IMAGE`, or it never removes a tag it didn't create. Until then: pass `$IMG` to contract runs too, or re-tag after them.
+
+### WO-8: S1c on the new `syncWebOnce`, and the margin comment (one `chore` commit plus a sensitivity log)
+1. `tests/e2e/support/timeouts.ts`, the comment above `ciGlobalTimeoutMs`: replace "globalTeardown removes the stack and onEnd writes the reports in those minutes" with "the reporters' onEnd/onExit and the upload gate run in those minutes; the global deadline also bounds globalTeardown, so after a global timeout the stack stays up, which is harmless on a discarded CI runner (F-B1)". **Commit:** `chore(harness): the CI run margin covers the reporters and the gate, not teardown (CI-M2-S2 F-B1)`.
+2. **S1c again:** the same temporary edit as M2-S2 WO-20, `webApp.context.setOffline(true)` before `cycle('edit')` in `notes.spec.ts`. Run `T=40m run test-results/verify/ci-m2-s2/sens/s1c-repress.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test tests/e2e/m2-s2/notes.spec.ts`, then `git checkout --` the file.
+   - It must fail in `syncWebOnce` at the 3-minute poll, with `Received` either `"no delta request since the press"` or `"pressed again (press 3): …"`, after at most 3 presses.
+   - Record the press count from the log or annotation in §Harness validation.
+   - If it passes, stop and report: the barrier would then not be fail-closed.
+3. Append the S1c row and the commit hash to this plan (`docs(test-plans)`).
+
+## QA sign-off
+**arm64 (Pi, local): YES**, on condition that WO-8's S1c fails as stated. It covers:
+- **A:** the locale pin, `CI-M2S2-LOC-01/02`, and M2-AC5 under `C.UTF-8`;
+- **B and D:** the bounds, `CI-T-01…04`, S-B and S-C;
+- **C and D:** the immediate failure line;
+- **F-R2:** the re-press, with S-E;
+- the full local suite under the CI locale, 16/16 with no retry, plus lint, Jest 97/97, acceptance and the contract regression.
+
+**CI proof: PENDING.** It needs the user's approval to push `test/M2-S2-ci-x64-arm64`, then the §CI proof criteria on both runners. Diagnosis B (the arm64 23-minute stall) and C (the M1-AC21 NEG flake) stay open until that run. CC-1 is decided from its arm64 wall time.
