@@ -12,9 +12,10 @@ import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
 import { allItems, foldersTitled, noteTagTitles, tagNoteIds, tagsTitled } from '../support/restQueries.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 
 test.describe('M2-S2 notebooks and tags in the web app', () => {
-	test.describe.configure({ timeout: 25 * 60_000 });
+	test.describe.configure({ timeout: longSpecTimeoutMs });
 	test.use({ e2eeSeed: { notes: 1, extras: true } });
 
 	test('M2-AC4 notebooks created, renamed and nested, and tags added, removed and renamed in the web UI are reflected in /folders, /tags and /tags/:id/notes', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {

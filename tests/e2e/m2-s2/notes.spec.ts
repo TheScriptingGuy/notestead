@@ -13,12 +13,13 @@ import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
 import { foldersTitled } from '../support/restQueries.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { serverItemContent } from '../../stack/stack.ts';
 
 const noteFields = 'id,title,body,parent_id,is_todo,deleted_time,is_conflict,encryption_applied';
 
 test.describe('M2-S2 notes in the web app', () => {
-	test.describe.configure({ timeout: 25 * 60_000 });
+	test.describe.configure({ timeout: longSpecTimeoutMs });
 
 	test('M2-AC3 a note created, edited (typed like a user), moved and deleted to the trash in the web UI is reflected exactly in the headless REST API after one web sync and one headless sync each', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {
 		await requireUpstreamBundle(stack, 'M2-S2');
