@@ -24,6 +24,25 @@ const executableIn = (dir: string): string | undefined => {
 	return undefined;
 };
 
+// The locale of the web app's browser contexts and of the browser process. Chromium lays out the fields of date and time
+// inputs by the browser process's locale environment (LC_ALL, else LANG), not by the context's emulated `locale`; `--lang`
+// does nothing on Linux (docs/test-plans/CI-M2-S2-x64-arm64.md, experiments E1 to E9). A runner on C.UTF-8 therefore got US
+// order with a 12-hour clock under an en-GB context. The harness launches Chromium in the contexts' locale, as a real
+// en-GB user's browser has: `browserLocale` for `newContext`, `browserLocaleEnv` for `launch({ env })`.
+export const browserLocale = 'en-GB';
+
+export const browserLocaleEnv = (base: NodeJS.ProcessEnv): Record<string, string> => {
+	const env: Record<string, string> = {};
+	for (const [name, value] of Object.entries(base)) {
+		if (value !== undefined) env[name] = value;
+	}
+	const name = `${browserLocale.replace('-', '_')}.UTF-8`;
+	env.LC_ALL = name;
+	env.LANG = name;
+	env.LANGUAGE = `${browserLocale.replace('-', '_')}:${browserLocale.split('-')[0]}`;
+	return env;
+};
+
 export const chooseChromium = (): ChromiumChoice => {
 	if (process.env.NOTESTEAD_CHROMIUM) return { executablePath: process.env.NOTESTEAD_CHROMIUM, note: 'NOTESTEAD_CHROMIUM' };
 	if (process.env.CI) return { note: 'CI: the pinned Playwright browser' };

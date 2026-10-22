@@ -9,9 +9,10 @@
 // - Traces: recorded by the `webApp` fixture (no screenshots) and kept on failure; see `use.trace` below.
 // - Projects: `chromium` (parallel) and `chromium-serial` (*.serial.spec.ts: specs that disrupt a shared service, one
 //   worker, after `chromium`; tests/e2e/support/projects.ts, ADR-0007 A3).
-// - Browser: tests/e2e/support/chromium.ts (the installed Chromium locally when Playwright's revision is missing).
+// - Browser: tests/e2e/support/chromium.ts (the installed Chromium locally when Playwright's revision is missing),
+//   and the browser process's locale environment (en-GB, whatever the host's locale is).
 import { defineConfig, devices } from '@playwright/test';
-import { chooseChromium } from './tests/e2e/support/chromium.ts';
+import { browserLocaleEnv, chooseChromium } from './tests/e2e/support/chromium.ts';
 import { e2eProjects } from './tests/e2e/support/projects.ts';
 
 const ci = !!process.env.CI;
@@ -40,7 +41,9 @@ export default defineConfig({
 		trace: 'off',
 		screenshot: 'off',
 		video: 'off',
-		launchOptions: chromium.executablePath ? { executablePath: chromium.executablePath } : {},
+		// The browser process runs in the contexts' locale (en-GB): Chromium lays out date fields by the process locale, not by
+		// the context's (docs/test-plans/CI-M2-S2-x64-arm64.md Decisions A).
+		launchOptions: { ...(chromium.executablePath ? { executablePath: chromium.executablePath } : {}), env: browserLocaleEnv(process.env) },
 	},
 	projects: e2eProjects(devices['Desktop Chrome']),
 });

@@ -35,6 +35,7 @@ import { redactText } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
+import { browserLocale } from './chromium.ts';
 import { userTimeZone } from './dueDate.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
@@ -235,7 +236,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		// 127.0.0.1, never localhost: upstream's environment.js turns on dev mode for any origin containing "localhost".
 		// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
 		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
-		const context = await browser.newContext({ baseURL: stack.webUrl, locale: 'en-GB', timezoneId: webTimezone });
+		const context = await browser.newContext({ baseURL: stack.webUrl, locale: browserLocale, timezoneId: webTimezone });
 		const lines: string[] = [];
 		const watch = (page: Page): void => {
 			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));

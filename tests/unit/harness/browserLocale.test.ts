@@ -9,7 +9,7 @@ describe('browser locale', () => {
 		const base: NodeJS.ProcessEnv = { PATH: '/usr/bin', HOME: '/home/x', LC_ALL: 'C.UTF-8', LANG: 'C.UTF-8', LANGUAGE: 'C', GONE: undefined };
 		const env = browserLocaleEnv(base);
 		expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/x', LC_ALL: 'en_GB.UTF-8', LANG: 'en_GB.UTF-8', LANGUAGE: 'en_GB:en' });
-		expect(base.LC_ALL, 'the input is not changed').toBe('C.UTF-8');
+		expect(base.LC_ALL).toBe('C.UTF-8');
 		expect(Object.keys(env)).not.toContain('GONE');
 	});
 
