@@ -15,9 +15,12 @@ describe('web sync press', () => {
 	});
 
 	test('press-02 never presses while the sync may still be coming or running', () => {
-		expect(pressAgain({ ...lost, deltaSeen: true }), 'a delta request was seen: the sync ran').toBe(false);
-		expect(pressAgain({ ...lost, idle: false }), 'the button reads Cancel: a sync is running').toBe(false);
-		expect(pressAgain({ ...lost, msSincePress: pressSettleMs - 1 }), 'the sync may not have started yet').toBe(false);
+		// a delta request was seen: the sync ran
+		expect(pressAgain({ ...lost, deltaSeen: true })).toBe(false);
+		// the button reads Cancel: a sync is running
+		expect(pressAgain({ ...lost, idle: false })).toBe(false);
+		// the press is too young: the sync may not have started yet
+		expect(pressAgain({ ...lost, msSincePress: pressSettleMs - 1 })).toBe(false);
 	});
 
 	test('press-03 gives up after the allowed number of presses, so the poll reports the failure', () => {

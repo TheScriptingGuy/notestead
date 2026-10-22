@@ -1,10 +1,11 @@
 // User flows in the web app, shared by the E2E specs and the harness self-tests that must drive the real flow
 // (docs/test-plans/M1-S7.md: M1-AC21 steps 3 and 4; the C1-R1 leak scan runs the same code).
-import { expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { syncHeadlessOnce } from '../../stack/stack.ts';
 import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { NetworkRecorder } from './network.ts';
 import type { EncryptionSettings, JoplinWebApp, SyncSettings } from './pages/joplinWebApp.ts';
+import { pressAgain } from './syncPress.ts';
 
 // The app's own first sync after the target changed downloads the master key, and the decryption banner appears
 // (~10 s on the Pi from "Back"; the sync itself ~2 s).
@@ -68,24 +69,39 @@ const decodedPath = (url: string): string => {
 // One web sync (docs/test-plans/M2-S2.md D3), from the note list: idle first, one press of Synchronise, then a delta
 // request after the press, idle again, and a report with Completed: and no Last error:. Upstream runs update_remote
 // before delta, so a delta after the press means that sync's upload ran after the caller's change. Ends with the side
-// menu closed.
-export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, timeoutMs = 3 * 60_000): Promise<{ report: string; durationMs: number }> => {
+// menu closed. The app starts syncs of its own about two seconds after an edit; a press that lands just after one starts
+// cancels it (the button already reads "Cancel"), and then no delta follows. The press is made again, at most `maxPresses`
+// in all, when the button is idle again and no delta was seen since the last press (syncPress.ts). A re-press is recorded
+// as an annotation on the test.
+export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, timeoutMs = 3 * 60_000): Promise<{ report: string; durationMs: number; presses: number }> => {
 	const started = Date.now();
 	await app.openSidebar();
 	await expect(app.syncIdle(), 'no sync running before the web sync').toBeVisible({ timeout: timeoutMs });
-	const mark = network.entries().length;
+	let mark = network.entries().length;
+	let pressedAt = Date.now();
+	let presses = 1;
 	await app.syncIdle().click();
 	let report = '';
 	await expect.poll(async () => {
 		const deltaSeen = network.entries().slice(mark).some(e => e.method === 'GET' && e.status === 200 && decodedPath(e.url) === deltaPath);
-		if (!deltaSeen) return 'no delta request since the press';
+		if (!deltaSeen) {
+			if (pressAgain({ deltaSeen, idle: await app.syncIdle().isVisible(), msSincePress: Date.now() - pressedAt, presses })) {
+				presses++;
+				mark = network.entries().length;
+				pressedAt = Date.now();
+				await app.syncIdle().click();
+				return `pressed again (press ${presses}): the last press started no sync`;
+			}
+			return 'no delta request since the press';
+		}
 		if (!(await app.syncIdle().isVisible())) return 'a sync is running';
 		report = await app.syncReport();
 		if (/Last error:/.test(report)) return `the sync reported an error: ${report}`;
 		return /\bCompleted: /.test(report) ? 'completed' : `no completed report yet: ${JSON.stringify(report)}`;
 	}, { timeout: timeoutMs, intervals: [1_000] }).toBe('completed');
+	if (presses > 1) test.info().annotations.push({ type: 'sync-repress', description: `the web sync needed ${presses} presses of Synchronise: the earlier ones started no sync` });
 	await app.closeSidebar();
-	return { report, durationMs: Date.now() - started };
+	return { report, durationMs: Date.now() - started, presses };
 };
 
 // One web sync, then one headless sync of the test's own service (D2, D3): one "cycle" of M2-S2.
