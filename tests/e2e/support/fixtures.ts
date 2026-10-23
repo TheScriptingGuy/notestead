@@ -37,6 +37,7 @@ import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabl
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
 import { userTimeZone } from './dueDate.ts';
+import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
@@ -185,7 +186,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	headlessService: async ({ stack, e2eeAccount }, use, testInfo) => {
 		let service: HeadlessService | undefined;
 		try {
-			service = await upHeadless(stack, e2eeAccount, shortId(testInfo));
+			service = await upHeadless(stack, e2eeAccount, shortId(testInfo), headlessUpTimeoutMs);
 			await use(service);
 		} finally {
 			// The token again: a restart of the CLI inside the service rotates it.

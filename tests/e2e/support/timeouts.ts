@@ -18,3 +18,9 @@ export const ciGlobalTimeoutMs = 55 * 60_000;
 // The longest spec timeout (the M2-S2 specs: five headless restarts at up to 90 s each on x64, plus the NEG window); the
 // slowest took 417 s on the Pi. A test plus its CI retry (2 x 15 min) must fit inside ciGlobalTimeoutMs (CI-T-04).
 export const longSpecTimeoutMs = 15 * 60_000;
+
+// A per-test headless service gives up this long after its start (CI-M2-S2 G, CI run 39957733152): at least two minutes
+// before the 10-minute test timeout, so the fixture's own failure, with the supervisor's log, is reported instead of
+// "Test timeout exceeded while setting up headlessService". A fresh service is ready in under 1.5 minutes on every runner;
+// 7 minutes also cover about ten of the supervisor's 30 s initial-cycle retries (CI-T-05).
+export const headlessUpTimeoutMs = 7 * 60_000;
