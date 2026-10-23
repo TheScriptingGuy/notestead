@@ -477,3 +477,32 @@ Light checks after WO-13 and WO-14 (no E2E re-run): `verify3/lint.log`, `verify3
 ### Podman
 Before and after (`podman ps -a`, networks, volumes): only `byparr`, `byparr_default`, the default network, no volumes. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`, label `contract`), and the dangling headless build stage (`827060fff071`).
 
+
+## Planner review of addendum 2 and QA sign-off (2026-10-23)
+- **Reviewed:**
+  - WO-9 `252103c`→`e393033`;
+  - WO-10 `2c1064f`→`f536a69`;
+  - WO-12 `607942c` (ci-cd), with its worklog `12d8272`;
+  - WO-13 `919f607`;
+  - WO-14 `bde2dae` and `a53d8ea`.
+
+  They match the orders, every RED comes before its GREEN, and nothing is weakened.
+  - `trashOpenNote` accepts both upstream outcomes within a bound.
+  - Step 9 gained the target-notebook heading check; steps 9 and 10 are otherwise unchanged.
+  - `restartVerdict` still requires `/healthz` 200 with a `lastSync` strictly after the restart, and still fails fast on exited or unhealthy.
+  - The step and run timeouts are now 60 and 55 minutes, and CI-T holds.
+- **Correction to finding F (planner):** `health-lag` fired on **all 8** headless cycles on the Pi. The annotation therefore does not single out a lost podman health timer.
+  - Podman's status normally trails `/healthz`, because its check runs every 2 s and our probe runs every 1 s.
+  - So the fix stands: podman's status was never a sound readiness signal after a restart. But **F's specific mechanism (a lost timer) is still unproven**, and the `restartReady.ts` comment states it as fact. That is a nit, fixed at the next touch.
+  - Run 2's `health-lag` count is therefore expected to be above 0 and **proves nothing by itself**. Only a recurrence of F's 600 s timeout, with WO-10's diagnostics, would.
+- **Coverage note:** only the `left` outcome of `trashOpenNote` has run end to end. The Pi left the trashed note by itself too. The `stayed` branch is covered by `trash-02/03/05` only.
+
+**QA sign-off on arm64 (Pi): YES** for E, F, CC-1 (QA part) and the full local suite under `C.UTF-8` (16 of 16, no retry, 2031 s), plus S-F. **CI proof run 2: PENDING.** It must show, on **both** runners:
+- E2E green, with flaky 0 and every result `retry: 0`;
+- `CI-M2S2-LOC-01/02` passing;
+- M2-AC3 passing, which **closes B** on arm64, with a `trash-exit` annotation on each runner;
+- M2-AC5 passing with no retry, and no 600 s headless wait anywhere. If one occurs, it is analysed from WO-10's timeout diagnostics as F's real cause;
+- JUnit, the HTML report, traces and `redaction-complete` present, and the upload gate OK;
+- the arm64 E2E wall time, recorded against the 55-minute budget.
+
+C closes if M1-AC21 NEG passes first time in run 2 and in the next `main` run.
