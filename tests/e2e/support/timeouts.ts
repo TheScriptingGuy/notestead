@@ -11,9 +11,9 @@ export const actionTimeoutMs = 60_000;
 export const navigationTimeoutMs = 120_000;
 
 // The whole CI run: Playwright ends itself, its reporters finish and the upload gate keeps the traces, at least four minutes
-// before the 45-minute E2E step (the reporters' onEnd/onExit and the upload gate run in those minutes; the global deadline also
+// before the 60-minute E2E step (CC-1, WO-12; the reporters' onEnd/onExit and the upload gate run in those minutes; the global deadline also
 // bounds globalTeardown, so after a global timeout the stack stays up, which is harmless on a discarded CI runner (F-B1); CI-T-02).
-export const ciGlobalTimeoutMs = 40 * 60_000;
+export const ciGlobalTimeoutMs = 55 * 60_000;
 
 // The longest spec timeout (the M2-S2 specs: five headless restarts at up to 90 s each on x64, plus the NEG window); the
 // slowest took 417 s on the Pi. A test plus its CI retry (2 x 15 min) must fit inside ciGlobalTimeoutMs (CI-T-04).
