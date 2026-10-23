@@ -506,3 +506,90 @@ Before and after (`podman ps -a`, networks, volumes): only `byparr`, `byparr_def
 - the arm64 E2E wall time, recorded against the 55-minute budget.
 
 C closes if M1-AC21 NEG passes first time in run 2 and in the next `main` run.
+
+## CI proof run 2: e2e 39957733152 (head `4344f69`). Planner decision (2026-10-23)
+### Run 2 E2E against the must-show list (both runners; ci-cd evidence `~/joplin-web-app-work/ci-evidence/39957733152/`)
+| Must show | Result |
+|---|---|
+| E2E green, flaky 0, every `retry: 0` | **MET.** 16 of 16 on each runner, 0 flaky, every retry 0, 0 `[notestead] FAILED` lines |
+| `CI-M2S2-LOC-01/02` pass | **MET** |
+| M2-AC3 passes, with `trash-exit` on each runner (closes B on arm64) | **MET.** First try on both runners; `trash-exit`: "the app left the trashed note by itself"; arm64 104.3 s |
+| M2-AC5 passes with no retry and no 600 s headless wait | **MET.** arm64 284.8 s, x64 300.4 s |
+| JUnit, HTML report, traces, `redaction-complete`, upload gate OK | **MET, with a note.** `redaction-complete` and the gate are `complete: true`, and the leak scan has 0 hits. **There are no E2E traces on either runner, which is by design:** the `webApp` fixture keeps a trace only for a failed test (M1-S7 F2), and every test passed. Nothing is missing |
+| arm64 E2E wall time against the 55-minute budget | **MET.** 671 s (11.2 min, 20% of 55); x64 835 s |
+| `health-lag` count (informational) | 13 (arm64 6, x64 7). As addendum 2 predicted, this is no evidence by itself |
+
+**The E2E layer is proven on both runners.** C: M1-AC21 NEG passed first time; it closes after the next `main` run.
+
+### G: the arm64 contract step fails (`tests/contract/m1-s6a/c1-pertest-secrets.test.ts`, 9 of 11)
+- **(a) Same class as F? The readiness path: yes, confirmed by reading the code. The cause: not yet shown.**
+  - `upHeadless` → `composeUp` (`tests/stack/stack.ts:162-202`) waits for `compose up` to exit 0 **and** for podman's health status to read `healthy` (line 182). WO-10 changed only `syncHeadlessOnce`. So a first start of a per-test headless service (the `headlessService` fixture, and therefore the inner self-test run) still waits on podman's status, which can stay `starting` (`start_period: 600s` means it never turns `unhealthy`).
+  - `upHeadless`'s default `timeoutMs` is 10 min, equal to the test timeout. So the inner test was killed while the fixture was still being set up (`Test timeout of 600000ms exceeded while setting up "headlessService"`), and no diagnostic or log was written. The cascade (c1-planted false, c1-redacted-* empty) follows from that one inner timeout.
+  - **A second candidate is just as possible:** the supervisor itself was not ready for 10 min. The default headless logged `initial cycle failed … HTTP 502` three times (the supervisor retries every 30 s), and `web` logged 11 `dial tcp: lookup server: i/o timeout` lines (3 to 43 in passing runs). So the sync target was intermittently unreachable through `web`'s resolver.
+  - Without the per-test headless log, the two can't be told apart. Round 3 makes the next occurrence decide it.
+- **Watch item B:** the M2-AC3 stall is closed by run 2's arm64 E2E. Per lead r2 item 6, any timeout keeps the watch open, so **B's watch stays open until G is diagnosed.** G is recorded as its own finding.
+- **(b) Decision: a round-3 fix-forward, then proof run 3.** A plain re-run would turn green or red without telling us why.
+  - **The `/healthz` part removes the podman-lag cause.** Readiness means the supervisor's own `/healthz` returns 200 after its initial cycle. It is the signal podman's health check reads anyway.
+  - **The bound and the logs explain any remaining cause.** This covers the 502 / DNS one.
+  - **No SE or ci-cd change is needed for round 3.** If proof run 3 shows `web`'s resolver failing to find `server` as the cause, that is a `deploy/web` (SE) or runner podman/aardvark-dns (ci-cd) finding, decided then.
+
+### Work orders, round 3 (WO-15 to WO-19; executor)
+The rules of §Work orders and the HARD STOP definition of addendum 2 apply unchanged. Logs go under `test-results/verify/ci-m2-s2/r3/`.
+
+**WO-15: Readiness of a fresh headless service from `/healthz` (RED commit).**
+- **RED:** `tests/unit/harness/restartReady.test.ts`, add `start-01…04` for a new pure `startVerdict(o: { composeExit?: number | null; running: boolean; health: string; healthz?: { status: number } }): 'done' | 'wait' | { fail: string }`:
+  - `start-01`: compose exit 0, running, health `starting`, healthz 200 gives `'done'` (the RED; today's check needs `healthy`);
+  - `start-02`: health `healthy`, healthz undefined gives `'wait'`;
+  - `start-03`: a compose exit other than 0 gives `{ fail }` naming the exit code;
+  - `start-04`: `running: false`, or health `unhealthy` with healthz not 200, gives `{ fail }`.
+
+  **Commit 1:** `test(harness): failing unit tests for a fresh headless service ready on /healthz (CI-M2-S2 G)`.
+- **GREEN:**
+  - `startVerdict` goes in `tests/stack/restartReady.ts`.
+  - `upHeadless` stops relying on `composeUp`'s podman-health wait for the `headless` service, by either of:
+    - a `ready` option on `composeUp`: `(containers) => Promise<'done' | 'wait' | { fail }>`, defaulting to today's health rule, so the core `server` and `web` keep theirs;
+    - or by polling `startVerdict` with `headlessHealthz(container)` after `compose up` has exited 0.
+
+    Whichever is used, the core services' readiness stays exactly as it is.
+  - **Commit 2:** `test(harness): a per-test headless service is ready when its /healthz is, whatever podman's health status says (CI-M2-S2 G)`.
+
+**WO-16: The fixture's bound sits strictly below the test's (RED commit).**
+- **RED:** add `CI-T-05` to `tests/acceptance/ci-m2-s2/timeouts.test.mts`. It requires:
+  - `tests/e2e/support/timeouts.ts` to export `headlessUpTimeoutMs`;
+  - `headlessUpTimeoutMs ≤ playwright.config.ts`'s test timeout (read it, 10 min) − 2 min;
+  - `fixtures.ts`'s `headlessService` to pass it to `upHeadless`.
+
+  **Commit 1:** `test(harness): failing check that the headless fixture's bound is below the test timeout (CI-M2-S2 G)`.
+- **GREEN:** `headlessUpTimeoutMs = 7 * 60_000` (a fresh headless service is ready in under 1.5 min on every runner; 7 min also covers about ten of the supervisor's 30 s retries). The fixture passes it to `upHeadless`. **Commit 2:** `test(harness): the headless fixture gives up at 7 minutes, three before the test does, so its failure is reported (CI-M2-S2 G)`.
+
+**WO-17: Logs of a per-test headless service that failed to start (one commit).**
+- In the `headlessService` fixture, when `upHeadless` throws:
+  - the container may already exist, so look it up with `projectContainers(project)` (the project is `${stack.project}-hl-${label}`);
+  - attach `supervisor.log` (`containerLog`, redacted with `workerSecrets`) and `compose-up.log` (the redacted `compose up` output, which `composeUp` must put on the error it throws: add `output` to `StackHealthError` or to a new error type);
+  - attach `readiness.log`: the last observation, value-free (podman health, `/healthz` status and state, `lastSync`, the elapsed time);
+  - then rethrow.
+- Also write the same files into `stack.logsDir`, so the contract layer's artifact holds them even when the inner run's attachments aren't kept.
+- **Commit:** `test(harness): attach the logs of a per-test headless service that did not start (CI-M2-S2 G)`.
+
+**WO-18: Sensitivity and local proof (no commit).**
+- **S-G1 (readiness):**
+  - the temporary edit: in `upHeadless`'s readiness, force `health: 'starting'`;
+  - `T=40m run r3/s-g1.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test tests/e2e/m1-s7/walking-skeleton.spec.ts -g "M1-AC21 a note"`;
+  - it must pass in normal time; then `git checkout --`.
+- **S-G2 (bound and logs):**
+  - the temporary edit: in `compose.headless.yaml`, point the headless service at an unreachable sync target, for example its URL env with a wrong port, so the supervisor never becomes ready;
+  - run the same command into `r3/s-g2.log`;
+  - it must fail at about 7 min **in the fixture**, with a message naming `/healthz` not ready, and attach `supervisor.log` (holding the `initial cycle failed` lines), `compose-up.log` and `readiness.log`. They must also be in the stack's logs dir;
+  - then `git checkout --`.
+- **Contract regression:** `T=60m run r3/contract-m1-s6a.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn test:contract --verbose tests/contract/m1-s6a` must pass (c1-pertest-secrets 11 of 11).
+- **Full E2E:** `T=120m run r3/e2e-full.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test` must pass 16 of 16 with no retry.
+- Then lint and the Jest harness.
+- **HARD STOP** on any failure that the sensitivity edit didn't cause.
+
+**WO-19: Plan results (`docs(test-plans)`).** Append RED, validation (S-G1, S-G2) and results to this plan, with podman before and after. Leave proof run 3 as PENDING. **Commit:** `docs(test-plans): CI-M2-S2 round 3 RED, validation and results`.
+
+### Proof run 3 must show
+- **E2E:** everything run 2 showed, again.
+- **Contract:** the arm64 and x64 contract steps green, with `c1-pertest-secrets` 11 of 11.
+- **If G recurs:** it must now fail at 7 min in the fixture, with `supervisor.log`, `compose-up.log` and `readiness.log` in the artifact. The planner then decides between podman lag (excluded by WO-15), the supervisor's 502 retries, and `web`'s resolver (`lookup server: i/o timeout`) as G's cause.
+- **B's watch** closes when G is either absent or explained.
