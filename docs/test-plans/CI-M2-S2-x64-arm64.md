@@ -317,3 +317,118 @@ The locale pin, the timeouts module and its static checks, the failure line (red
 - the full local suite under the CI locale, 16/16 with no retry, plus lint, Jest 97/97, acceptance and the contract regression.
 
 **CI proof: PENDING.** It needs the user's approval to push `test/M2-S2-ci-x64-arm64`, then the §CI proof criteria on both runners. Diagnosis B (the arm64 23-minute stall) and C (the M1-AC21 NEG flake) stay open until that run. CC-1 is decided from its arm64 wall time.
+
+## CI proof run 1: e2e 39768694985 (head `1739167`), red. Planner diagnosis (2026-10-23)
+**What it proved:**
+- A is fixed: LOC-01/02 pass on both runners, and M2-AC5 gets past the date input in about 1 s.
+- D is fixed: no step or run timeout; JUnit, the HTML report, the traces and `redaction-complete` are all present; the gate is OK.
+- C did not recur: M1-AC21 NEG passed first time on both runners.
+- No `sync-repress` annotation.
+
+The two failures below are new findings. Facts are from the coordinator's summary of `~/joplin-web-app-work/ci-evidence/39768694985/`.
+
+| # | Symptom | Root cause | Confidence |
+|---|---|---|---|
+| **E** | M2-AC3 fails on both runners and both attempts at step 9: `backToList`'s `Back` click goes "not stable", then "detached", and times out at 60 s | **The page object assumed upstream stays on the trashed note (M2-S2 F4). Upstream can also leave it on its own, about 35 ms after `Delete`.** <br>• **How:** the trash updates the note (`deleted_time`), and the shared reducer removes it from the folder's note list. `updateSelectedNotesFromExistingNotes` (`packages/lib/reducer.ts:601`) then empties `selectedNoteIds`; the console shows `EditorPluginHandler … effectiveNoteId: null`. With no selected note, the app shows the notebook's list, which has no `Back` button. <br>• **Timing-dependent:** in the green x64 run 39663284028 the `Back` click landed after 0.311 s, so the screen had stayed. Whether it leaves depends on the timing of that list update, so both outcomes are upstream behaviour. <br>• **Not ours:** the timeouts and the locale pin don't change navigation. The proof run only made the race consistent. | **Behaviour: high** (4 of 4 traces). **Exact trigger of each outcome: medium** |
+| **B** (watch item) | the arm64 23-minute stall in run 39663284028 | **Very probably E:** the same gap (after the move cycle, before the delete-cycle restart), the same `Back` click, and at the time no action timeout, so it waited for ever. **Still to prove:** an arm64 run after WO-9 passes M2-AC3 and records its `trash-exit` annotation. Until then B stays open. | high (probable) |
+| **F** | M2-AC5 attempt 1 on arm64: `syncHeadlessOnce` waits 600 s after a restart, although the supervisor logged `ready … last sync 11:43:35.817Z` 7 s in. The retry and x64 pass | **The readiness check also requires podman's health status to read `healthy`.** After `podman restart`, that status is reset and only updated when podman's health-check timer runs. Under rootless podman 4.9 (the runners' version) those timers are systemd transient units recreated on restart, and that recreation can fail without a word, leaving the status at `starting`. `start_period: 600s` keeps it from ever turning `unhealthy`, so `failFast` never fires either. Meanwhile the supervisor's own `/healthz` already said ready. The other half of the check, `lastSync` after the restart, compares the same kernel clock on both sides (the container shares the host's), so a clock skew is ruled out. **Which half stayed false is not in the artifacts:** that is the gap WO-10's diagnostics close. | **Mechanism: medium** (podman's lost health timer fits every fact; it isn't observed directly). **That the podman-status half is redundant: high:** the healthcheck command is a `GET /healthz` == 200, exactly what the check reads itself |
+
+**Durations and CC-1.** The arm64 E2E step took 1645 s (27 min), 69% of the 40-minute run budget. That includes the 10 minutes lost to F and M2-AC3's two failed attempts. Restarts take up to 85.8 s on arm64 (W1: 90 s). Even a healthy run would sit near CC-1's 20-minute line, and M2-S3 adds the 100 MiB attachments. **CC-1 is triggered now** (WO-12, WO-13).
+
+## Work orders, addendum 2 (WO-9 to WO-14)
+The rules of §Work orders apply, and every "stop" is a **HARD STOP**:
+- **Allowed at a HARD STOP:** read traces and logs; copy evidence under `test-results/verify/ci-m2-s2/`; write the finding, with its log paths, into this plan's §Findings; report to the orchestrator.
+- **Forbidden at a HARD STOP:**
+  - changing an assertion, a timeout, a bound or an upstream string;
+  - changing page-object or harness logic beyond the order;
+  - re-running to get a green;
+  - any fix not ordered here.
+
+### WO-9: Leave the trashed note however upstream does it (E) (RED commit)
+- **RED:** `tests/unit/harness/trashExit.test.ts` holds `trash-01…05` for the pure `trashExit(s: { onList: boolean; onNote: boolean; backVisible: boolean; msSinceDelete: number }): 'left' | 'stayed' | undefined`:
+  - `trash-01`: `{ onList: true, onNote: false }`, at any `msSinceDelete` (0 and 10 000), gives `'left'`;
+  - `trash-02`: `{ onNote: true, backVisible: true, msSinceDelete: 3_000 }` gives `'stayed'`;
+  - `trash-03`: the same at `2_999` gives `undefined`, because upstream may still leave;
+  - `trash-04`: a screen in transition (`onList: false, onNote: false`) gives `undefined`;
+  - `trash-05`: `{ onNote: true, backVisible: false, msSinceDelete: 10_000 }` gives `undefined`.
+
+  Log `red/wo9-unit.log` (module missing). **Commit 1:** `test(harness): failing unit tests for leaving a trashed note either way upstream does it (CI-M2-S2 E)`.
+- **GREEN:**
+  - `tests/e2e/support/trashExit.ts`, no Playwright import, with a comment citing E: `export const stayedAfterMs = 3_000;` and `trashExit`.
+  - `JoplinWebApp.trashOpenNote(note: NoteScreen): Promise<'left' | 'stayed'>` replaces the separate `deleteToTrash()` + `backToList()`:
+    - `deletedAt = Date.now()`; `note.menuAction('Delete')`;
+    - `outcome = await waitFor('the note screen to leave by itself, or to settle on the trashed note', probe, { timeoutMs: 30_000, intervalMs: 100 })`. The probe reads `onList` (`sidebarButton().isVisible()` and `note.titleField().count() === 0`), `onNote` (`note.titleField().isVisible()`) and `backVisible` (the `Back` button visible), then calls `trashExit`;
+    - on `'stayed'`, call `backToList()`;
+    - in either case, `await this.sidebarButton().waitFor()`;
+    - return the outcome.
+  - Delete `NoteScreen.deleteToTrash`, and correct the F4 comment to say upstream either stays or leaves (E).
+  - `notes.spec.ts` step 9 becomes:
+    ```ts
+    const exit = await app.trashOpenNote(note);
+    test.info().annotations.push({ type: 'trash-exit', description: exit === 'left' ? 'the app left the trashed note by itself' : 'the app stayed on the trashed note; Back pressed' });
+    ```
+    then `await expect(app.notesHeading(target), 'the list of the note\'s notebook').toBeVisible()`, then the existing count-0 poll. Every other assertion of steps 9 and 10 stays as it is.
+  - **HARD STOP** if `trashOpenNote` times out in any run.
+  - Log `green/wo9-unit.log`. **Commit 2:** `test(harness): leave a trashed note whether upstream stays on it or leaves by itself (CI-M2-S2 E, B)`.
+
+### WO-10: Headless readiness from the supervisor's own `/healthz` (F) (RED commit)
+- **RED:** `tests/unit/harness/restartReady.test.ts` holds `restart-01…06` for the pure `restartVerdict(o: { running: boolean; health: string; healthz?: { status: number; lastSync?: string }; startedMs: number }): 'done' | 'wait' | { fail: string }`. Here `t0 = Date.UTC(2026, 9, 23, 11, 43, 32)`.
+  - `restart-01`: `running`, health `starting`, `healthz { 200, lastSync: t0 + 3.8 s }` gives `'done'`. This is F: today's check needs `healthy`, which is the RED.
+  - `restart-02`: health `healthy`, `lastSync` equal to `t0` gives `'wait'`. It must be strictly after.
+  - `restart-03`: health `healthy`, `healthz` undefined (the exec failed) gives `'wait'`.
+  - `restart-04`: `running: false` gives `{ fail }`, and the message names `exited`.
+  - `restart-05`: health `unhealthy` with `/healthz` not ready gives `{ fail }`.
+  - `restart-06`: `healthz { 503 }` with a fresh `lastSync` gives `'wait'`.
+
+  Log `red/wo10-unit.log` (module missing). **Commit 1:** `test(harness): failing unit tests for headless readiness after a restart that ignore a lagging podman health status (CI-M2-S2 F)`.
+- **GREEN:**
+  - `tests/stack/restartReady.ts`, no Playwright import, Jest-safe like `tests/stack/*`, with a comment citing F.
+  - `syncHeadlessOnce`:
+    - the probe calls `healthOf` and `headlessHealthz`, keeps the last observation, and maps `restartVerdict` to a `waitFor` result. `{ fail }` aborts through `failFast`;
+    - the timeout message appends the last observation, value-free: `podman health <s>, /healthz <status> <state>, lastSync <iso or none>, restart at <iso>`;
+    - it returns `{ lastSync, durationMs, healthAtReady }`.
+  - `syncWebThenHeadless` passes `healthAtReady` through.
+  - Each M2-S2 spec's `cycle` helper adds `{ type: 'health-lag', description: \`${label}: podman health ${healthAtReady} while /healthz was ready\` }` when `healthAtReady !== 'healthy'`. This confirms F's mechanism on CI.
+  - Log `green/wo10-unit.log`. **Commit 2:** `test(harness): a headless restart is ready when the supervisor's /healthz is ready with a fresh sync, whatever podman's health status says (CI-M2-S2 F)`.
+- **Sensitivity S-F**, a temporary edit that is never committed:
+  - make `syncHeadlessOnce`'s probe pass `health: 'starting'` to `restartVerdict` always, mimicking the lost timer;
+  - `T=30m run sens/s-f.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test tests/e2e/m1-s7/walking-skeleton.spec.ts -g "M1-AC21 a note"`;
+  - it must **pass in normal time** (about 200 s on the Pi), so the check can't miss a ready service;
+  - then `git checkout --`.
+  - The opposite case (a stale `lastSync` must never count) is `restart-02`.
+  - **HARD STOP** if S-F fails.
+
+### WO-11: Full local run under the CI locale (no commit)
+1. `corepack yarn lint`
+2. The Jest harness (`trash-*` and `restart-*` included)
+3. The three acceptance files
+4. `T=120m run verify/e2e-full-c-locale-2.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test` in the background. All 16 tests must pass with no retry.
+5. List every `trash-exit`, `health-lag`, `sync-repress` and `cycle` annotation from the JSON or HTML report.
+
+**HARD STOP** on any failure.
+
+### WO-12 (ci-cd-specialist): CC-1, the E2E step to 60 minutes
+`.github/workflows/e2e.yml`, step `id: e2e`: `timeout-minutes: 45` becomes `60`, with a comment citing CC-1 and this run (arm64 1645 s). Nothing else changes: no workers change, no artifact change. Run `corepack yarn check:workflows`, and `node --test tests/acceptance/ci-m2-s2/timeouts.test.mts` (CI-T-02 still holds with 40 min). **Commit:** `ci(e2e): allow the E2E step 60 minutes (CC-1, CI-M2-S2)`. It goes on this branch **before** WO-13.
+
+### WO-13 (QA executor, after WO-12): the CI run budget to 55 minutes
+- `tests/e2e/support/timeouts.ts`: `ciGlobalTimeoutMs = 55 * 60_000`, with the comment updated (WO-12, CC-1).
+- `CI-T-01…04` must pass: 55 ≤ 60 − 4, and 2 × 15 < 55.
+- **Commit:** `test(harness): the CI run ends itself at 55 minutes, inside the 60-minute step (CC-1)`.
+
+### WO-14: Strategy and plan (`docs(testing)`, `docs(test-plans)`)
+- **Strategy §5:** "Readiness after a restart is read from the supervisor's own `/healthz` with a fresh `lastSync`; podman's health status is used only to fail fast (it can lag after `podman restart`, CI-M2-S2 F)."
+- **Strategy §5:** "Where upstream may do either of two things (for example stay on a trashed note or leave it), the page object accepts both, with a bound, and the test records which one happened as an annotation."
+- **This plan:** append `## RED`, `## Harness validation` (S-F) and `## Results` for WO-9 to WO-13, with podman before and after. Leave the CI proof as PENDING.
+
+Two commits:
+- `docs(testing): readiness from /healthz and two-outcome upstream steps (CI-M2-S2 E, F)`;
+- `docs(test-plans): CI-M2-S2 addendum 2 RED, validation and results`.
+
+### CI proof run 2
+The same criteria as §CI proof, plus:
+- M2-AC3 passes on arm64, which closes B, with a `trash-exit` annotation on each runner;
+- M2-AC5 passes on both runners with no retry;
+- every `health-lag` annotation is listed. A count above 0 confirms F's mechanism, and the planner then decides whether to report it to the ci-cd-specialist as a runner podman issue;
+- the arm64 E2E wall time is recorded against the new 55-minute budget.
+
+**C** (the M1-AC21 NEG flake) closes if it doesn't recur in this run and the next `main` run.
