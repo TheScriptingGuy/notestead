@@ -731,3 +731,36 @@ The rules and the HARD STOP definition of addendum 2 apply unchanged. Logs go un
 - **x64:** fully green.
 - **arm64:** `ac18-stack` passes, and so does everything else, **except** that any failure tied by a same-second `lookup server` line in `web.log` to I is recorded as I. It is not retried away and not counted as a pass.
 - **Merge:** the merge decision then follows the user's answer on the split above.
+
+## RED (round 4, WO-20; 2026-10-24, Pi arm64)
+Logs under `test-results/verify/ci-m2-s2/r4/`; the C locale is `LANG=C.UTF-8 LC_ALL=C.UTF-8`.
+
+| WO | Test | RED outcome | Log |
+|---|---|---|---|
+| 20 | `ac18-health-01…03` | 3 failed, 10 passed: `selfTestHealthy is not a function` (commit `d953a1d`) | `red/wo20-unit.log` |
+
+## Harness validation (round 4)
+| Run | Edit (temporary, reverted) | Expected | Observed | Log |
+|---|---|---|---|---|
+| **S-H1** | the spec passes `podmanHealth: 'starting'` for `headless` to `selfTestHealthy` | `ac18-stack` passes | **As expected**: 3 of 3, 139 s | `r4/sens/s-h1.log` |
+| **S-H2** | the spec's `healthz` for the headless service is `{ status: 503, state: 'starting' }` | `ac18` fails naming `/healthz 503` | **As expected**: `ac18` failed (3 tests: 1 failed, 2 passed), 133 s: `headless is healthy when its /healthz is 200; observed: podman health healthy, /healthz 503 starting` | `r4/sens/s-h2.log` |
+
+An unedited run of `ac18-stack` (3 of 3, 133 s) is in `r4/sens/unedited-pass.log`: my first S-H2 attempt did not apply its edit, so it is a plain run, kept as evidence.
+
+## Results (round 4, WO-20; 2026-10-24, Pi arm64)
+**CI proof run 4: PENDING.** No sign-off line: the planner writes it.
+
+| Item | Commit(s) | Result |
+|---|---|---|
+| WO-20 AC18 self-test per-service health rule (H) | RED `d953a1d`, GREEN `3e499ae` | `ac18-health-01…03` pass, 13 of 13 in the file (`green/wo20-unit.log`); `selfTestHealthy` in `tests/stack/restartReady.ts`; the inner spec reads `headlessHealthz` and writes it to `health.json`; S-H1 and S-H2 as expected |
+| Contract `m1-s6` regression | none | 5 suites, 18 of 18, 437 s (`r4/contract-m1-s6.log`) |
+| Lint, Jest | none | lint clean (`r4/lint.log`); Jest 44 suites, 357 tests (`r4/jest.log`) |
+
+### Deviation (executor, for the planner)
+WO-20 said the outer `tests/contract/m1-s6/ac18-stack.test.ts` stays unchanged. It also asserted `health === 'healthy'` for `headless` from `health.json`, so it would still fail on a podman lag after the inner spec passed. I changed that one assertion to call `selfTestHealthy` on the recorded podman health and `/healthz`. Nothing else in it changed, and `ac18-neg` is untouched.
+
+### Finding F-H1 (confirmed again)
+Each contract run untagged `localhost/notestead-test-device:3.7.1`. I re-tagged `5d1a82bfa27a` before every run, and again at the end.
+
+### Podman
+Only `byparr` remains as a container. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`).
