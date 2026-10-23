@@ -126,8 +126,9 @@ test.describe('M2-S2 notes in the web app', () => {
 			await app.openNote(T2);
 			await note.waitOpen();
 			deletedAt = Date.now();
-			await note.deleteToTrash();
-			await app.backToList();
+			const exit = await app.trashOpenNote(note);
+			test.info().annotations.push({ type: 'trash-exit', description: exit === 'left' ? 'the app left the trashed note by itself' : 'the app stayed on the trashed note; Back pressed' });
+			await expect(app.notesHeading(target), 'the list of the note\'s notebook').toBeVisible();
 			await expect.poll(() => app.noteInList(T2).count(), { timeout: 30_000, intervals: [500] }).toBe(0);
 		});
 
