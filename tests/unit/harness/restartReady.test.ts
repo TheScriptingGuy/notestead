@@ -34,26 +34,26 @@ describe('restart readiness', () => {
 	test('restart-06 a 503 with a fresh sync is not ready: wait', () => {
 		expect(restartVerdict({ running: true, health: 'starting', healthz: { status: 503, lastSync: at(3_800) }, startedMs: t0 })).toBe('wait');
 	});
-});
 
-// A fresh per-test headless service (CI-M2-S2 G): ready is the same /healthz, without a "fresh sync" test (there was no
-// earlier sync). Podman's health status only fails fast.
-describe('fresh start readiness', () => {
-	test('start-01 compose exited 0, running, podman still says starting, /healthz 200: done', () => {
-		expect(startVerdict({ composeExit: 0, running: true, health: 'starting', healthz: { status: 200 } })).toBe('done');
-	});
+	// A fresh per-test headless service (CI-M2-S2 G): ready is the same /healthz, without a "fresh sync" test (there was no
+	// earlier sync). Podman's health status only fails fast.
+	describe('fresh start readiness', () => {
+		test('start-01 compose exited 0, running, podman still says starting, /healthz 200: done', () => {
+			expect(startVerdict({ composeExit: 0, running: true, health: 'starting', healthz: { status: 200 } })).toBe('done');
+		});
 
-	test('start-02 healthy but /healthz not answering: wait', () => {
-		expect(startVerdict({ composeExit: 0, running: true, health: 'healthy', healthz: undefined })).toBe('wait');
-	});
+		test('start-02 healthy but /healthz not answering: wait', () => {
+			expect(startVerdict({ composeExit: 0, running: true, health: 'healthy', healthz: undefined })).toBe('wait');
+		});
 
-	test('start-03 a compose exit other than 0 fails, naming the exit code', () => {
-		const v = startVerdict({ composeExit: 125, running: true, health: 'starting', healthz: undefined });
-		expect(typeof v === 'object' && v.fail).toMatch(/125/);
-	});
+		test('start-03 a compose exit other than 0 fails, naming the exit code', () => {
+			const v = startVerdict({ composeExit: 125, running: true, health: 'starting', healthz: undefined });
+			expect(typeof v === 'object' && v.fail).toMatch(/125/);
+		});
 
-	test('start-04 not running, or unhealthy with /healthz not 200, fails', () => {
-		expect(typeof startVerdict({ composeExit: 0, running: false, health: 'exited', healthz: undefined })).toBe('object');
-		expect(typeof startVerdict({ composeExit: 0, running: true, health: 'unhealthy', healthz: { status: 503 } })).toBe('object');
+		test('start-04 not running, or unhealthy with /healthz not 200, fails', () => {
+			expect(typeof startVerdict({ composeExit: 0, running: false, health: 'exited', healthz: undefined })).toBe('object');
+			expect(typeof startVerdict({ composeExit: 0, running: true, health: 'unhealthy', healthz: { status: 503 } })).toBe('object');
+		});
 	});
 });
