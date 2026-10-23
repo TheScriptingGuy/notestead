@@ -19,3 +19,22 @@ export const restartVerdict = (o: RestartObservation): 'done' | 'wait' | { fail:
 	if (o.health === 'unhealthy') return { fail: 'the headless container is unhealthy after the restart and /healthz is not ready' };
 	return 'wait';
 };
+
+export interface StartObservation {
+	// `compose up -d`'s exit code: undefined while it still runs, null when it was killed by a signal
+	composeExit?: number | null;
+	running: boolean;
+	health: string;
+	healthz?: { status: number };
+}
+
+// A freshly created headless service (CI-M2-S2 G): ready when compose exited 0 and the supervisor's own /healthz says 200,
+// whatever podman's health status reads (it can stay "starting"; start_period never turns it unhealthy). Failing fast: a
+// compose exit other than 0, an exited container, or unhealthy with /healthz not ready.
+export const startVerdict = (o: StartObservation): 'done' | 'wait' | { fail: string } => {
+	if (o.composeExit !== undefined && o.composeExit !== 0) return { fail: `compose up exited ${o.composeExit === null ? 'by a signal' : o.composeExit}` };
+	if (o.composeExit === 0 && o.healthz?.status === 200) return 'done';
+	if (!o.running) return { fail: 'the headless container exited before /healthz was ready' };
+	if (o.health === 'unhealthy') return { fail: 'the headless container is unhealthy and /healthz is not ready' };
+	return 'wait';
+};

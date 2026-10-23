@@ -28,7 +28,7 @@ import { descriptorDir, descriptorPath, ensureDescriptorDir, readDescriptorFile 
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
-import { restartVerdict } from './restartReady.ts';
+import { restartVerdict, startVerdict } from './restartReady.ts';
 import type { StackImages } from './images.ts';
 
 export const stackDir = (): string => join(findRepoRoot(), 'tests', 'stack');
@@ -159,7 +159,11 @@ const composeSync = (state: StackState, label: string, project: string, files: s
 
 // Runs `compose up -d …` in the background while the health of the project's containers is polled: a service that
 // turns unhealthy or exits aborts at once (podman-compose would otherwise wait on it for ever).
-const composeUp = async (state: StackState, label: string, project: string, files: string[], services: string[], extra: Record<string, string>, timeoutMs: number): Promise<Record<string, string>> => {
+// `ready` replaces the default rule (every service podman-healthy, compose exited 0) for a caller that reads a better signal
+// (the headless service: its own /healthz, CI-M2-S2 G); it gets compose's exit code (undefined while it still runs).
+type ComposeReady = (containers: Record<string, string>, composeExit: number | null | undefined) => 'done' | 'wait' | { fail: string };
+
+const composeUp = async (state: StackState, label: string, project: string, files: string[], services: string[], extra: Record<string, string>, timeoutMs: number, ready?: ComposeReady): Promise<Record<string, string>> => {
 	const argv = composeArgs(project, files, ['up', '-d', ...services]);
 	const child = spawn(argv[0], argv.slice(1), { cwd: stackDir(), env: composeEnv(state, extra), stdio: ['ignore', 'pipe', 'pipe'] });
 	let output = '';
@@ -178,6 +182,12 @@ const composeUp = async (state: StackState, label: string, project: string, file
 	try {
 		return await waitFor(`${services.join(', ')} of ${project} to be healthy`, async () => {
 			const containers = projectContainers(project);
+			if (ready) {
+				const verdict = ready(containers, exitCode);
+				if (verdict === 'done') return containers;
+				if (typeof verdict === 'object') fatal = new StackHealthError(services.join(','), `${verdict.fail}; \`${argv.join(' ')}\` exit ${exitCode ?? 'pending'}`);
+				return undefined;
+			}
 			const health = healthOf(services, containers);
 			return exitCode === 0 && health.every(h => h.status === 'healthy') ? containers : undefined;
 		}, {
@@ -185,6 +195,7 @@ const composeUp = async (state: StackState, label: string, project: string, file
 			intervalMs: 1_000,
 			// An unhealthy, exited or unchecked service, or a failed `compose up`, ends the wait at once.
 			failFast: () => {
+				if (ready) return fatal?.message;
 				if (exitCode !== undefined && exitCode !== 0) {
 					fatal = new StackHealthError(services.join(','), `\`${argv.join(' ')}\` exited ${exitCode}:\n${redactText(output).slice(-3000)}`);
 				} else {
@@ -423,6 +434,16 @@ export const enableE2ee = (state: StackState, account: Account, label: string, s
 	return account;
 };
 
+// A fresh headless service is ready when its own /healthz is 200 (initial cycle done); podman's health status only fails fast,
+// as after a restart (CI-M2-S2 F, G).
+const headlessReady: ComposeReady = (containers, composeExit) => {
+	const container = containers.headless;
+	if (!container) return 'wait';
+	const [h] = healthOf(['headless'], containers);
+	const healthz = h.status === 'not created' ? undefined : headlessHealthz(container);
+	return startVerdict({ composeExit, running: h.status !== 'exited', health: h.status, healthz });
+};
+
 // One compose project (compose.headless.yaml) for `account`, healthy (its /healthz is 200: initial sync and decryption
 // done). Secrets are files in a 0700 dir, mounted by compose as /run/secrets/*.
 export const upHeadless = async (state: StackState, account: Account, label: string, timeoutMs = 10 * 60_000): Promise<HeadlessService> => {
@@ -435,7 +456,7 @@ export const upHeadless = async (state: StackState, account: Account, label: str
 	const service: HeadlessService = { label, project, container: '', secretsDir, email: account.email };
 	state.headless.push(service);
 	const containers = await composeUp(state, `up-headless-${label}`, project, ['compose.headless.yaml'], ['headless'],
-		{ NST_JOPLIN_USERNAME: account.email, NST_SECRETS_DIR: secretsDir }, timeoutMs);
+		{ NST_JOPLIN_USERNAME: account.email, NST_SECRETS_DIR: secretsDir }, timeoutMs, headlessReady);
 	service.container = containers.headless;
 	registerToken(service);
 	if (state.owned) saveDescriptor(state);
