@@ -38,3 +38,8 @@ export const startVerdict = (o: StartObservation): 'done' | 'wait' | { fail: str
 	if (o.health === 'unhealthy') return { fail: 'the headless container is unhealthy and /healthz is not ready' };
 	return 'wait';
 };
+
+// M1-AC18's self-test (CI-M2-S2 H): the same rule as readiness. `server` and `web` are healthy when podman says so; the
+// headless service when its supervisor's own /healthz answers 200, whatever podman's status reads (it can lag at "starting").
+export const selfTestHealthy = (service: 'server' | 'web' | 'headless', o: { podmanHealth: string; healthz?: { status: number } }): boolean =>
+	service === 'headless' ? o.healthz?.status === 200 : o.podmanHealth === 'healthy';

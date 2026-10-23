@@ -56,26 +56,26 @@ describe('restart readiness', () => {
 			expect(typeof startVerdict({ composeExit: 0, running: true, health: 'unhealthy', healthz: { status: 503 } })).toBe('object');
 		});
 	});
-});
 
-// M1-AC18's self-test (CI-M2-S2 H): server and web are judged by podman's health status; the headless service by its own
-// /healthz, as its readiness is (podman's status can lag at "starting" while the supervisor is ready).
-describe('AC18 self-test health rule', () => {
-	test('ac18-health-01 server and web need podman healthy', () => {
-		for (const service of ['server', 'web'] as const) {
-			expect(selfTestHealthy(service, { podmanHealth: 'healthy' })).toBe(true);
-			expect(selfTestHealthy(service, { podmanHealth: 'starting' })).toBe(false);
-			expect(selfTestHealthy(service, { podmanHealth: 'unhealthy' })).toBe(false);
-		}
-	});
+	// M1-AC18's self-test (CI-M2-S2 H): server and web are judged by podman's health status; the headless service by its own
+	// /healthz, as its readiness is (podman's status can lag at "starting" while the supervisor is ready).
+	describe('ac18 self-test health rule', () => {
+		test('ac18-health-01 server and web need podman healthy', () => {
+			for (const service of ['server', 'web'] as const) {
+				expect(selfTestHealthy(service, { podmanHealth: 'healthy' })).toBe(true);
+				expect(selfTestHealthy(service, { podmanHealth: 'starting' })).toBe(false);
+				expect(selfTestHealthy(service, { podmanHealth: 'unhealthy' })).toBe(false);
+			}
+		});
 
-	test('ac18-health-02 headless needs /healthz 200, whatever podman says', () => {
-		expect(selfTestHealthy('headless', { podmanHealth: 'starting', healthz: { status: 200 } })).toBe(true);
-		expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 200 } })).toBe(true);
-	});
+		test('ac18-health-02 headless needs /healthz 200, whatever podman says', () => {
+			expect(selfTestHealthy('headless', { podmanHealth: 'starting', healthz: { status: 200 } })).toBe(true);
+			expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 200 } })).toBe(true);
+		});
 
-	test('ac18-health-03 headless with podman healthy but /healthz missing or 503 is not healthy', () => {
-		expect(selfTestHealthy('headless', { podmanHealth: 'healthy' })).toBe(false);
-		expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 503 } })).toBe(false);
+		test('ac18-health-03 headless with podman healthy but /healthz missing or 503 is not healthy', () => {
+			expect(selfTestHealthy('headless', { podmanHealth: 'healthy' })).toBe(false);
+			expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 503 } })).toBe(false);
+		});
 	});
 });
