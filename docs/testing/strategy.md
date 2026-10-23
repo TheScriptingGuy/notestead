@@ -84,9 +84,11 @@ Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
 - **Everything is bounded (from CI 39663284028).**
   - Actions 60 s, navigations 120 s.
   - Each long spec 15 min.
-  - The CI run 40 min, which ends Playwright at least 4 minutes before the E2E step limit, so reports and traces survive (`CI-T-01…04`, `tests/e2e/support/timeouts.ts`).
+  - The CI run 55 min, inside the 60-minute E2E step, which ends Playwright at least 4 minutes before the E2E step limit, so reports and traces survive (`CI-T-01…04`, `tests/e2e/support/timeouts.ts`).
 
   The redacting reporter prints each failure as it happens (`[notestead] FAILED …`), redacted, so a killed run keeps its errors.
+- **Readiness after a restart is read from the supervisor's own `/healthz` with a fresh `lastSync`;** podman's health status is used only to fail fast (it can lag after `podman restart`, CI-M2-S2 F).
+- **Where upstream may do either of two things** (for example stay on a trashed note or leave it), the page object accepts both, with a bound, and the test records which one happened as an annotation.
 - **Wall-clock values are computed with `Intl` and an explicit `timeZone`, never from the host's zone (M2-S2 D5).** `tests/e2e/support/dueDate.ts` computes the digits a user types; the test asserts the epoch.
 - **Seed scans report a label, never a value (M2-S1 r1 C1).** `seedLabelIn` names what was found (`tag`, `title 1`, `body 2`); a failing assertion prints its received value and CI logs are public.
 - **Isolation:** no state shared between tests in a file; fresh context, profile and temp dirs per test.
