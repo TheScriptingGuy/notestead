@@ -432,3 +432,48 @@ The same criteria as §CI proof, plus:
 - the arm64 E2E wall time is recorded against the new 55-minute budget.
 
 **C** (the M1-AC21 NEG flake) closes if it doesn't recur in this run and the next `main` run.
+
+## RED (addendum 2, WO-9 to WO-11; 2026-10-23, Pi arm64)
+Logs under `test-results/verify/ci-m2-s2/`; the C locale is `LANG=C.UTF-8 LC_ALL=C.UTF-8`.
+
+| WO | Test | RED outcome | Log |
+|---|---|---|---|
+| 9 | `trash-01…05` | `Cannot find module '../../e2e/support/trashExit.ts'` (commit `252103c`) | `red/wo9-unit.log` |
+| 10 | `restart-01…06` | `Cannot find module '../../stack/restartReady.ts'` (commit `2c1064f`); `restart-01` is F | `red/wo10-unit.log` |
+
+## Harness validation (addendum 2)
+| Run | Edit | Expected | Observed | Log |
+|---|---|---|---|---|
+| **S-F** | `syncHeadlessOnce` passes `health: 'starting'` to `restartVerdict` always (the lost health timer); `-g "M1-AC21 a note"` under the C locale | passes in normal time | **As expected**: passed (294 s including the stack start). Reverted. The stale-sync case is `restart-02` | `sens/s-f.log` |
+
+## Results (addendum 2, WO-9 to WO-13; 2026-10-23, Pi arm64)
+**CI proof: PENDING** (run 2 after the planner and the user approve the push). No sign-off line: the planner writes it.
+
+| Item | Commit(s) | Result |
+|---|---|---|
+| WO-9 `trashOpenNote` (E) | RED `252103c`, GREEN `e393033` | `trash-01…05` pass (`green/wo9-unit.log`); M2-AC3 passes in the full run |
+| WO-10 `/healthz` readiness (F) | RED `2c1064f`, GREEN `f536a69` | `restart-01…06` pass (`green/wo10-unit.log`); S-F passes |
+| WO-11 full run under `C.UTF-8` | none | **16 of 16**, no retry, 2031 s (33.8 min), `verify2/e2e-full-c-locale-2.log`, `verify2/e2e-full-c-locale-2-junit.xml`; lint clean; Jest 18 suites, 108 tests; acceptance 4/4, 13/13, 4/4 |
+| WO-13 CI run budget | `919f607` | `ciGlobalTimeoutMs` 55 min; CI-T-01…04 pass (55 <= 60 - 4; 2 x 15 < 55) against the 60-minute step of `607942c` |
+| WO-14 strategy | `bde2dae` | readiness from `/healthz`, two-outcome upstream steps, 55-minute budget |
+
+Light checks after WO-13 and WO-14 (no E2E re-run): `verify3/lint.log`, `verify3/jest.log`, `verify3/acc-*.log`.
+
+### Full-run timings and annotations (WO-11 run)
+| Test | Duration | Annotations |
+|---|---|---|
+| M2-AC3 | 334 s | cycles create 5261 + 33922, edit 13372 + 31452, move 4102 + 31206, delete 4518 + 30575 ms; **`trash-exit`: the app left the trashed note by itself**; `health-lag` on all four cycles |
+| M2-AC4 | 262 s | create 4769 + 36491, change 4408 + 30311; `health-lag` on both |
+| M2-AC5 | 413 s | create 5440 + 35529, done 4225 + 30285; `health-lag` on both |
+| M1-AC21, NEG | 200 s, 226 s | |
+| M2-AC2, NEG | 189 s, 141 s | |
+| M2-AC1, NEG | 58 s, 39 s | |
+| SEED-01, LOC-01/02, SPY-01…03, C1-R1-guard | 67 s; 0.6 to 1.1 s | |
+
+- `health-lag` appeared on **all 8** headless cycles, each `podman health starting while /healthz was ready`: F's mechanism (podman's health status lagging after `podman restart`) also occurs on the Pi, so the old check would have waited for a status that /healthz had already beaten.
+- `trash-exit` was `left` on the Pi too, so the `stayed` branch was exercised only by the unit tests.
+- No `sync-repress` annotation.
+
+### Podman
+Before and after (`podman ps -a`, networks, volumes): only `byparr`, `byparr_default`, the default network, no volumes. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`, label `contract`), and the dangling headless build stage (`827060fff071`).
+
