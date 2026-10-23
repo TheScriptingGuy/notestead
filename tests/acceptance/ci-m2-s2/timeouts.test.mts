@@ -21,7 +21,7 @@ const configPath = join(repoRoot, 'playwright.config.ts');
 const e2eWorkflow = join(repoRoot, '.github', 'workflows', 'e2e.yml');
 const marginMinutes = 4;
 
-interface Timeouts { actionTimeoutMs: number; navigationTimeoutMs: number; ciGlobalTimeoutMs: number; longSpecTimeoutMs: number }
+interface Timeouts { actionTimeoutMs: number; navigationTimeoutMs: number; ciGlobalTimeoutMs: number; longSpecTimeoutMs: number; headlessUpTimeoutMs: number }
 
 // Loaded inside each test, so a missing module fails each of them with its own message.
 const loadTimeouts = async (): Promise<Timeouts> => {
@@ -117,5 +117,19 @@ describe('CI-M2-S2 bounded actions, specs and run (CI 39663284028 B, D)', () => 
 	it('CI-T-04 a test and its CI retry fit inside the global timeout', async () => {
 		const t = await loadTimeouts();
 		assert.ok(2 * t.longSpecTimeoutMs < t.ciGlobalTimeoutMs, `2 x ${t.longSpecTimeoutMs / 60_000} min must stay below the ${t.ciGlobalTimeoutMs / 60_000} min global timeout`);
+	});
+
+	// CI run 39957733152 G: the per-test headless fixture waited as long as the test itself (10 min), so the test timeout
+	// killed it during setup and no log was written. The fixture must give up first.
+	it('CI-T-05 the headless fixture gives up at least two minutes before the test timeout, and passes its bound to upHeadless', async () => {
+		const t = await loadTimeouts();
+		assert.equal(typeof t.headlessUpTimeoutMs, 'number', `${plan} G: tests/e2e/support/timeouts.ts exports headlessUpTimeoutMs`);
+		const config = readFileSync(configPath, 'utf8');
+		const m = /\btimeout:\s*([0-9_ *]+?)\s*,/.exec(config);
+		assert.ok(m, 'playwright.config.ts sets a top-level test timeout');
+		const testTimeoutMs = m[1].replace(/_/g, '').split('*').reduce((p, f) => p * Number(f.trim()), 1);
+		assert.ok(t.headlessUpTimeoutMs > 0 && t.headlessUpTimeoutMs <= testTimeoutMs - 2 * 60_000, `headlessUpTimeoutMs ${t.headlessUpTimeoutMs / 60_000} min must be at most ${(testTimeoutMs - 120_000) / 60_000} min (test timeout ${testTimeoutMs / 60_000} min minus 2)`);
+		const fixtures = readFileSync(join(e2eDir, 'support', 'fixtures.ts'), 'utf8');
+		assert.match(fixtures, /upHeadless\(\s*stack\s*,\s*e2eeAccount\s*,\s*shortId\(testInfo\)\s*,\s*headlessUpTimeoutMs\s*\)/, 'the headlessService fixture passes headlessUpTimeoutMs to upHeadless');
 	});
 });
