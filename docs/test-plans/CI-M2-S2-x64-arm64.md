@@ -627,3 +627,22 @@ Annotations of the full run: `cycle` on all 8 headless cycles (web 3.3 to 11.3 s
 
 ### Podman
 Before and after (`r3/podman-before.txt`, `r3/podman-after.txt`): only `byparr`, `byparr_default`, the default network, no volumes, no stack containers. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`), plus the untagged build stages.
+
+## Planner review of round 3 and QA sign-off (2026-10-23)
+- **Reviewed `fa7fa50`, `99e4cc4`, `7777acc`, `e9a8ab4`, `c229df3`, `5249aa0` and `72450b2` against WO-15 to WO-19. They match the orders, every RED comes before its GREEN, and nothing is weakened.**
+  - **Core readiness is unchanged.** `composeUp` takes an optional `ready`. Only `upHeadless` passes one (`headlessReady`, which uses `/healthz` through `startVerdict`), so `server` and `web` (`upCore`) keep the old rule: compose exits 0 and every service is podman-healthy. The default headless service starts through `upHeadless` too, so it also gets `/healthz` readiness. That is intended: it is the same service type.
+  - **WO-17 removing the half-started project is accepted.** Without it, a failed `upHeadless` leaves `service` undefined, so the fixture's `finally` can't remove the project and it would leak until the stack's sweep. It is cleanup the fixture owes. It runs after the logs are kept, and the original error is rethrown.
+  - **The S-G2 deviation is accepted.** The edit touched non-default labels only, because the default headless service uses the same compose file, and it was reverted. The run still failed in the fixture at 447 s ("not healthy within 420 s") with all three logs (`supervisor.log`: 14 `ECONNREFUSED` lines). S-G1 passed in 307 s.
+- **The shared-tag finding is F-H1, already routed to M2-S3's QA: follow-up, not a WO now.** The contract layer's `globalTeardown` force-removes `localhost/notestead-test-device:<cli>` (`tests/contract/support/headless.ts` `deviceImage`), which is the tag the E2E run keeps.
+  - **It does not bite CI.** `e2e.yml` sets neither `NOTESTEAD_DEVICE_IMAGE` nor `NOTESTEAD_KEEP_IMAGE`, so the E2E `globalSetup` builds the device image itself after the contract step. That is why run 2's E2E passed after the contract step on both runners.
+  - **It bites only local runs that reuse images with `$IMG`:** the E2E `globalSetup` then exits 125. Workaround until M2-S3 fixes it: re-tag, or leave `NOTESTEAD_DEVICE_IMAGE` out after a contract run.
+  - **The fix belongs in M2-S3's harness work:** the contract layer should reuse a supplied image, or never remove a tag it did not create.
+
+**QA sign-off on arm64 (Pi): YES for round 3 (G).** The evidence:
+- `startVerdict` and `CI-T-05`;
+- S-G1 and S-G2;
+- the `m1-s6a` contract suite 16 of 16 (`c1-pertest-secrets` 11 of 11);
+- E2E 16 of 16 under `C.UTF-8`, no retry, 2095 s;
+- lint, and Jest 112 of 112.
+
+**Proof run 3: PENDING**, to the list in §Proof run 3 must show. B's watch closes when G is absent from run 3, or is explained by its logs.
