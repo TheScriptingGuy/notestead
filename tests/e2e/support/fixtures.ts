@@ -20,14 +20,14 @@
 // is redacted before it is written (tests/support/redact.ts); the redacting reporter then redacts the Playwright trace,
 // every other attachment, errors, stdout/stderr and step titles once more (tests/e2e/support/redactingReporter.ts).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
-	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, registerToken, removeContainer, secretsFor, serverRequest, upHeadless,
-	upWebWithoutHostRewrite,
+	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, projectContainers, registerToken, removeContainer, secretsFor, serverRequest,
+	StackHealthError, upHeadless, upWebWithoutHostRewrite,
 } from '../../stack/stack.ts';
 import type { Account, ExtraWeb, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { HttpResponse } from '../../contract/support/http.ts';
@@ -100,6 +100,25 @@ export const attachText = async (testInfo: TestInfo, name: string, text: string)
 	const path = testInfo.outputPath(name);
 	writeFileSync(path, text);
 	await testInfo.attach(name, { path, contentType: 'text/plain' });
+};
+
+// A per-test headless service that did not start (CI-M2-S2 G): its supervisor log, `compose up`'s output and the last
+// readiness observation (value-free) are attached to the test and written to the stack's logs dir, which the contract
+// layer's artifact keeps even when the inner run's attachments are not kept. Nothing here throws: the original error stays.
+const keepStartLogs = async (stack: StackState, project: string, error: unknown, testInfo: TestInfo): Promise<void> => {
+	const secrets = workerSecrets(stack);
+	const container = projectContainers(project).headless;
+	const failure = error instanceof StackHealthError ? error : undefined;
+	const files: Record<string, string> = {
+		'supervisor.log': container ? containerLog(stack, container, undefined, secrets) : '(no headless container was created)\n',
+		'compose-up.log': redactText(failure?.output ?? `(no compose output on the error)\n${(error as Error).message}`, secrets),
+		'readiness.log': redactText(`${failure?.readiness ?? 'no readiness observation'}\n${(error as Error).message.split('\n')[0]}\n`, secrets),
+	};
+	mkdirSync(stack.logsDir, { recursive: true });
+	for (const [name, text] of Object.entries(files)) {
+		writeFileSync(join(stack.logsDir, `${stack.project}-hl-${shortId(testInfo)}-${name}`), text);
+		await attachText(testInfo, name, text);
+	}
 };
 
 const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}${testInfo.retry ? `r${testInfo.retry}` : ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -186,7 +205,14 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	headlessService: async ({ stack, e2eeAccount }, use, testInfo) => {
 		let service: HeadlessService | undefined;
 		try {
-			service = await upHeadless(stack, e2eeAccount, shortId(testInfo), headlessUpTimeoutMs);
+			try {
+				service = await upHeadless(stack, e2eeAccount, shortId(testInfo), headlessUpTimeoutMs);
+			} catch (error) {
+				const project = `${stack.project}-hl-${shortId(testInfo)}`;
+				await keepStartLogs(stack, project, error, testInfo);
+				downHeadless(stack, stack.headless.find(h => h.project === project));
+				throw error;
+			}
 			await use(service);
 		} finally {
 			// The token again: a restart of the CLI inside the service rotates it.

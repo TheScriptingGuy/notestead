@@ -91,9 +91,15 @@ export interface StackState {
 
 export class StackHealthError extends Error {
 	public readonly service: string;
-	public constructor(service: string, message: string) {
+	// `compose up`'s redacted output and the last readiness observation (value-free), for the log files of a failed start
+	// (CI-M2-S2 G); both are also in the message only in part.
+	public readonly output?: string;
+	public readonly readiness?: string;
+	public constructor(service: string, message: string, extra: { output?: string; readiness?: string } = {}) {
 		super(message);
 		this.service = service;
+		this.output = extra.output;
+		this.readiness = extra.readiness;
 	}
 }
 
@@ -161,7 +167,7 @@ const composeSync = (state: StackState, label: string, project: string, files: s
 // turns unhealthy or exits aborts at once (podman-compose would otherwise wait on it for ever).
 // `ready` replaces the default rule (every service podman-healthy, compose exited 0) for a caller that reads a better signal
 // (the headless service: its own /healthz, CI-M2-S2 G); it gets compose's exit code (undefined while it still runs).
-type ComposeReady = (containers: Record<string, string>, composeExit: number | null | undefined) => 'done' | 'wait' | { fail: string };
+type ComposeReady = (containers: Record<string, string>, composeExit: number | null | undefined, note: (observation: string) => void) => 'done' | 'wait' | { fail: string };
 
 const composeUp = async (state: StackState, label: string, project: string, files: string[], services: string[], extra: Record<string, string>, timeoutMs: number, ready?: ComposeReady): Promise<Record<string, string>> => {
 	const argv = composeArgs(project, files, ['up', '-d', ...services]);
@@ -179,13 +185,18 @@ const composeUp = async (state: StackState, label: string, project: string, file
 		resolve();
 	}));
 	let fatal: StackHealthError | undefined;
+	let observation = 'no observation';
+	const began = Date.now();
+	const extra_ = (): { output: string; readiness: string } => ({ output: redactText(output), readiness: `${observation}; elapsed ${Math.round((Date.now() - began) / 1000)} s` });
 	try {
 		return await waitFor(`${services.join(', ')} of ${project} to be healthy`, async () => {
 			const containers = projectContainers(project);
 			if (ready) {
-				const verdict = ready(containers, exitCode);
+				const verdict = ready(containers, exitCode, o => {
+					observation = o;
+				});
 				if (verdict === 'done') return containers;
-				if (typeof verdict === 'object') fatal = new StackHealthError(services.join(','), `${verdict.fail}; \`${argv.join(' ')}\` exit ${exitCode ?? 'pending'}`);
+				if (typeof verdict === 'object') fatal = new StackHealthError(services.join(','), `${verdict.fail}; \`${argv.join(' ')}\` exit ${exitCode ?? 'pending'}`, extra_());
 				return undefined;
 			}
 			const health = healthOf(services, containers);
@@ -197,10 +208,10 @@ const composeUp = async (state: StackState, label: string, project: string, file
 			failFast: () => {
 				if (ready) return fatal?.message;
 				if (exitCode !== undefined && exitCode !== 0) {
-					fatal = new StackHealthError(services.join(','), `\`${argv.join(' ')}\` exited ${exitCode}:\n${redactText(output).slice(-3000)}`);
+					fatal = new StackHealthError(services.join(','), `\`${argv.join(' ')}\` exited ${exitCode}:\n${redactText(output).slice(-3000)}`, extra_());
 				} else {
 					const sick = healthOf(services, projectContainers(project)).find(h => h.status === 'unhealthy' || h.status === 'exited' || h.status === 'no healthcheck');
-					if (sick) fatal = new StackHealthError(sick.service, describeSick(sick));
+					if (sick) fatal = new StackHealthError(sick.service, describeSick(sick), extra_());
 				}
 				return fatal?.message;
 			},
@@ -210,7 +221,7 @@ const composeUp = async (state: StackState, label: string, project: string, file
 		// A timeout: name every service that is not healthy.
 		const pending = healthOf(services, projectContainers(project)).filter(h => h.status !== 'healthy');
 		throw new StackHealthError(pending.map(h => h.service).join(',') || services.join(','),
-			`stack services not healthy within ${timeoutMs / 1000} s: ${pending.map(describeSick).join('; ') || (error as Error).message}`);
+			`stack services not healthy within ${timeoutMs / 1000} s: ${pending.map(describeSick).join('; ') || (error as Error).message}${ready ? `; last observation: ${observation}` : ''}`, extra_());
 	} finally {
 		if (exitCode === undefined) child.kill('SIGTERM');
 		await exited;
@@ -436,11 +447,15 @@ export const enableE2ee = (state: StackState, account: Account, label: string, s
 
 // A fresh headless service is ready when its own /healthz is 200 (initial cycle done); podman's health status only fails fast,
 // as after a restart (CI-M2-S2 F, G).
-const headlessReady: ComposeReady = (containers, composeExit) => {
+const headlessReady: ComposeReady = (containers, composeExit, note) => {
 	const container = containers.headless;
-	if (!container) return 'wait';
+	if (!container) {
+		note(`compose exit ${composeExit ?? 'pending'}, no headless container yet`);
+		return 'wait';
+	}
 	const [h] = healthOf(['headless'], containers);
 	const healthz = h.status === 'not created' ? undefined : headlessHealthz(container);
+	note(`compose exit ${composeExit ?? 'pending'}, podman health ${h.status}, /healthz ${healthz ? `${healthz.status} ${healthz.state ?? ''}`.trim() : 'no answer'}, lastSync ${healthz?.lastSync ?? 'none'}`);
 	return startVerdict({ composeExit, running: h.status !== 'exited', health: h.status, healthz });
 };
 
