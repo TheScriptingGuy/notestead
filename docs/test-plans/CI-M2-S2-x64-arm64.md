@@ -646,3 +646,88 @@ Before and after (`r3/podman-before.txt`, `r3/podman-after.txt`): only `byparr`,
 - lint, and Jest 112 of 112.
 
 **Proof run 3: PENDING**, to the list in §Proof run 3 must show. B's watch closes when G is absent from run 3, or is explained by its logs.
+
+## CI proof run 3: e2e 40020973008 (head `b9951dd`). Planner decision (2026-10-24)
+**x64:** green, and meets the whole must-show list. **G** did not recur: on arm64 `c1-pertest-secrets` passed in 233 s, with no fixture-level headless wait. Two new arm64 failures follow.
+
+### H: M1-AC18's self-test checks podman's status for the headless service, the same class as G. Test design; no AC change
+- **The failure:** `tests/harness/selftest/health.spec.ts:28` requires every service's **podman** health to be `healthy` when the first test body starts. Since round 3, the default headless service is ready when its supervisor's `/healthz` is (`upHeadless` → `headlessReady`). So `globalSetup` can now hand over while podman's status still lags at `starting`: the run took 21.6 s and the supervisor was ready at 20:58:21. **Round 3 created this conflict, and the test is what's wrong.**
+- **The AC:** M1-AC18's wording (`docs/backlog/M1.md`) says only "starts the stack … and tears it down", and "healthy" comes from ADR-0007 A1. **The backlog wording needs no change.** For the architect, non-blocking: ADR-0007 A1 could note that for `headless`, "healthy" means its supervisor's `/healthz` is 200 (CI-M2-S2 F, G, H).
+- **The fix:** WO-20.
+
+### I: the web proxy's intermittent `lookup server: i/o timeout` (502), which fails M1-AC21 NEG's positive-control ping on arm64 (watch item C). A product/deploy question, not the harness
+- **What we see:**
+  - `web` (Caddy, `reverse_proxy {$JOPLIN_SERVER_URL}` = `http://server:22300`, `deploy/web/Caddyfile:58`) sometimes fails to resolve the compose service name `server`, and the user's request gets a 502.
+  - It happens in passing runs too: arm64 46 lines in `web` plus 12 in headless (the 502s it received through `web`); x64 14 plus 7; the Pi 6 (`test-results/contract/m1-s6/ac20/**/web.log`).
+  - **So it is not arm64-only, and not CI-only.**
+  - It hit both M1-AC21 NEG attempts at the exact times of its precondition ping (21:03:41, 21:04:08).
+- **Why it matters:** this is user-facing. A self-hosted user's `web` resolves `server` through the same container-network DNS, and a sync request that lands during a failed lookup gets a 502.
+- **Why the harness keeps it visible:** the precondition ping is not made to wait or retry. That would hide a product behaviour behind a test convenience. M1-AC21 NEG stays as it is.
+- **Possible causes (unproven):**
+  - the network's DNS server (aardvark-dns under podman 4.9 on the runners, 5.4 on the Pi) answering slowly or dropping queries;
+  - the container's `resolv.conf` listing an extra upstream nameserver that times out first;
+  - Go's resolver timeout and attempts settings inside Caddy;
+  - Caddy re-resolving on every dial, with no dial retry.
+- **The decision: investigate it as its own story (briefs below). This QA plan gets no harness change for it.**
+
+### (c) `redactedFiles: 30` on arm64: expected
+The redacting reporter counts the attachment files it rewrote. Arm64 had a failing test (M1-AC21 NEG, twice), so traces, logs and network logs were written and redacted. x64 had no failure and wrote none, so its count is 0. Run 39663284028's x64, which also had a failure, showed 30 too. The leak scan reports 0 hits. **No action.**
+
+### Recommendation on scope (for the user; the orchestrator puts it to them)
+This is the 4th fix-forward round. Everything that belongs to the harness is done and proven, or ordered as WO-20:
+- A, the locale;
+- B and E, the trash-exit race and unbounded actions;
+- D, the artifacts;
+- F, G and H, headless readiness.
+
+I is a product/deploy reliability question with a different owner. **The planner recommends splitting I into its own story,** for example `DNS-1: the web proxy fails to resolve server intermittently`, owned by the senior engineer with the ci-cd-specialist. This branch would then merge after a proof run where:
+- x64 is fully green;
+- arm64 is green except for failures that a log line ties to I (a 502 with `lookup server` in `web.log` at the same second).
+
+Those failures stay **visible and red, never skipped or retried away.** Accepting a known red on `main` departs from the Definition of Done, so **it is the user's decision.** If the user declines, the branch waits for DNS-1's fix.
+
+### Brief for the senior engineer (DNS-1: investigation first, no fix without a decision)
+Goal: find why `web` intermittently cannot resolve `server`, and propose the smallest deploy-level fix.
+1. **Reproduce.** On the Pi, start the stack with `node tests/stack/cli.ts up` (report its project name). Then, from inside `web`, resolve `server` in a loop for 10 minutes (for example `getent hosts server`, or a Go/`nslookup` probe if one exists in the image), and count failures and latencies. Also count the `lookup server` lines in `web`'s log during the same window, and send steady `GET /joplin-server/api/ping` requests through the proxy.
+2. **Inspect:** `web`'s `/etc/resolv.conf` (nameservers, `options timeout/attempts`), the network's DNS backend (`podman network inspect`, aardvark-dns version), and whether the failures cluster at stack start or are spread out.
+3. **Options to evaluate, without implementing any yet:**
+   - Caddy's `reverse_proxy` with `lb_try_duration` / `lb_try_interval`. It retries only dials, and a failed lookup means nothing was sent, so it is safe for POST.
+   - A resolver setting in the image (`resolv.conf` options, `GODEBUG=netdns=go`).
+   - An upstream by address. This is rejected unless nothing else works, because the compose topology must stay name-based (ADR-0006).
+4. **Deliver** `docs/worklog/DNS-1.md` with: the measurements, the cause or the best-supported hypothesis, the proposed change with its user-facing effect, and a contract test idea (QA writes it): a fault-injected DNS delay must not produce a 502.
+
+### Brief for the ci-cd-specialist (DNS-1, runner side: read-only, no workflow change)
+1. From runs 39663284028, 39768694985, 39957733152 and 40020973008, tabulate `lookup server: i/o timeout` per runner and container, with timestamps relative to stack start.
+2. From the runner images, report the podman, netavark and aardvark-dns versions, and whether the runner's host `resolv.conf` (systemd-resolved at 127.0.0.53) leaks into the containers' DNS chain.
+3. Propose, and do not apply, any runner-side setting that would remove a DNS hop.
+
+Deliver this as a section in `docs/delivery/` or the SE's worklog, as the orchestrator assigns.
+
+### Work orders, round 4 (WO-20, WO-21; executor)
+The rules and the HARD STOP definition of addendum 2 apply unchanged. Logs go under `test-results/verify/ci-m2-s2/r4/`.
+
+**WO-20: M1-AC18's self-test judges the headless service by its `/healthz` (H) (RED commit).**
+- **RED:** add `ac18-health-01…03` to `tests/unit/harness/restartReady.test.ts`, for a new pure `selfTestHealthy(service: 'server' | 'web' | 'headless', o: { podmanHealth: string; healthz?: { status: number } }): boolean`:
+  - `server` and `web` need `podmanHealth === 'healthy'`, unchanged;
+  - `headless` needs `healthz.status === 200`, and podman's `starting` does not matter;
+  - `headless` with podman `healthy` but `/healthz` missing or 503 gives `false`.
+
+  **Commit 1:** `test(harness): failing unit tests for the AC18 self-test's per-service health rule (CI-M2-S2 H)`.
+- **GREEN:**
+  - `tests/stack/restartReady.ts` gets `selfTestHealthy`.
+  - `tests/harness/selftest/health.spec.ts` reads `headlessHealthz(container)` for the headless service and asserts `selfTestHealthy(service, …)` for each service. Its message must name the rule and the observed values: podman health, `/healthz` status and state. It also writes `/healthz` into `health.json`.
+  - The rest of the spec, and the outer `ac18-stack.test.ts`, are unchanged.
+  - **Commit 2:** `test(harness): the AC18 self-test judges the headless service by its /healthz, as its readiness does (CI-M2-S2 H)`.
+- **Sensitivity, temporary edits, each reverted with `git checkout --`:**
+  - **S-H1:** force `podmanHealth: 'starting'` for `headless` in the spec's observation. `ac18` must pass.
+  - **S-H2:** force `healthz: { status: 503 }`. `ac18` must fail naming `/healthz 503`.
+  - Command: `T=60m run r4/s-h1.log env $IMG corepack yarn test:contract --verbose tests/contract/m1-s6/ac18-stack.test.ts` (and `s-h2.log`).
+- **Then:** the contract `m1-s6` regression, lint and Jest.
+- **HARD STOP** on any other failure.
+
+**WO-21: Plan results (`docs(test-plans)`).** Append RED, S-H1/S-H2 and the results. Leave proof run 4 PENDING. **Commit:** `docs(test-plans): CI-M2-S2 round 4 RED, validation and results`.
+
+### Proof run 4 must show
+- **x64:** fully green.
+- **arm64:** `ac18-stack` passes, and so does everything else, **except** that any failure tied by a same-second `lookup server` line in `web.log` to I is recorded as I. It is not retried away and not counted as a pass.
+- **Merge:** the merge decision then follows the user's answer on the split above.
