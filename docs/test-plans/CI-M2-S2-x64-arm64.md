@@ -593,3 +593,37 @@ The rules of §Work orders and the HARD STOP definition of addendum 2 apply unch
 - **Contract:** the arm64 and x64 contract steps green, with `c1-pertest-secrets` 11 of 11.
 - **If G recurs:** it must now fail at 7 min in the fixture, with `supervisor.log`, `compose-up.log` and `readiness.log` in the artifact. The planner then decides between podman lag (excluded by WO-15), the supervisor's 502 retries, and `web`'s resolver (`lookup server: i/o timeout`) as G's cause.
 - **B's watch** closes when G is either absent or explained.
+
+## RED (round 3, WO-15 and WO-16; 2026-10-23, Pi arm64)
+Logs under `test-results/verify/ci-m2-s2/r3/`; the C locale is `LANG=C.UTF-8 LC_ALL=C.UTF-8`.
+
+| WO | Test | RED outcome | Log |
+|---|---|---|---|
+| 15 | `start-01…04` | 4 failed, 6 passed: `startVerdict is not a function` (commit `fa7fa50`) | `red/wo15-unit.log` |
+| 16 | `CI-T-05` | CI-T-01…04 pass, CI-T-05 fails: `tests/e2e/support/timeouts.ts exports headlessUpTimeoutMs` (commit `e9a8ab4`) | `red/wo16-acc.log` |
+
+## Harness validation (round 3)
+| Run | Edit (temporary, reverted) | Expected | Observed | Log |
+|---|---|---|---|---|
+| **S-G1** | `headlessReady` passes `health: 'starting'` to `startVerdict` always | `-g "M1-AC21 a note"` passes in normal time | **As expected**: passed, 307 s including the stack start | `r3/s-g1.log` |
+| **S-G2** | `compose.headless.yaml` takes the sync port from `NST_SYNC_PORT` (default 8089); `upHeadless` passes `8088` for every label but `default` (the default service must start, so the edit spares it) | fails at about 7 min in the fixture, naming `/healthz`, with the three logs attached and in the stack's logs dir | **As expected**: failed after 447 s in `headlessService` (`upHeadless`, `stack.ts`): `stack services not healthy within 420 s: … is starting; … last observation: compose exit 0, podman health starting, /healthz 503 starting, lastSync none`. Attached: `supervisor.log` (14 `initial cycle failed: the sync target did not answer /api/ping before the sync (ECONNREFUSED); retrying in 30 s` lines), `compose-up.log`, `readiness.log` (`elapsed 421 s`). The same three are in `test-results/e2e/stack/<project>-hl-<id>-*.log`. Copies: `r3/sg2-evidence/` | `r3/s-g2.log` |
+
+## Results (round 3, WO-15 to WO-18; 2026-10-23, Pi arm64)
+**CI proof run 3: PENDING.** No sign-off line: the planner writes it.
+
+| Item | Commit(s) | Result |
+|---|---|---|
+| WO-15 fresh start from `/healthz` (G) | RED `fa7fa50`, GREEN `99e4cc4`, lint nesting fix `7777acc` | `start-01…04` pass (`green/wo15-unit.log`); `composeUp` has an optional `ready`; the core services keep the default rule; S-G1 passes |
+| WO-16 fixture bound | RED `e9a8ab4`, GREEN `c229df3` | `CI-T-05` passes, with CI-T-01…04 (5 of 5, `green/wo16-acc.log`, `acc-timeouts.log`); `headlessUpTimeoutMs` = 7 min |
+| WO-17 logs of a failed start | `5249aa0` | `StackHealthError` carries `output` and `readiness`; the fixture attaches and writes `supervisor.log`, `compose-up.log`, `readiness.log`, then removes the half-started project; proven by S-G2 |
+| WO-18 contract regression | none | `tests/contract/m1-s6a`: 2 suites, 16 of 16, `c1-pertest-secrets` 11 of 11, 339 s (`r3/contract-m1-s6a.log`) |
+| WO-18 full E2E under `C.UTF-8` | none | **16 of 16**, no retry, no flaky, 2095 s (34.9 min), `r3/e2e-full.log`, `r3/e2e-full-junit.xml`; lint clean; Jest 18 suites, 112 tests |
+
+Annotations of the full run: `cycle` on all 8 headless cycles (web 3.3 to 11.3 s, headless 30 to 37 s); `health-lag` on 6 of them; `trash-exit`: the app left the trashed note by itself; no `sync-repress`.
+
+### Findings (executor, for the planner)
+- **Contract run untags the shared device image.** `tests/contract/support/globalTeardown.ts` removes the lazy images with `rmi -f`, and `tests/contract/support/headless.ts:143` uses the same tag as the E2E stack (`localhost/notestead-test-device:3.7.1`). After the WO-18 contract run the tag was gone (image `5d1a82bfa27a` kept, untagged), and the first full E2E aborted in globalSetup (`r3/e2e-full-aborted-device-untagged.log`, exit 125, a registry pull of `localhost/...`). I re-tagged `5d1a82bfa27a` and re-ran: green. Order for later runs: run the contract layer before restoring the tag, or give the contract layer its own device tag (a QA change, not made here).
+- S-G2's message names the sick service by podman health; `/healthz 503 starting` sits in the `last observation` part and in `readiness.log`.
+
+### Podman
+Before and after (`r3/podman-before.txt`, `r3/podman-after.txt`): only `byparr`, `byparr_default`, the default network, no volumes, no stack containers. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`), plus the untagged build stages.
