@@ -2,7 +2,7 @@
 // finding F): the supervisor's own /healthz says 200 with a lastSync strictly after the restart. Podman's health status is
 // only used to fail fast: on the CI runners it can still read "starting" long after the service was ready.
 import { describe, expect, test } from '@jest/globals';
-import { restartVerdict, startVerdict } from '../../stack/restartReady.ts';
+import { restartVerdict, selfTestHealthy, startVerdict } from '../../stack/restartReady.ts';
 
 const t0 = Date.UTC(2026, 9, 23, 11, 43, 32);
 const at = (ms: number): string => new Date(t0 + ms).toISOString();
@@ -55,5 +55,27 @@ describe('restart readiness', () => {
 			expect(typeof startVerdict({ composeExit: 0, running: false, health: 'exited', healthz: undefined })).toBe('object');
 			expect(typeof startVerdict({ composeExit: 0, running: true, health: 'unhealthy', healthz: { status: 503 } })).toBe('object');
 		});
+	});
+});
+
+// M1-AC18's self-test (CI-M2-S2 H): server and web are judged by podman's health status; the headless service by its own
+// /healthz, as its readiness is (podman's status can lag at "starting" while the supervisor is ready).
+describe('AC18 self-test health rule', () => {
+	test('ac18-health-01 server and web need podman healthy', () => {
+		for (const service of ['server', 'web'] as const) {
+			expect(selfTestHealthy(service, { podmanHealth: 'healthy' })).toBe(true);
+			expect(selfTestHealthy(service, { podmanHealth: 'starting' })).toBe(false);
+			expect(selfTestHealthy(service, { podmanHealth: 'unhealthy' })).toBe(false);
+		}
+	});
+
+	test('ac18-health-02 headless needs /healthz 200, whatever podman says', () => {
+		expect(selfTestHealthy('headless', { podmanHealth: 'starting', healthz: { status: 200 } })).toBe(true);
+		expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 200 } })).toBe(true);
+	});
+
+	test('ac18-health-03 headless with podman healthy but /healthz missing or 503 is not healthy', () => {
+		expect(selfTestHealthy('headless', { podmanHealth: 'healthy' })).toBe(false);
+		expect(selfTestHealthy('headless', { podmanHealth: 'healthy', healthz: { status: 503 } })).toBe(false);
 	});
 });
