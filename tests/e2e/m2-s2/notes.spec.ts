@@ -40,8 +40,9 @@ test.describe('M2-S2 notes in the web app', () => {
 		const readNote = (id: string): Record<string, unknown> => pick(ok(dataApi.get(`/notes/${id}?fields=${noteFields}`), `GET /notes/${id}`), noteFields.split(','));
 		// One web sync, then one headless sync (a restart of the test's own service); the durations feed watch item W1.
 		const cycle = async (label: string): Promise<void> => {
-			const { webMs, headlessMs } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
+			const { webMs, headlessMs, healthAtReady } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
 			test.info().annotations.push({ type: 'cycle', description: `${label}: web ${webMs} ms, headless ${headlessMs} ms` });
+			if (healthAtReady !== 'healthy') test.info().annotations.push({ type: 'health-lag', description: `${label}: podman health ${healthAtReady} while /healthz was ready` });
 		};
 
 		let seedFolderId = '';

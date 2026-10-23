@@ -37,8 +37,9 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 		if (!seedFolder || !seedTag || !note1) throw new Error('the account has no seeded folder, seed tag and note (e2eeSeed.extras)');
 
 		const cycle = async (label: string): Promise<void> => {
-			const { webMs, headlessMs } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
+			const { webMs, headlessMs, healthAtReady } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
 			test.info().annotations.push({ type: 'cycle', description: `${label}: web ${webMs} ms, headless ${headlessMs} ms` });
+			if (healthAtReady !== 'healthy') test.info().annotations.push({ type: 'health-lag', description: `${label}: podman health ${healthAtReady} while /healthz was ready` });
 		};
 
 		let seedTagId = '';

@@ -28,6 +28,7 @@ import { descriptorDir, descriptorPath, ensureDescriptorDir, readDescriptorFile 
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
+import { restartVerdict } from './restartReady.ts';
 import type { StackImages } from './images.ts';
 
 export const stackDir = (): string => join(findRepoRoot(), 'tests', 'stack');
@@ -478,25 +479,35 @@ export const headlessHealthz = (container: string): { status: number; state?: st
 // `lastSync` later than the restart. The CLI rotates the Data API token on every start: the new one is registered
 // for redaction at once (review M1-S6a-r1 C1-R6). M3 (`requestSync('manual')`) can replace the restart with the
 // supervisor's own trigger without changing callers.
-export const syncHeadlessOnce = async (state: StackState, service: HeadlessService, timeoutMs = 10 * 60_000): Promise<{ lastSync: string; durationMs: number }> => {
+export const syncHeadlessOnce = async (state: StackState, service: HeadlessService, timeoutMs = 10 * 60_000): Promise<{ lastSync: string; durationMs: number; healthAtReady: string }> => {
 	const started = Date.now();
 	podmanSync(['restart', '-t', '30', service.container], { timeoutMs: 2 * 60_000 });
-	const lastSync = await waitFor(`${service.container} to sync once more (healthy again, lastSync after the restart)`, async () => {
+	// Ready is the supervisor's /healthz with a sync newer than the restart; podman's health status only fails fast (it can lag
+	// after a restart, CI-M2-S2 F). The last observation goes into the timeout message, value-free.
+	let fail: string | undefined;
+	let healthAtReady = '';
+	let last = 'no observation';
+	const observe = (): { verdict: ReturnType<typeof restartVerdict>; lastSync?: string } => {
 		const [health] = healthOf(['headless'], { headless: service.container });
-		if (health.status !== 'healthy') return undefined;
-		const report = headlessHealthz(service.container);
-		return report?.status === 200 && report.lastSync && Date.parse(report.lastSync) > started ? report.lastSync : undefined;
-	}, {
-		timeoutMs,
-		intervalMs: 1_000,
-		failFast: () => {
-			const [health] = healthOf(['headless'], { headless: service.container });
-			return health.status === 'exited' || health.status === 'unhealthy' ? describeSick(health) : undefined;
-		},
-	});
+		const healthz = headlessHealthz(service.container);
+		last = `podman health ${health.status}, /healthz ${healthz ? `${healthz.status} ${healthz.state ?? ''}`.trim() : 'no answer'}, lastSync ${healthz?.lastSync ?? 'none'}, restart at ${new Date(started).toISOString()}`;
+		healthAtReady = health.status;
+		return { verdict: restartVerdict({ running: health.status !== 'exited' && health.status !== 'not created', health: health.status, healthz, startedMs: started }), lastSync: healthz?.lastSync };
+	};
+	let lastSync: string;
+	try {
+		lastSync = await waitFor(`${service.container} to sync once more (/healthz ready, lastSync after the restart)`, async () => {
+			const { verdict, lastSync: seen } = observe();
+			if (verdict === 'done') return seen;
+			if (typeof verdict === 'object') fail = `${verdict.fail}; ${last}`;
+			return undefined;
+		}, { timeoutMs, intervalMs: 1_000, failFast: () => fail });
+	} catch (error) {
+		throw new Error(`${(error as Error).message}; last observation: ${last}`);
+	}
 	registerToken(service);
 	if (state.owned) saveDescriptor(state);
-	return { lastSync, durationMs: Date.now() - started };
+	return { lastSync, durationMs: Date.now() - started, healthAtReady };
 };
 
 // A free TCP port on 127.0.0.1 (released before it is returned: the caller binds it at once).

@@ -105,8 +105,8 @@ export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, t
 };
 
 // One web sync, then one headless sync of the test's own service (D2, D3): one "cycle" of M2-S2.
-export const syncWebThenHeadless = async (app: JoplinWebApp, network: NetworkRecorder, stack: StackState, service: HeadlessService): Promise<{ webMs: number; headlessMs: number; webReport: string }> => {
+export const syncWebThenHeadless = async (app: JoplinWebApp, network: NetworkRecorder, stack: StackState, service: HeadlessService): Promise<{ webMs: number; headlessMs: number; webReport: string; healthAtReady: string }> => {
 	const web = await syncWebOnce(app, network);
 	const headless = await syncHeadlessOnce(stack, service);
-	return { webMs: web.durationMs, headlessMs: headless.durationMs, webReport: web.report };
+	return { webMs: web.durationMs, headlessMs: headless.durationMs, webReport: web.report, healthAtReady: headless.healthAtReady };
 };
