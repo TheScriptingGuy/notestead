@@ -22,6 +22,8 @@ interface RunnerSummary {
 	otherDurations: (number | null)[];
 	nxdomainLines: number;
 	devicesWithLastError: string[];
+	// web logs that contributed lookup lines after the dedupe (a slice repeated in another file contributes 0)
+	webLinesContributed: Record<string, number>;
 }
 
 const files = function* (dir: string): Generator<string> {
@@ -46,7 +48,7 @@ const summaries = new Map<string, RunnerSummary>();
 const summaryOf = (runner: string): RunnerSummary => {
 	let s = summaries.get(runner);
 	if (!s) {
-		s = { webLogs: 0, deviceLogs: 0, duplicatesSkipped: 0, oldSignature: 0, otherDurationLines: 0, otherDurations: [], nxdomainLines: 0, devicesWithLastError: [] };
+		s = { webLogs: 0, deviceLogs: 0, duplicatesSkipped: 0, oldSignature: 0, otherDurationLines: 0, otherDurations: [], nxdomainLines: 0, devicesWithLastError: [], webLinesContributed: {} };
 		summaries.set(runner, s);
 		seen.set(runner, new Set());
 		seenLines.set(runner, new Set());
@@ -72,7 +74,10 @@ for (const dir of dirs) {
 		const text = content.toString('utf8');
 		if (kind === 'web') {
 			summary.webLogs++;
-			webTotals.set(runner, addWebScans(webTotals.get(runner) as WebScan, scanWebLog(text, seenLines.get(runner))));
+			const scan = scanWebLog(text, seenLines.get(runner));
+			const contributed = scan.oldSignature + scan.otherDurations.length + scan.nxdomain;
+			if (contributed > 0) summary.webLinesContributed[path] = contributed;
+			webTotals.set(runner, addWebScans(webTotals.get(runner) as WebScan, scan));
 		} else {
 			summary.deviceLogs++;
 			if (deviceHasLastError(text)) summary.devicesWithLastError.push(path);

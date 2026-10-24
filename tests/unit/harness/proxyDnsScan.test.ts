@@ -52,6 +52,14 @@ describe('dns1-u5 proxy dns scan', () => {
 		expect(scanWebLog(attachment).oldSignature).toBe(1);
 	});
 
+	test('two lines that differ only in ts are two events, each counted (the dedupe key is the whole raw line)', () => {
+		const at = (ts: number): string => JSON.stringify({ level: 'error', ts, logger: 'http.log.error.log0', msg: 'dial tcp: lookup server: i/o timeout', duration: 3.0005, status: 502, err_id: 'same' });
+		const seen = new Set<string>();
+		expect(scanWebLog(`${at(1_792_830_104.365533)}\n${at(1_792_830_104.365534)}\n`, seen).oldSignature).toBe(2);
+		// The same two lines again, in another file: nothing new.
+		expect(scanWebLog(`${at(1_792_830_104.365534)}\n${at(1_792_830_104.365533)}\n`, seen).oldSignature).toBe(0);
+	});
+
 	test('a timeout line without a duration is listed as null', () => {
 		const text = JSON.stringify({ level: 'error', msg: 'dial tcp: lookup server: i/o timeout' });
 		expect(scanWebLog(text)).toEqual({ oldSignature: 0, otherDurations: [null], nxdomain: 0 });
