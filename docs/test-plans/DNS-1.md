@@ -791,6 +791,124 @@ The lead's DNS-1 r1 (`f3261ec`) is APPROVE to combine. The user granted the narr
 ### Merge resolution for the orchestrator (unchanged)
 When merging `feat/DNS-1-proxy-dns` into `test/M2-S2-ci-x64-arm64` (`--no-ff`), resolve the only conflict, `docs/test-plans/DNS-1.md` (add/add), by taking this branch's file **whole**. The merged file must contain this amendment section. V5 pre-flight checks that.
 
+## Results (CI, proof run 5: e2e 40102184409, ci 40102184392, head `2cc2932`). V3, planner, 2026-10-24
+
+- **Evidence:** `~/joplin-web-app-work/ci-evidence/40102184409/` and `40102184392/` (ci-cd download).
+- **The scan:** I re-ran it myself, with `node tests/harness/tools/scan-proxy-dns.ts ~/joplin-web-app-work/ci-evidence/40102184409/extracted`. The figures below are its output. Where I read a line myself, it is quoted with its file.
+
+### Completeness, (a) to (c) of "Which run decides"
+
+| Runner | (a) `tests/contract/dns-1` | (b) the image under test has the fix | (c) the stack web logs | `resolv.base` (ci-cd question 3) |
+|---|---|---|---|---|
+| x64 | 13 of 13 | `Caddyfile.image`: `dial_timeout 10s` | present | `search dns.podman` / `nameserver 10.89.200.1` |
+| arm64 | 13 of 13 | `dial_timeout 10s` | present | the same |
+
+So podman 4.9.3 puts **only the aardvark gateway** in the container's `resolv.conf`; the host's resolver does not leak in. That answers ci-cd question 3. The contract network has one gateway; the compose `web` on `front` and `back` has two, both served by the same aardvark process.
+
+### DNS1-AC5: **FAIL on both runners** (under the amended rule)
+Scan output: 0 old-signature (3 s) lines, and 1 NXDOMAIN per runner (M1-AC20 stops `server` on purpose: expected).
+
+| Runner | `lookup server … i/o timeout` lines | duration | where | client |
+|---|---|---|---|---|
+| x64 | 2 | 10.0007, 10.0010 s | `contract/m1-s7/c1r1/stack/nst-e2e-mvmhztvr9e525e_web_1.log`, `ts` 1792852368.62 and 1792852408.63 (14:32:48, 14:33:28) | `10.89.1.3`, the same headless container, both times `GET /joplin-server/api/ping`, 40 s apart (a 10 s lookup plus the supervisor's 30 s retry) |
+| arm64 | 3 | 10.0011, 10.0016, 10.0081 s | `e2e/stack/nst-e2e-mvmi7jja11484d_web_1.log`, `ts` 1792853148.10, 1792853202.71, 1792853206.10 (14:45:48, 14:46:42, 14:46:46) | `10.89.1.19`, `.20`, `.21`: **three different** headless containers, each on its readiness `GET /joplin-server/api/ping` |
+
+- Every line is a Caddy 502 with `"msg":"dial tcp: lookup server: i/o timeout"`.
+- Every test still passed, because the headless supervisor retries after 30 s.
+
+**What the 10.0 s means.** Go's resolver asks the first nameserver for 5 s, then the second for 5 s. A lookup that fails at 10.0 s therefore had **both** gateways silent for 5 s each, back to back. Both are served by one aardvark-dns process, so the second nameserver was never an independent fallback.
+- **The SE's "one silent first nameserver" mechanism is fully covered by the fix.** 0 lines at 3 s (the image's own Caddyfile is proven), and no line between 3 and 10 s.
+- **What remains is a different mechanism:** the whole aardvark service stalls for 10 s or more. The 10 s dial timeout cannot cover that by design.
+- **The trigger hypothesis is now stronger, but still unproven:** all 5 remaining failures are the **first** requests of headless containers that had just joined `back` (three different containers on arm64). That fits "aardvark on podman 4.9.3 stalls when a container joins a network". It is the SE's original observation, now with a cleaner signal.
+- **On incidence:** run 4 had 92 lines and run 5 has 5, but earlier runs ranged from 5 to 92 (run 39663284028 had 5). A single run does **not** prove a 95 % reduction. What is proven is the mechanism: the 3 s class is gone.
+
+#### (c) The file-set error in the amendment: **my error**
+- The amendment says `dev1-neg`'s device log sits under `test-results/contract/dns-1/`. It does not. `tests/contract/dns-1/proxy-dns.test.ts` writes it through `runLogged` from `tests/contract/support/headless.ts`, whose results dir is `contract/m1-s5/`. So it is `test-results/contract/m1-s5/device-dev1-neg.log` on both runners.
+- **Corrected rule:** the deliberate control is identified by its **name**, `device-dev1-neg.log`, not its directory. It is excluded, and the exclusion must account for **exactly one** such file per runner, so a missing control is visible too.
+- With that correction, 0 device logs with `Last error` on both runners. **That part of AC5 passes.** The two `lookup` lists above are what fail it.
+- **Follow-up WO-F1 (QA executor, combined branch, a `test(contract)` commit):** the dns-1 suite writes its device logs under `test-results/contract/dns-1/proxy-dns/`. Give it its own logged runner; leave `runLogged` in `headless.ts` unchanged. Then re-run `tests/contract/dns-1` once on the Pi, to show the path. This is not a merge gate.
+
+### (b) arm64 M1-AC21 NEG flake: **WEB-SQLITE-1 shape B. A flake, so no tie is needed or used**
+- **The test:** `tests/e2e/m1-s7/walking-skeleton.spec.ts:107`, "M1-AC21 NEG without the proxy's Host rewrite …".
+- **Attempt 1 failed** after 211.9 s, in step 3 (`configureJoplinServerSync` on the web without the Host rewrite), with `locator.waitFor: Timeout 180000ms exceeded` at `tests/e2e/support/pages/joplinWebApp.ts:35`: `syncWizard().waitFor`. **The retry passed.**
+- **The file:** `~/joplin-web-app-work/ci-evidence/40102184409/extracted/test-results-e2e-ubuntu-24.04-arm/test-results/e2e/output/m1-s7-walking-skeleton-M1--28340--and-the-note-never-appears-chromium/browser-console.log`, sha256 `3422e165447f8dc6844eb5144ca99c98b6972262003c09686748ee7a888cc8b5`. Lines 33-35, verbatim:
+  ```
+  2026-10-24T14:41:18.321Z [warning] sqlite3_step() rc= -1 undefined SQL = COMMIT
+  2026-10-24T14:41:18.322Z [warning] sqlite3_step() rc= 1 SQLITE_ERROR SQL = ROLLBACK
+  2026-10-24T14:41:18.325Z [error] 16:41:18: root: Startup failure during task: buildStartupTasks/openDatabase
+  ```
+- **Against T:**
+  - **T1:** arm64.
+  - **T2, shape B:** (i) the `openDatabase` startup failure is present. (ii) The failing wait is the app's first UI wait (the sync wizard) on that page, before any action on notes in the web UI. The note was made through the device and the headless, not the UI.
+  - **T3:** line S is line 33 (rc -1; not the spellfix line; line 34's rc 1 does not count). Line E is line 35, 4 ms later. The page's first console line is 14:41:15.618, so line S is 2.7 s after the page loaded, well inside 60 s.
+  - **T5:**
+    - 0 `dial tcp` and 0 `lookup` lines in that test's `web.log` and `web-without-host-rewrite.log`;
+    - 0 `cancelling` in its console;
+    - no `SEED SYNC FAILED`.
+- **Verdict:** it meets the shape, but **T4 applies**: the retry passed, so the test is flaky, and a flaky test needs no tie. **The orchestrator's premise is mistaken:** neither the merge criterion nor T makes a flake outside a tie a blocker. The criterion reads "every test passes", and a retry-pass is reported as a flake (strategy §6).
+  - It does **not** use up T6's one-per-runner cap.
+  - The tie's run budget (T8) still counts run 5 as run 1 of 3.
+  - **It is WEB-SQLITE-1's third occurrence, all three on arm64.** Recorded for M2-S3, where it raises the priority.
+- **For the lead (T9):** check the three lines and the sha256 above against the artifact.
+
+### Other must-show items
+I take these from the ci-cd report and did not re-verify them:
+- contract 100 of 100 on both runners;
+- E2E x64 16 of 16 (0 flaky); arm64 15 passed plus 1 flaky (above);
+- the LOC specs pass;
+- M2-AC3 passed at the first attempt;
+- M2-AC5 needed 0 retries;
+- `ac18-stack` and `c1-pertest-secrets` pass;
+- redaction and the upload gate are complete, and the leak scan is 0;
+- E2E 13 m 24 s (x64) and 11 m 11 s (arm64).
+
+### (a) What next for DNS-1
+**The options:**
+- **(1) `dns_opt: ["timeout:1", "attempts:2"]`: not recommended.** It shortens the wait per nameserver. It does not help when the **shared** aardvark process is silent on both gateways, which is exactly what remains: the lookup would then fail after about 4 s instead of 10 s, still with a 502. The SE's 1.0 s measurement was with only the sink silent and aardvark healthy, a case the fix already covers. It also belongs in compose, not the image (M5).
+- **(2) A longer `dial_timeout`: rejected.** AC3 caps a dead server's error at 15 s. Go's second round of attempts only starts at 10 s, so a longer timeout helps only stalls of 10 to 15 s, and it slows every real outage.
+- **(3) Evidence on the runner: needed in any case.**
+  - ci-cd P1: netavark and aardvark-dns versions, in a read-only log step;
+  - a QA harness probe in the e2e stack: a small `dns-watch` container on `front` and `back` that times a Go-resolver lookup of `server` every 0.5 s, logged with `podman events` container starts. It confirms or refutes "the stall follows a container join".
+- **(4) Mitigations to evaluate once (3) is in.** Each has a trade-off that needs an AC decision:
+  - Caddy dial retries (`lb_try_duration` / `lb_try_interval`). Safe for POST, because a failed lookup means nothing was sent. But a dead server is then reported only after the try duration, which conflicts with AC3's 15 s unless AC3 is revisited;
+  - a quicker first retry in the headless supervisor's readiness and sync loop (worklog follow-up d);
+  - on the runner, a newer aardvark, or the CNI experiment (P3/P4). This changes the environment under test.
+
+**The options for the merge decision.** This is **the user's decision**: it changes the AC that was set as the gate.
+- **(A) Block:** neither branch merges until a follow-up story removes the 10 s stalls. Cost: the CI harness branch, otherwise fully green, stays off `main` for an investigation of unknown length.
+- **(B) Re-scope and merge (the planner's recommendation):** split DNS1-AC5 into two criteria:
+  - **AC5a**, "the single-silent-nameserver failure is gone": 0 lookup failures under 9 s on both runners. **PASS** in run 5;
+  - **AC5b**, "no proxy lookup failure in CI": it moves, as the acceptance criterion, to a new story **DNS-2**, "aardvark-dns stalls on podman 4.9.3 (both nameservers silent ≥ 10 s), probably on container joins". It is owned by the SE with the ci-cd-specialist and QA, investigation first: option (3), then (4).
+
+  DNS-1 is then done on AC1 to AC4 plus AC5a, subject to the lead's check. CI-M2-S2 and DNS-1 merge to `main` together.
+- **(C) Merge with AC5 recorded as FAIL, without a re-scope:** not recommended. It departs from the Definition of Done without defining the residual work.
+
+**Why (B):**
+- **The fix demonstrably did what it was designed for.** 0 lines at 3 s, and every remaining line at 10.0 s, which is a different, shared-resolver mechanism.
+- **The residual is an environment defect** of podman 4.9.3's aardvark that no proxy timeout within AC3 can cover.
+- **Every test passed on both runners.**
+- **For users,** the residual is strictly smaller than before: a self-hosted user on podman 4.9.x hits it only during an aardvark stall, and Joplin clients retry on their next sync.
+
+**Whichever option the user picks:**
+- the 10 s lines stay **visible and red** in every future scan;
+- **no DNS tie exists** for any test failure;
+- **if a test ever fails** with a `lookup server` line in its window, it is a FAIL and comes to the planner.
+
+### (d) The overall verdict on the merge criterion (proof run 5)
+
+| Criterion | x64 | arm64 |
+|---|---|---|
+| every test passes | **met** (contract 100/100, E2E 16/16) | **met** (contract 100/100, E2E 15 plus 1 flake, which T4 allows) |
+| DNS1-AC5, as written (amended rule) | **FAIL** (2 lines at 10 s) | **FAIL** (3 lines at 10 s) |
+| DNS1-AC5a, if the user re-scopes (B) | PASS | PASS |
+| evidence complete | met | met |
+| WEB-SQLITE-1 tie | not applicable (x64 has none) | not used (the one occurrence is a flake) |
+
+- **As the criterion is written, the combined merge is blocked:** DNS1-AC5 fails on both runners.
+- **CI-M2-S2's own items all pass.** The block comes only from the DNS1-AC5 item that the combination added.
+- **If the user chooses (B):** the criterion is met on both runners, and **QA signs off CI-M2-S2 and DNS-1 for the merge.** That is subject to the lead's T9 check of the M1-AC21 NEG lines, and the architect records AC5a/AC5b and DNS-2 in the backlog. WO-F1 follows on `main`, or in DNS-2; it does not block.
+- **If the user chooses (A):** both wait for DNS-2.
+
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
 Kept as written; both were delivered in `docs/worklog/DNS-1.md` (8513a0d, 0753528).

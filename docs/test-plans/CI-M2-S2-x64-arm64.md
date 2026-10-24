@@ -800,3 +800,11 @@ Finding I goes to its own story, **DNS-1** (`docs/test-plans/DNS-1.md`, with the
 **QA sign-off on arm64 (Pi): YES for round 4 (H).** The evidence: `ac18-health-01…03`, S-H1, S-H2, the `m1-s6` contract suite 18 of 18, lint, and Jest.
 
 **The whole CI-M2-S2 fix-forward, A to H, is QA-signed on arm64.** Proof run 4 is **PENDING**, to the merge criterion above.
+
+## Proof run 5 (e2e 40102184409, head `2cc2932`, combined with DNS-1): cross-reference (planner, 2026-10-24)
+The full V3 reading is in `docs/test-plans/DNS-1.md`, section "Results (CI, proof run 5 …)".
+- **This plan's own merge items are all met on both runners:**
+  - x64: contract 100/100, E2E 16/16;
+  - arm64: contract 100/100, E2E 15 plus 1 flake, M1-AC21 NEG. Its first attempt shows WEB-SQLITE-1 shape B and its retry passed: a flake needs no tie, and it uses no cap.
+- **The finding-I tie rule is retired, as planned.** No test failed with a `lookup server` line.
+- **The combined merge is blocked only by DNS1-AC5.** 2 (x64) and 3 (arm64) `lookup server … i/o timeout` lines remain, all at 10.0 s: the shared aardvark stalled on both gateways, a different mechanism from DNS-1's. The planner recommends that the user re-scope (AC5a passes, AC5b goes to a new story DNS-2) and merge both. Options A to C and the reasons are in DNS-1.md.
