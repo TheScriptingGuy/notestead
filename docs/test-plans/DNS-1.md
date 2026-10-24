@@ -48,17 +48,17 @@ All contract tests are in `tests/contract/dns-1/proxy-dns.test.ts` (one file, on
 | AC1 | `dns1-c1` | contract | F-SINK, `web` with `resolv.sink-first` | `GET :8080/joplin-server/api/ping` → 200 within 9 s; sink got the lookup; no `lookup server` error line in `web` | `dns1-c1-neg` | body `{"status":"ok"}` | **red** (502 at about 3 s) |
 | AC1 | `dns1-c1b` | contract | same, request on `:8089` | as c1, on the internal listener the headless uses | `dns1-c1-neg` | as c1 | **red** |
 | AC1 NEG | `dns1-c1-neg` | contract | F-SINK, `web` with `resolv.sink-first` **and** a variant Caddyfile: the image's own `/etc/caddy/Caddyfile` (copied out with `podman create` + `podman cp`, as `ac11-r3-neg` does) with every `transport http { … }` block that sets `dial_timeout` removed, nothing else changed | the fault detects the defect: 502 with elapsed from 2.5 to 4.5 s; the `web` log has a line matching `/lookup server\b[^"]*i\/o timeout/`; the sink got the lookup | (is the negative control) | the server is never reached; nothing to read back | **green** (the shipped Caddyfile has no transport block yet, so the variant equals it); the test records whether a block was removed |
-| AC2 | `dns1-c2` | contract | F-SINK, fresh `web` with `resolv.sink-first`, `:8080` | the first request is `POST /joplin-server/api/sessions` (user1) → 200 with a session id, within 9 s; then `PUT /joplin-server/api/items/root:/dns1-<rand>.md:/content` (a sync-format note, as in `tests/contract/m1-s4/proxy.test.ts` `noteItem`) → 200 | `dns1-c2-neg`: the same first POST through the `c1-neg` variant gets 502 at about 3 s, and the server shows no new session for the variant attempt (shown through `GET /api/items` being unchanged; see note 1) | **direct to the server** (published port): the item's content equals the uploaded bytes, and `root:/:/children` lists the name exactly once | **red** |
+| AC2 | `dns1-c2` | contract | F-SINK, fresh `web` with `resolv.sink-first`, `:8080` | the first request is `POST /joplin-server/api/sessions` (user1) → 200 with a session id, within 9 s; then `PUT /joplin-server/api/items/root:/dns1-<rand>.md:/content` (a sync-format note, as in `tests/contract/m1-s4/proxy.test.ts` `noteItem`) → 200 | `dns1-c2-neg`: the same first POST through the `c1-neg` variant gets 502 at about 3 s, and the server shows no new session for the variant attempt (shown through `GET /api/items` being unchanged; see note 1) | **direct to the server** (published port), amended by decision D1 below: the note `<id>.md` matches field by field, and a 256 KiB blob `.resource/<id2>` matches byte for byte (sha256 and length); each name is listed exactly once | **red** |
 | AC2 | `dns1-c2b` | contract | as c2, on `:8089` | the first request is the login POST → 200 with a session | (c2-neg) | the session works: `GET /api/items/root:/:/children` with it, **direct to the server**, returns 200 | **red** |
 | AC3 | `dns1-c3a` | contract | `web` with `JOPLIN_SERVER_URL=http://nst-dns1-missing-<run>:22300` (a name that does not exist) | 502 or 504 within 15 s; an error line in `web` | (bounded-failure guard; see note 2) | none (nothing reaches a server) | **green** |
 | AC3 | `dns1-c3b` | contract | `web` with `JOPLIN_SERVER_URL=http://<prefix>.53:22300` (the sink container: up, TCP 22300 closed) | 502 or 504 within 15 s; error line | (note 2) | none | **green** |
 | AC3 | `dns1-c3c` | contract | `web` with `JOPLIN_SERVER_URL=http://<prefix>.250:22300` (an address with no container) | 502 or 504 within 15 s; error line | (note 2) | none | **green** |
 | AC3 | `dns1-c3d` | contract | F-SINK, `web` with `resolv.sink-only`, `JOPLIN_SERVER_URL=http://server:22300` | 502 or 504 within 15 s; error line; the sink got the lookup | (note 2) | the server's item list for user1 is unchanged (direct) | **green** |
-| AC1-3 | `dns1-s1` | unit | `deploy/web/Caddyfile` (read as text) | the `(joplin_server_proxy)` snippet's `reverse_proxy` block contains a `transport http` block with `dial_timeout` from 6 s to 15 s (Go's 5 s per nameserver plus at least 1 s; at most AC3's bound); `import joplin_server_proxy` appears exactly twice (`:8080` and `:8089`) | the RED state itself (no transport block) | none (static) | **red** |
+| AC1-3 | `dns1-s1` | unit | `deploy/web/Caddyfile` (read as text) | the `(joplin_server_proxy)` snippet's `reverse_proxy` block contains a `transport http` block with `dial_timeout` from 6 s to 15 s (Go's 5 s per nameserver plus at least 1 s; at most AC3's bound); `import joplin_server_proxy` appears exactly twice (`:8080` and `:8089`); amended by decision D2: the `reverse_proxy` block is located by its line, and must contain `header_up Host` | the RED state itself (no transport block) | none (static) | **red** |
 | AC4 | `dev1-c1` | contract | the device fixture image (`deviceImage()`), a fresh account (`createUser`), a normal `web` (no sink) | the device exits 0 with a `RESULT` line | `dev1-neg` | **direct to the server**: `info.json` has at least one master key and `e2ee.value` true (through `checkSeededInfo`) | **green** |
 | AC4 NEG | `dev1-neg` | contract | the device image; a `web` whose `JOPLIN_SERVER_URL` is `http://<prefix>.53:22300` (refused, so every sync request gets a 502) | the device exits **non-zero** within 150 s, prints no `RESULT` line, and its stderr has `SEED SYNC FAILED` and `Last error` | (is the negative control) | none (nothing can reach a server) | **red** (exits 0 with `RESULT` today) |
 | AC4 | `dev1-u1` | unit | `tests/stack/seedCheck.ts` `checkSeededInfo(status, text)` | returns `undefined` for a real-shaped `info.json` with master keys and E2EE on; returns a reason for a 404, invalid JSON, `masterKeys: []`, a missing `masterKeys` and `e2ee.value: false` | (each rejected case is a negative) | n/a | **red** (module missing) |
-| AC5 | `dns1-c5` | CI evidence | `tests/harness/tools/scan-proxy-dns.ts` over the run's downloaded artifacts | the AC5 counts per runner, from every `*_web_1.log`, every `web*.log` and every `device-*.log` | the tool, run on the 5 old runs, reproduces the ci-cd counts (233 lines: x64 82, arm64 151; 225 with a 3.00x s duration; 3 device logs with `Last error`) | n/a | n/a (runs after the fix) |
+| AC5 | `dns1-c5` | CI evidence | `tests/harness/tools/scan-proxy-dns.ts` over the run's downloaded artifacts | the AC5 counts per runner, from every `*_web_1.log`, every `web*.log` and every `device-*.log` | the tool, run on the 5 old runs, reproduces the evidence, amended by decision D3: 225 old-signature lines (x64 79, arm64 146), 8 NXDOMAIN lines reported but not counted, and 3 device logs with `Last error` | n/a | n/a (runs after the fix) |
 | AC5 | `dns1-u5` | unit | `tests/support/proxyDnsScan.ts` | parses Caddy JSON lines: counts `lookup <name> … i/o timeout` errors, buckets them by `duration` (old signature 2.5 to 4.5 s, other), ignores the `no such host` NXDOMAIN lines of AC20-style tests, finds `Last error` in device logs | the NXDOMAIN and clean-device samples must count 0 | n/a | **red** (module missing) |
 
 **Notes.**
@@ -233,6 +233,112 @@ Commit: `docs(testing): DNS-1 fault-injection fixture, seed sync rule, CI scan`.
 3. **`docs/worklog/DNS-1.md`:** the implementation section (the commands, and the test evidence from `tests/contract/dns-1`, `tests/unit/deploy` and `tests/contract/m1-s4`). It must state that no ADR deviates. ADR-0006's name-based topology is kept.
 4. **Not in scope for the SE:** `tests/**` (disputes go below), compose `dns_opt` (M5), `lb_try_*`, and any change to `packages/**`.
 5. **Done when:** `dns1-s1`, `dns1-c1`, `c1b`, `c2` and `c2b` are green; the rest of `tests/contract/dns-1` stays green; and `corepack yarn lint` is clean.
+
+## Planner decisions after the WO-7 HARD STOP (2026-10-24)
+
+Executor commits so far: `0be311d` (WO-1/2 RED), `8e00acb` (WO-3 RED), `630507f` (WO-4), `a334db3` (WO-5). The WO-6 outcomes match the plan. The WO-7 fix simulation timings are c1 5014 ms, c1b 5011, c2 5252, c2b 5250 and c3d 10013, and the negatives still got 502 at about 3 s with `removedBlocks` 1. All of these are inside every bound. Two test bugs stopped it.
+
+### D1: `dns1-c2`'s "exactly once, intact" check (test bug 1)
+**Decision: both, a field-level note check and a byte-exact blob.** The note keeps the realistic sync payload. The blob gives the byte-for-byte strength, which a note cannot have, because Joplin Server re-serializes notes: it appends `is_locked:` and `extracted_resource_ids:`. This is the same split as M1-S4 `ac10-c3`, which checks a marker for notes and exact bytes only for blobs.
+- **Order on the fresh `web`:**
+  1. the login POST, the first upstream request (unchanged, with all its current assertions);
+  2. `PUT /joplin-server/api/items/root:/<id>.md:/content` with the `noteItem` text;
+  3. `PUT /joplin-server/api/items/root:/.resource/<id2>:/content` with 256 KiB of `randomBytes`, `Content-Type: application/octet-stream`.
+
+  Both PUTs must return 200.
+- **Note, read directly on the server:** a parser `parseJoplinItem(text)` returns `{ title, body, props: Map }`. The props come from the trailing `key: value` block, and the title and body from the lines before it, in Joplin's serialization. Then:
+  - `compareUploadedItem(uploaded, stored)` returns the list of differences. It must be empty;
+  - title and body are exactly equal;
+  - **every** uploaded property is present with an identical value, `id` included;
+  - extra stored keys are allowed and are recorded in `timings.json` as `extraKeys`, not asserted (they are the server's, at the pinned tag).
+- **Blob, read directly on the server:** the sha256 and the length are equal.
+- **Exactly once:** `root:/:/children`, read directly, lists `<id>.md` exactly once and `.resource/<id2>` exactly once. If the listing does not show `.resource/` names at the pinned tag, read `GET /api/items/root:/.resource/<id2>:` (the metadata) and assert 200 instead. Record which path was used.
+- **The parser's own negative:** `tests/unit/harness/joplinItem.test.ts`. It must show that:
+  - the same text gives no differences;
+  - the server-appended keys give no differences;
+  - a changed body, a changed title, a changed property value and a missing property each give exactly one named difference.
+
+  The parser and the comparison live in `tests/contract/support/joplinItem.ts`.
+- **The RED state is unchanged:** c2 still fails at the login with a 502 at about 3 s.
+
+### D2: `dns1-s1` (test bug 2)
+**Decision:** find the block by its line, not by the variable name.
+- The opener is the `reverse_proxy` line inside the snippet, `/^[ \t]*reverse_proxy\b[^\n]*\{[ \t]*$/m`. The block opens at that line's **last** `{`.
+- The proposed `reverse_proxy\s+\{\$JOPLIN_SERVER_URL\}\s*\{` is rejected: it would break if the upstream placeholder were renamed, and it hides the same class of bug.
+- **A sanity assertion inside s1:** the extracted block contains `header_up Host`. So a wrong block fails loudly instead of failing on `transport`.
+- **Proof matrix (WO-7b), mandatory:**
+
+  | Caddyfile state | Expected result |
+  |---|---|
+  | branch HEAD (no fix) | **red**, and only at the `transport` assertion |
+  | the fix with `10s` | green |
+  | `3s` | red at the lower bound |
+  | `20s` | red at the upper bound |
+  | `transport http { dial_timeout 10s }` placed in a second, unrelated `reverse_proxy` outside the snippet | red at the `transport` assertion |
+
+  WO-6's red for s1 is **void**. The matrix replaces it.
+
+### D3: the deviations
+- **The scan counts: accepted, and the plan's expectation was wrong.** The ci-cd total of 233 counted every `lookup server` line. The plan said "233 lines … 225 with a 3.00x s duration", and those 8 others are the NXDOMAIN `no such host` lines at 0.0 s, which the plan itself says not to count. I checked independently: unique `lookup server: i/o timeout` lines per run in the stack `*_web_1.log` files are 4, 23, 47, 60 and 91, which is 225. Corrected expectation: 225 (x64 79, arm64 146), plus 8 NXDOMAIN reported separately, plus 3 device logs.
+- **The line-level dedupe: accepted, on two conditions:**
+  - the dedupe key is the **whole raw line**: Caddy's `ts` has sub-millisecond precision, so two genuine events never share a line;
+  - the tool reports how many lines each file contributed after the dedupe.
+
+  The `web*.log` attachments are slices of the stack logs, so counting them twice would be wrong. WO-7c adds a unit case for it.
+- **`seedCheck.ts` as a throwing stub in the RED commit: accepted.** It was red for the right reason (not implemented), and it is green after `630507f`.
+- **`dns1-u5` written together with its module (no red-before-green): accepted only with a mutation proof** (WO-7c). Its integration proof is the 225/8/3 reproduction.
+- **`dns1-c2`'s name `<id>.md` instead of `dns1-<rand>.md`: accepted.** The server requires id-based item names; my plan text was wrong.
+- **Device containers without a fixed IP: accepted.** Nothing addresses the device.
+- **The nested `describe` for dev1: accepted.** It shares the file's server and the `afterAll` teardown.
+
+### Follow-up work orders (executor). The rules of "Work orders" apply, including the HARD STOP rule
+
+#### WO-7a: D1, the c2 rewrite (commit)
+1. Write `tests/contract/support/joplinItem.ts` and `tests/unit/harness/joplinItem.test.ts` as in D1. Run the unit test first and record it red: the module does not exist yet. Then write the module, and record the unit test green.
+2. Rewrite `dns1-c2` in `tests/contract/dns-1/proxy-dns.test.ts` as in D1. Don't change any other case.
+3. `corepack yarn lint`: clean.
+4. Commit: `test(contract): DNS-1 c2 checks the note field by field and a blob byte for byte`.
+5. **HARD STOP** if the server answers the blob PUT or the listing differently from D1 in a way that D1's fallback does not cover. Report the status and the body, and nothing else.
+
+#### WO-7b: D2, s1 (commit after the matrix)
+1. Change the opener in `tests/unit/deploy/caddyfile-dial-timeout.test.ts` and add the `header_up Host` sanity assertion, as in D2.
+2. **On branch HEAD:** run `corepack yarn jest tests/unit/deploy`. It must be red **only** at the `transport` assertion. Record the failure message.
+3. **The matrix in a scratch worktree:** `git worktree add ~/joplin-web-app-work/spikes/DNS-1/qa-s1 HEAD`. Edit `deploy/web/Caddyfile` **there only**, once per row of D2's matrix, and run the same command from the worktree for each row. Record each row's result and failure message. Then `git worktree remove --force`, and check `git worktree list`.
+4. Commit (the branch only, test file only): `test(unit): DNS-1 s1 finds the reverse_proxy block past the upstream placeholder`.
+5. **HARD STOP** if any row differs from the matrix.
+
+#### WO-7c: dns1-u5's sensitivity and the dedupe (commit only if a test is added)
+1. If `tests/unit/harness/proxyDnsScan.test.ts` has no case where the same raw line appears in two files and is counted once, plus a case where two lines differ only in `ts` and are counted twice, add both. Then commit: `test(harness): DNS-1 scan dedupe cases`.
+2. **Mutations in a scratch worktree** (`~/joplin-web-app-work/spikes/DNS-1/qa-u5`, removed afterwards). Apply each one alone to `tests/support/proxyDnsScan.ts` and run `corepack yarn jest tests/unit/harness/proxyDnsScan.test.ts`:
+   - (i) the old-signature lower bound 2.5 s set to 0;
+   - (ii) NXDOMAIN lines counted as timeouts;
+   - (iii) the dedupe disabled;
+   - (iv) the device `Last error` match removed.
+
+   Each mutation must make at least one test red. Record which test went red for each.
+3. Re-run the scan over the five runs on HEAD and record: 225 (x64 79, arm64 146), 8 NXDOMAIN with their file paths, and 3 device logs with their paths.
+4. **HARD STOP** if a mutation survives (no test goes red), or if the numbers change.
+
+#### WO-7d: the RED re-run on HEAD (no commit)
+1. In the background, with a 40 min timeout: `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract tests/contract/dns-1 --verbose`.
+2. Then `corepack yarn jest tests/unit`.
+3. **Expected:**
+   - **red:** `dns1-c1`, `c1b`, `c2`, `c2b` (each a 502 at about 3 s, with the sink's count rising; c2 at the login), and `dns1-s1` (at `transport` only);
+   - **green:** everything else, including `joplinItem`, `seedCheck` and `proxyDnsScan`.
+4. **HARD STOP** if anything differs.
+
+#### WO-7e: the fix simulation re-run (no commit)
+1. Run WO-7 again, in a fresh worktree at the new HEAD, with the 10 s fix applied in the worktree only.
+2. **Expected:** every test green, `dns1-s1` included. c2 records `extraKeys`. The negatives still get a 502 at about 3 s with `removedBlocks` 1. The timings are inside every bound.
+3. Remove the worktree.
+4. **HARD STOP** on any red. Report the timings and the logs; never adjust a test in the worktree.
+
+#### Then WO-8 and WO-9 as written
+WO-9's RED section also records:
+- the void WO-6 s1 red, and D2's matrix in its place;
+- the WO-7c mutation table;
+- the corrected counts;
+- every deviation, with D3's verdict on it.
 
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
