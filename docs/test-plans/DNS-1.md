@@ -381,3 +381,75 @@ Goal: find why `web` intermittently cannot resolve `server`, and propose the sma
 Deliver this as a section of `docs/worklog/DNS-1.md`, or in `docs/delivery/`, as the orchestrator assigns.
 
 ## Disputes
+
+## RED (DNS-1, 2026-10-24, Pi arm64)
+
+Executor: qa-specialist (Sonnet). Branch HEAD for the final RED run: `39385b8` (tests) with the strategy commit on top. Evidence is under `test-results/contract/dns-1/` (not committed): `red-run2/` (log and `proxy-dns/` with `timings.json`, `resolv.base`, `resolv.sink-*`, every container log), `red-run/` and `red-dev1-neg-wo3/` (earlier runs), `fixsim-run/` and `fixsim-run2/`, `scan-old-runs.json`.
+
+Commits: `0be311d` (WO-1/2), `8e00acb` (WO-3), `630507f` (WO-4), `a334db3` (WO-5), `625b1d2` (WO-7a), `266c0ed` (WO-7b), `39385b8` (WO-7c), `db41d01` (WO-8).
+
+**Commands.**
+- `NOTESTEAD_KEEP_IMAGE=1 timeout 2400 corepack yarn test:contract tests/contract/dns-1 --verbose` (127 s)
+- `corepack yarn jest tests/unit` (111 tests)
+
+**Outcomes on `39385b8` (contract, ms for the request).**
+
+| Test | Outcome | Request |
+|---|---|---|
+| dns1-c0 | green | 200 in 14 ms, sink delta 0 |
+| dns1-c1 | red | 502 at 3011, sink delta 2 |
+| dns1-c1b | red | 502 at 3011, sink delta 2 |
+| dns1-c1-neg | green | 502 at 3008, delta 2, `removedBlocks` 0 |
+| dns1-c2 | red at the login | 502 at 3008, delta 2 |
+| dns1-c2-neg | green | 502 at 3006, delta 2, `removedBlocks` 0 |
+| dns1-c2b | red | 502 at 3009, delta 2 |
+| dns1-c3a / c3b / c3c / c3d | green | 502 at 17 / 6 / 3009 / 3005 |
+| dev1-c1 | green | exit 0, RESULT, `info.json` accepted by `checkSeededInfo` |
+| dev1-neg | green | exit 3 after 32.8 s, `SEED SYNC FAILED`, `Last error` |
+| dns1-s1 (unit) | red, at `transport` only | `expect(transport).not.toBeNull()` |
+| other unit tests (joplinItem, seedCheck, proxyDnsScan, all existing) | green | 110 of 111 |
+
+`dev1-neg` was red at `8e00acb` (WO-3, before the device hardening): the device exited 0 with `RESULT` after a `Last error: Error 502` sync (`test-results/contract/dns-1/red-dev1-neg-wo3/`).
+
+**The WO-6 red for `dns1-s1` is void.** The first opener regex stopped at the `{` of `{$JOPLIN_SERVER_URL}`, so the test was red for the wrong reason and stayed red with the fix. D2's matrix replaces it (WO-7b, in the scratch worktree `qa-s1`, removed afterwards):
+
+| Caddyfile state | Result | Failure line |
+|---|---|---|
+| branch HEAD (no fix) | red | `expect(transport).not.toBeNull()`, after the `header_up Host` sanity passed |
+| fix, `dial_timeout 10s` | green | |
+| `3s` | red | `expect(value).toBeGreaterThanOrEqual(6)`, received 3 |
+| `20s` | red | `expect(value).toBeLessThanOrEqual(15)`, received 20 |
+| `transport http { dial_timeout 10s }` in a second `reverse_proxy` outside the snippet | red | `expect(transport).not.toBeNull()` |
+
+## Harness validation
+
+**Scan over the five old runs** (`tests/harness/tools/scan-proxy-dns.ts`, WO-7c; D3 corrected expectation):
+- 225 old-signature lines: x64 79, arm64 146. Other durations: 0.
+- 8 NXDOMAIN lines, reported not counted: x64 3, arm64 5. They are in the `m1-s6/ac20/stack/nst-e2e-*_web_1.log` files of runs 39663284028 (arm64), 39768694985 (both), 39957733152 (both), 40020973008 (both), 40075823250 (arm64).
+- 3 device logs with `Last error`: x64 `contract/m1-s6/ac20/stack/device-0bca5973.log`; arm64 `contract/m1-s6a/c1/stack/device-7825a393.log` and `e2e/stack/device-803d774f.log`.
+- ci-cd's 233 (x64 82, arm64 151) is these 225 plus the 8 NXDOMAIN lines. The tool also reports lines contributed per web log after the dedupe (sums 82 and 151, NXDOMAIN included).
+
+**`dns1-u5` mutation proof** (WO-7c, scratch worktree `qa-u5`, removed afterwards; each mutation applied alone to `tests/support/proxyDnsScan.ts`):
+
+| Mutation | Tests that went red |
+|---|---|
+| (i) old-signature lower bound 2.5 set to 0 | "the old signature window is 2.5 s to 4.5 s, edges included" |
+| (ii) NXDOMAIN counted as timeouts | "nxdomain lines are reported in their own count…", "lines already counted…" |
+| (iii) dedupe disabled | "lines already counted…", "two lines that differ only in ts are two events…" |
+| (iv) device `Last error` match removed | "finds Last error in a failed seed sync" |
+
+No mutation survived.
+
+**Fix simulation** (WO-7e, scratch worktree `qa-fixsim` at `39385b8` with `transport http { dial_timeout 10s }` added in the worktree only; removed afterwards). 13 of 13 contract tests and 2 of 2 `tests/unit/deploy` green:
+- c0 13 ms; c1 5013; c1b 5012; c2 5245; c2b 5238; c3a 14; c3b 9; c3c 3072; c3d 10007 (all ms).
+- c1-neg and c2-neg: 502 at 3009 with `removedBlocks` 1.
+- c2 data check: the note matched field by field; the server's extra keys were `is_locked` and `extracted_resource_ids`; the blob matched by sha256 and length (256 KiB); the listing path was `children`.
+- dev1-neg exit 3 after 32.9 s.
+
+**Deviations and D3's verdict.**
+- Scan counts differ from the plan's 82/151/233: accepted (the plan counted NXDOMAIN lines).
+- Line-level dedupe added to the scan: accepted, key is the whole raw line, per-file contribution reported.
+- `seedCheck.ts` a throwing stub in `8e00acb`: accepted.
+- `dns1-u5` written with its module: accepted with the mutation proof above.
+- Note name `<id>.md`: accepted. Device without a fixed IP: accepted. Nested `describe` for dev1: accepted.
+- Images: `localhost/notestead-web:m1-s4-test` now holds the WO-7e fixsim build (it includes `dial_timeout`; the next run rebuilds it). Kept for sign-off.
