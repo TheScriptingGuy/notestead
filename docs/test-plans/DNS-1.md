@@ -934,3 +934,23 @@ No `rc= -1`, no `Could not save` (the one `sqlite3_step()` line is the startup `
 **Verdict: E2E regression evidence for DNS-1: blocked by known non-DNS causes on this branch; moved to V5 on the combined branch.**
 
 **V1d** (HEAD): `corepack yarn jest tests/unit` 15 suites passed, 111 of 111 tests; `corepack yarn lint` clean (exit 0).
+
+## Results (V5, combined branch, Pi arm64, 2026-10-24)
+
+Branch `test/M2-S2-ci-x64-arm64` at merge commit `cbcf075` (DNS-1 fix `385718b` and the CI-M2-S2 harness `78d3c4d` together); status clean; the "Amendment after DNS-1-r1" section is present; no `nst-*` leftovers; the previous `test-results/` is in `~/joplin-web-app-work/spikes/DNS-1/test-results-pre-v5/`. Logs under `test-results/` (gitignored).
+
+| Step | Command | Result | Duration | Log |
+|---|---|---|---|---|
+| lint | `corepack yarn lint` | clean | | `test-results/lint.log` |
+| unit | `corepack yarn jest tests/unit` | 20 suites, 139 of 139 | | |
+| contract | `NOTESTEAD_KEEP_IMAGE=1 NOTESTEAD_WEB_ARTIFACT=~/joplin-web-app-work/ci-evidence/37285783648/extracted/web-bundle-v3.7.21 corepack yarn test:contract --verbose --json --outputFile=test-results/contract/jest-results.json` | **16 of 16 suites, 100 of 100 tests**, including `dns-1` (13 of 13, 142 s) and m1-s7 (11 of 11, 400 s) | about 46 min | `test-results/contract/v5-full.log`, `jest-results.json` |
+| E2E | `env LANG=C.UTF-8 LC_ALL=C.UTF-8 NOTESTEAD_KEEP_IMAGE=1 NOTESTEAD_WEB_ARTIFACT=<same> corepack yarn playwright test` (the command of CI-M2-S2's WO-11, without the `$IMG` variables, so the device image is built by `globalSetup`, F-H1) | **16 of 16 passed**, no retry, LOC-01 and LOC-02 included | 34.7 min | `test-results/e2e-v5-full.log` |
+
+**Scans** (`node tests/harness/tools/scan-proxy-dns.ts test-results`): 0 old-signature lookup lines, 0 other durations; 1 NXDOMAIN line (m1-s6 `ac20`, which stops `server` on purpose); 1 device log with `Last error`, `contract/m1-s5/device-dev1-neg.log`, the deliberate control, which is also the only file with `SEED SYNC FAILED`. The E2E stack `*_web_1.log` has 0 `lookup` lines. No `Sync: cancelling` line in the E2E run log. No hit for `sqlite3_step() rc=` or `Could not save` in any `browser-console.log` other than the known startup `notes_spellfix USING spellfix1` warning (rc 1) in the m1-s7 contract output. Browser consoles are attached only for failed tests, and the E2E run had none.
+
+**Per-AC update.**
+- DNS1-AC4: the E2E part now PASS. All 16 E2E tests, whose `e2eeAccount` and `upDefault` seed through the hardened device and the `info.json` post-condition, passed with 0 `SEED SYNC FAILED`.
+- DNS-1's E2E regression check: PASS on the combined branch (16 of 16). The failures of V1c (WEB-SQLITE-1) and V1c' (F-R2) did not recur; F-R2 is fixed here by `78d3c4d`.
+- DNS1-AC1 to AC3: PASS (contract layer, 13 of 13 in this run). DNS1-AC5: PENDING (V3, proof run 5).
+- Classification of failures: none.
+- Images kept: `notestead-test-device:3.7.1` (still tagged after this contract run), `notestead-web:m1-s4-test`, `notestead-web:stack-test`, `notestead-headless:stack-test`, `:m1-s5-test`, `:m1-s5-neg`.
