@@ -8,12 +8,16 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { checkSeededInfo } from '../../stack/seedCheck.ts';
 import { baseResolvConf, noDialTimeoutCaddyfile, recordTiming, sinkQueries, startSink, timedRequest, writeResolvVariants } from '../support/dns.ts';
 import type { ResolvVariants, Sink } from '../support/dns.ts';
 import { request } from '../support/http.ts';
-import { sessionFor } from '../support/headless.ts';
 import {
-	containerLogs, createStack, ipOf, podman, runId, teardownStack, waitFor, webImageInfo,
+	createUser, deviceImage, makeSecret, runLogged, scrub, sessionFor,
+} from '../support/headless.ts';
+import type { User } from '../support/headless.ts';
+import {
+	containerLogs, containerName, createStack, ipOf, podman, runId, runLabel, teardownStack, testLabel, waitFor, webImageInfo,
 } from '../support/podman.ts';
 import type { Stack } from '../support/podman.ts';
 import { direct, startJoplinServer, startWeb, user1, webEnvFor } from '../support/services.ts';
@@ -219,5 +223,52 @@ describe('DNS-1 the proxy survives a silent first nameserver (DNS1-AC1 to AC3)',
 		expectMounted(web, variants.sinkOnly);
 		await expectBoundedFailure('dns1-c3d', web, true);
 		expect(await itemNames()).toEqual(itemsBefore);
+	});
+
+	// ---- DNS1-AC4: the E2EE device must fail on a seed sync error ----
+
+	describe('the E2EE test device (DNS1-AC4)', () => {
+		const maxDeviceMs = 150_000;
+
+		// Mirrors seedDevice (tests/contract/support/headless.ts): `podman run --rm -i`, secrets on stdin only, output
+		// scrubbed of them. Measures the elapsed time.
+		const runDevice = (web: Web, user: User, master: ReturnType<typeof makeSecret>, label: string) => {
+			const name = containerName(stack, `device-${label}`);
+			const started = performance.now();
+			const r = runLogged(`device-${label}`, 'podman', ['run', '--rm', '-i', '--name', name, '--network', stack.net,
+				'--label', `${testLabel}=contract`, '--label', `${runLabel}=${runId()}`, deviceImage()], {
+				input: JSON.stringify({ syncUrl: `http://${web.ip}:8080/joplin-server`, email: user.email, password: user.password.value, masterPassword: master.value, folder: `DNS-1 folder ${label}`, notes: [{ title: `DNS-1 note ${label}`, body: `DNS-1 body ${label}` }] }),
+				timeoutMs: 10 * 60_000,
+				secrets: [user.password, master],
+			});
+			return { ...r, elapsedMs: performance.now() - started, result: r.stdout.split('\n').filter(l => l.startsWith('RESULT ')).pop() };
+		};
+
+		it('dev1-c1: a seed against a healthy web exits 0 with RESULT, and the server holds a master key and E2EE on', async () => {
+			const web = await startCase('web-dev1c1', 41);
+			const user = await createUser(server);
+			const master = makeSecret('e2ee_master_password');
+			const r = runDevice(web, user, master, 'dev1-c1');
+			expect({ code: r.code, hasResult: r.result !== undefined }).toEqual({ code: 0, hasResult: true });
+			// Directly on the server: info.json as that user.
+			const session = await sessionFor(server, user.email, user.password.value);
+			const info = await direct(server, '/api/items/root:/info.json:/content', { headers: { 'X-API-AUTH': session } });
+			expect(checkSeededInfo(info.status, info.text)).toBeUndefined();
+		});
+
+		it('dev1-neg: a seed sync that fails (every request is a 502) makes the device exit non-zero within 150 s, with no RESULT, naming SEED SYNC FAILED and Last error', async () => {
+			const sinkRefusing = await startCase('web-dev1neg', 42, { serverUrl: `http://${sink.ip}:22300` });
+			const user = await createUser(server);
+			const master = makeSecret('e2ee_master_password');
+			const r = runDevice(sinkRefusing, user, master, 'dev1-neg');
+			recordTiming(stack, { case: 'dev1-neg', elapsedMs: r.elapsedMs, note: `device exit ${r.code}, RESULT ${r.result !== undefined}` });
+			// Scrubbed first: a failing assertion prints its received value, and CI logs are public.
+			const stderr = scrub(r.stderr, [user.password, master]);
+			expect(r.code).not.toBe(0);
+			expect(r.result).toBeUndefined();
+			expect(stderr).toContain('SEED SYNC FAILED');
+			expect(stderr).toContain('Last error');
+			expect(r.elapsedMs).toBeLessThan(maxDeviceMs);
+		});
 	});
 });
