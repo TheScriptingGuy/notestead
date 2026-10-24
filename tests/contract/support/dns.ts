@@ -121,6 +121,8 @@ export interface TimingRecord {
 	elapsedMs?: number;
 	sinkQueriesDelta?: number;
 	removedBlocks?: number;
+	extraKeys?: string[];
+	listing?: string;
 	note?: string;
 }
 

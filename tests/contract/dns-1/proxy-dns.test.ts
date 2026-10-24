@@ -5,13 +5,14 @@
 // fresh `web` reliably dials and looks up). The fault is a UDP sink at <prefix>.53 that never answers, listed first in a
 // resolv.conf derived from podman's own. Self-checks in every fault case: the mounted file is the one inside `web`, and
 // the sink's query count rises during the request. Bounds are planner-owned (plan note 3): never widen them here.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkSeededInfo } from '../../stack/seedCheck.ts';
 import { baseResolvConf, noDialTimeoutCaddyfile, recordTiming, sinkQueries, startSink, timedRequest, writeResolvVariants } from '../support/dns.ts';
 import type { ResolvVariants, Sink } from '../support/dns.ts';
 import { request } from '../support/http.ts';
+import { compareUploadedItem, parseJoplinItem } from '../support/joplinItem.ts';
 import {
 	createUser, deviceImage, makeSecret, runLogged, scrub, sessionFor,
 } from '../support/headless.ts';
@@ -146,15 +147,38 @@ describe('DNS-1 the proxy survives a silent first nameserver (DNS1-AC1 to AC3)',
 		const session = String(json(res.text).id ?? '');
 		expect(session).toMatch(/^[A-Za-z0-9]{10,}$/);
 		expect(elapsedMs).toBeLessThan(9000);
+		const headers = { 'X-API-AUTH': session, 'Content-Type': 'application/octet-stream' };
+		// D1: a note (the server re-serializes it, so it is compared field by field) and a blob (byte for byte).
 		const id = randomBytes(16).toString('hex');
 		const name = `${id}.md`;
-		const content = noteItem(id, `DNS-1 c2 ${randomUUID()}`, `DNS-1 c2 body ${randomUUID()}`);
-		const put = await request({ port: web.port, path: `/joplin-server/api/items/root:/${name}:/content`, method: 'PUT', headers: { 'X-API-AUTH': session, 'Content-Type': 'application/octet-stream' }, body: content });
-		expect(put.status).toBe(200);
-		// Directly on the server: the exact bytes, and the name listed exactly once.
-		const onServer = await direct(server, `/api/items/root:/${name}:/content`, { headers: { 'X-API-AUTH': session } });
-		expect({ status: onServer.status, text: onServer.text }).toEqual({ status: 200, text: content });
-		expect((await itemNames()).filter(n => n === name)).toEqual([name]);
+		const uploaded = noteItem(id, `DNS-1 c2 ${randomUUID()}`, `DNS-1 c2 body ${randomUUID()}`);
+		const putNote = await request({ port: web.port, path: `/joplin-server/api/items/root:/${name}:/content`, method: 'PUT', headers, body: uploaded });
+		expect(putNote.status).toBe(200);
+		const blobId = randomBytes(16).toString('hex');
+		const blobName = `.resource/${blobId}`;
+		const blob = randomBytes(256 * 1024);
+		const putBlob = await request({ port: web.port, path: `/joplin-server/api/items/root:/${blobName}:/content`, method: 'PUT', headers, body: blob });
+		expect(putBlob.status).toBe(200);
+		// Directly on the server (bypasses the proxy).
+		const noteOnServer = await direct(server, `/api/items/root:/${name}:/content`, { headers: { 'X-API-AUTH': session } });
+		expect(noteOnServer.status).toBe(200);
+		const compared = compareUploadedItem(parseJoplinItem(uploaded), parseJoplinItem(noteOnServer.text));
+		expect(compared.differences).toEqual([]);
+		const blobOnServer = await direct(server, `/api/items/root:/${blobName}:/content`, { headers: { 'X-API-AUTH': session } });
+		expect({ status: blobOnServer.status, length: blobOnServer.body.length, sha256: createHash('sha256').update(blobOnServer.body).digest('hex') })
+			.toEqual({ status: 200, length: blob.length, sha256: createHash('sha256').update(blob).digest('hex') });
+		// Exactly once: the listing, or (when it does not show .resource/ names) the blob's metadata.
+		const names = await itemNames();
+		expect(names.filter(n => n === name)).toEqual([name]);
+		let listing = 'children';
+		if (names.some(n => n === blobName)) {
+			expect(names.filter(n => n === blobName)).toEqual([blobName]);
+		} else {
+			listing = 'metadata';
+			const meta = await direct(server, `/api/items/root:/${blobName}:`, { headers: { 'X-API-AUTH': session } });
+			expect(meta.status).toBe(200);
+		}
+		recordTiming(stack, { case: 'dns1-c2-data', extraKeys: compared.extraKeys, listing });
 	});
 
 	it('dns1-c2-neg: the same first POST through the Caddyfile without a dial_timeout block gets 502 at about 3 s, and the server saw nothing', async () => {
