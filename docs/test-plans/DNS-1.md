@@ -605,6 +605,8 @@ It supersedes my earlier "merge DNS-1 to `main` first, AC5 as a post-merge gate"
 - **No F-R2 allowance either:** on this branch F-R2 is fixed, so a "no delta request since the press" failure is a regression of `78d3c4d`.
 
 ### WEB-SQLITE-1: a narrow tie or block? **Recommendation: a narrow tie, time-boxed. The user decides.**
+
+> **Superseded in part:** the tie as granted is defined by "T: the WEB-SQLITE-1 tie" in the amendment after DNS-1-r1, below. Conditions 1 to 5 here are history.
 Accepting a known red departs from the Definition of Done. So, as with finding I, **this is the user's decision.**
 
 **Why a tie:**
@@ -686,6 +688,108 @@ As written in "V3: CI evidence", on proof run 5's artifacts, plus:
 - **AC5:** pending proof run 5.
 - **The DNS-1 E2E regression check:** blocked on this branch by known non-DNS causes (WEB-SQLITE-1, F-R2); moved to V5.
 - **For the user, through the orchestrator:** the WEB-SQLITE-1 tie, recommended narrow and time-boxed.
+
+## Amendment after DNS-1-r1 (planner, 2026-10-24): the WEB-SQLITE-1 tie as granted, and DNS1-AC5 kept decisive
+
+The lead's DNS-1 r1 (`f3261ec`) is APPROVE to combine. The user granted the narrow WEB-SQLITE-1 tie on 2026-10-24. This section **narrows** that tie (r1 C3, gaps 1 to 5) and **tightens** DNS1-AC5 (r1 C1). It never widens either. It **supersedes** conditions 1 to 5 of "WEB-SQLITE-1: a narrow tie or block?" above; where the two differ, this section applies.
+
+### T: the WEB-SQLITE-1 tie (proof runs of the combined branch only)
+**T1, where it applies:**
+- **arm64 only** (`ubuntu-24.04-arm`), in e2e workflow runs of the combined `test/M2-S2-ci-x64-arm64` branch.
+- **x64 gets no allowance, deliberately** (r1 gap 4). Both known occurrences were on arm64 (the CI runner and the Pi). An x64 occurrence would be new information: the defect spreading. It **blocks** the merge, and goes to the planner as a new finding.
+- Stricter than the evidence requires is safe; looser is not.
+
+**T2, the failure must have one of two known shapes** (r1 gap 1). Any other failure does not qualify, **whatever the console holds**: a timeout elsewhere, a different UI regression, an assertion on something the test did not edit.
+
+- **Shape A, a lost write.** The occurrence it is modelled on is V1c: `tests/e2e/m2-s2/notes.spec.ts:102`, step 6.
+  - (i) The failing assertion is a **data-level** read: the headless Data API, MCP or the server's own API.
+  - (ii) For at least one field the test edited **in the UI**, it received exactly that field's **pre-edit value**.
+  - (iii) The web UI shows the **post-edit value** for the same item, in the attempt's `error-context.md` page snapshot or in its trace after the edit step.
+  - (iv) Every other field compared in that assertion has its expected value.
+- **Shape B, a startup failure.** The occurrence it is modelled on is run 40075823250 arm64: `tests/e2e/m2-s1/e2ee-unlock.spec.ts:181`, attempt 1.
+  - (i) The console has `root: Startup failure during task: buildStartupTasks/openDatabase`.
+  - (ii) The test fails in the app's first wait for its UI, before any action on notes, notebooks, tags or to-dos. That wait is a locator timeout on the first dialog or screen the app shows after loading.
+
+**T3, the qualifying console lines** (r1 gap 2). These come from the failed attempt's own `browser-console.log`, the file the harness attaches for that attempt; never from another test's or another attempt's log. Lines are matched as text, format `<ISO time> [<level>] <message>`.
+- **Line S (both shapes):** a `[warning]` line matching
+
+  `/^\S+ \[warning\] sqlite3_step\(\) rc= (-?\d+) /`
+
+  It qualifies when **both**:
+  - the captured rc is neither `0` nor `1`;
+  - and the line does **not** contain `CREATE VIRTUAL TABLE notes_spellfix USING spellfix1`. That line is the known, harmless startup warning: rc 1, `SQLITE_ERROR`, in every run.
+
+  Note the space after `rc=`: the worker prints `rc= <n>`.
+- **Line E, which must follow line S within 2 s:**
+  - **Shape A:** an `[error]` line containing `Could not save`.
+  - **Shape B:** the `[error]` line `root: Startup failure during task: buildStartupTasks/openDatabase`.
+- **The two known occurrences, verbatim** (the SQL is cut where the log cuts it):
+  - **Shape A, Pi, V1c**, copy in `~/joplin-web-app-work/spikes/DNS-1/evidence-v1c/…/browser-console.log` lines 581-582:
+    ```
+    2026-10-24T12:30:13.922Z [warning] sqlite3_step() rc= -1 undefined SQL = DELETE FROM settings WHERE key IN (…)
+    2026-10-24T12:30:14.637Z [error] 14:30:14: models/Setting: Could not save settings {type: error, dbId: db#1@…, messageId: exec#2297, …}
+    ```
+  - **Shape B, CI arm64, run 40075823250**, file `~/joplin-web-app-work/ci-evidence/40075823250/extracted/test-results-e2e-ubuntu-24.04-arm/test-results/e2e/output/m2-s1-e2ee-unlock-M2-S1-E2-8f8b5--error-nothing-is-decrypted-chromium/browser-console.log` lines 31 and 33:
+    ```
+    2026-10-24T08:12:53.157Z [warning] sqlite3_step() rc= 10 SQLITE_IOERR SQL = CREATE TABLE migrations (id INTEGER PRIMARY KEY, number INTEGER NOT NULL, updated_time INT NOT NULL, created_time INT NOT NULL);
+    2026-10-24T08:12:53.159Z [error] 10:12:53: root: Startup failure during task: buildStartupTasks/openDatabase
+    ```
+
+    So the CI `SQLITE_IOERR` **does** print as `sqlite3_step() rc= 10 SQLITE_IOERR …`. It is matched by line S and is not a different shape. The `rc= 1 SQLITE_ERROR SQL = ROLLBACK` line that follows it (line 32) is a consequence, not a qualifying line: rc 1.
+- **The time window:**
+  - **Shape A:** line S falls inside the failing step, or in the **60 s before that step starts** (V1c: 12:30:13.922, 5.9 s before step 6 began at 12:30:19.8). It must also fall **after** the start of the UI edit step whose value was lost (V1c: step 5, at 12:30:10.7).
+  - **Shape B:** line S falls within **60 s of the page's first navigation** in that attempt (CI: about 10 s after `goto`).
+
+**T4, every failed attempt qualifies on its own:**
+- Every failed attempt of the test (the first run and each CI retry) must meet T2 and T3 by itself, with its own lines. The two attempts may have different shapes.
+- A retry that passes makes the test **flaky**, which the report shows. A flaky test needs no tie.
+
+**T5, nothing else explains it.** In the attempt's window (from its first navigation to its failure), all of these must hold:
+- 0 `lookup` lines in the stack's `*_web_1.log`;
+- 0 Caddy `dial tcp` errors (502/504) in that log;
+- no F-R2 signature: a `Sync: cancelling` within 1 s of a Synchronise press, or "no delta request since the press";
+- no `SEED SYNC FAILED`;
+- no `info.json` post-condition error.
+
+**T6, the cap:** at most **one** tied test per arm64 runner per proof run. A second qualifying failure in the same run **blocks**: WEB-SQLITE-1 is then frequent enough to need its fix first.
+
+**T7, visibility:** a tied failure stays red or flaky in the report and in the job summary. It is never skipped, quarantined, or retried beyond the configured retries.
+
+**T8, expiry** (r1 gap 3):
+- The tie covers at most **three** e2e workflow runs of the combined branch, **counting proof run 5 as the first** (run 5, run 6, run 7). It ends at the end of proof run 7, or when M2-S3 merges to `main`, whichever comes first.
+- Every completed run counts, **re-runs of failed jobs included**. Re-running in search of a green result uses up the budget.
+- After expiry, WEB-SQLITE-1 failures block like any other.
+
+**T9, evidence, which the lead verifies** (r1 gap 5):
+- For each tied failure, V3's results quote, per failed attempt:
+  - the test title and the attempt number;
+  - the shape (A or B), and the T2 facts: for A, the field, the received pre-edit value, the expected value and the UI evidence location; for B, the failing wait;
+  - the qualifying lines S and E **verbatim**, with the artifact file path, the line numbers and the `sha256sum` of that `browser-console.log`;
+  - the T5 checks with their counts.
+- The status is **"tie claimed"** until the lead, in the next review round, has checked the quoted lines and the sha256 against the downloaded artifact (`~/joplin-web-app-work/ci-evidence/<run>/extracted/`), and confirmed T2 to T6. Only then is it "tie applied". Until then, the combined branch does not merge.
+
+### DNS1-AC5 stays decisive (r1 C1); its decision rule, tightened
+- **DNS-1 is not closed on the contract tests.** The fix covers one silent nameserver (about 5 s). It does not cover a first nameserver silent for longer than about 10 s, or both silent; r1 C1 is right that this is unproven. **Proof run 5 is what decides it.**
+- **The file set (made explicit):**
+  - every stack `web` log, meaning every `*_web_1.log` and every per-test `web*.log` attachment, after the scan's dedupe;
+  - plus the headless and device logs.
+  - **Excluded:** `test-results/contract/dns-1/**`, whose `web` containers produce deliberate fault-injection lines (c1-neg, c2-neg, c3a to c3d, dev1-neg). The scan already leaves them out, because their names (`nst-proxy-dns-web-*`) match neither pattern. V3 must **list** the files counted per runner, and state that no `contract/dns-1/` file is among them.
+- **The rule, per runner, replacing DNS1-C5's:**
+  - **PASS** needs all of these:
+    - 0 `lookup server … i/o timeout` lines **of any duration** (the old 3 s signature, about 5 s, about 10 s, or anything else);
+    - 0 Caddy `dial tcp` 502/504 error lines outside the tests that stop `server` on purpose (M1-AC20 and the like, each named in V3; their `no such host` NXDOMAIN lines are expected);
+    - 0 device logs with `Last error`, except `dev1-neg`'s own (deliberate, in `contract/dns-1/`, so outside the file set anyway);
+    - the evidence complete as in "Which run decides" (a) to (c).
+  - **FAIL:** anything else. A line at about 10 s means the hypothesis is wrong, which is a new finding, as r1 C1's scenario. A line at about 3 s means the image that ran lacks the fix. **Never a bound change.**
+  - **Informational, not a criterion:** proxied 200s with a `duration` of 4.5 s or more (episodes the fix absorbed). Server-originated 5xx (the upstream server's own errors, not Caddy `dial` errors) are listed with their URIs.
+- **x64 and arm64 are judged the same way.** No DNS tie exists on either runner.
+
+### Other r1 items for QA
+- **C2 (the timing windows):** the bounds stay as they are and remain planner-owned. If `c1`, `c1-neg` or `c2-neg` falls outside its window on a loaded runner in proof run 5, that is a FAIL that comes to the planner with its `timings.json`, not a widened bound. The executor never edits them.
+- **P1 to P4:** no QA action.
+
+### Merge resolution for the orchestrator (unchanged)
+When merging `feat/DNS-1-proxy-dns` into `test/M2-S2-ci-x64-arm64` (`--no-ff`), resolve the only conflict, `docs/test-plans/DNS-1.md` (add/add), by taking this branch's file **whole**. The merged file must contain this amendment section. V5 pre-flight checks that.
 
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
