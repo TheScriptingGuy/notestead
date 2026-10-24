@@ -188,3 +188,18 @@ None needs a workflow change that I recommend before the orchestrator decides on
 - I do not propose pointing `web` at an upstream IP or disabling `dns_enabled` on the CI network; both change the topology under test (ADR-0006).
 
 Method note: counts come from a scratch script in the session scratchpad (not committed) that reads each stack's `*_web_1.log` JSON lines and each stack's headless container log for its first timestamp. The raw files are under `~/joplin-web-app-work/ci-evidence/<run>/extracted/`.
+
+## Implementation (senior-engineer, 2026-10-24)
+
+Change, in `deploy/web/**` only: `transport http { dial_timeout 10s }` inside `reverse_proxy` of the `(joplin_server_proxy)` snippet in `deploy/web/Caddyfile`, with a comment (Go's resolver waits 5 s per nameserver, Caddy's default dial timeout is 3 s, and the value has to stay at most 15 s). Both listeners import the snippet. `deploy/web/README.md` has the behaviour note: a slow first nameserver costs up to about 5 s instead of a 502, and an unreachable server is a 502 within about 10 s (it was 3 s). Nothing else changed; no `tests/**`, `packages/**` or ADR edits.
+
+No ADR deviates. ADR-0006's name-based topology is kept. Upstream-first: this is plain Caddy configuration, no shim.
+
+Commands and outcomes (Pi, arm64, one job at a time, `NOTESTEAD_KEEP_IMAGE=1`):
+- `corepack yarn test:contract tests/contract/dns-1`: exit 0, 13 of 13 passed, 140 s. c1 6599 ms, c1b 6530, c2 6938, c2b 7094, c3d 11552 ms, c1-neg and c2-neg still see the 502 at about 3 s. dev1-c1 and dev1-neg pass.
+- `corepack yarn test:contract tests/contract/m1-s4`: exit 0, 4 suites, 29 of 29 passed, 85 s.
+- `corepack yarn jest -c jest.config.js tests/unit`: exit 0, 15 suites, 111 of 111 passed (includes `dns1-s1`).
+- `corepack yarn lint` (eslint, three tsc projects): exit 0.
+- A first attempt of the dns-1 run was lost because my own `pkill -f` killed the shell; it was rerun with no change to the code.
+
+Follow-ups: compose `dns_opt` (M5) and the CI `containers.conf` experiments (P1 to P3 above) stay with the orchestrator.
