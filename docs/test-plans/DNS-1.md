@@ -566,6 +566,127 @@ The evidence is in `test-results/e2e/output/m2-s2-notes-M2-S2-notes-in-ebbdc--an
 - **The merge recommendation is unchanged:** merge after the lead's APPROVE and the V4a record; AC5 is a post-merge gate.
 - **WEB-SQLITE-1 is an open finding for M2-S3.** It does not block DNS-1, and the orchestrator puts it in `STATUS.md`.
 
+## Planner ruling on the V1c' HARD STOP, and the combined-branch plan (2026-10-24)
+
+### (a) V1c' is F-R2. V1c and V1c' both count as "blocked by known non-DNS causes", not as a pass
+- **V1c' evidence:** `~/joplin-web-app-work/spikes/DNS-1/evidence-v1c-prime/`.
+  - `syncWebOnce` (`tests/e2e/support/flows.ts:79`, from `notes.spec.ts:134`) failed after 180 s with "no delta request since the press".
+  - Console: `Starting scheduled sync` at 12:51:15.835, then `Sync: cancelling` at 15.966 (131 ms later), then "Synchronisation was cancelled".
+  - This is F-R2 exactly (CI-M2-S2: "starting" then "cancelling" 190 ms later). It was fixed by the re-press, `78d3c4d`, on `test/M2-S2-ci-x64-arm64`. `main`, and so this branch, does not have it.
+  - Clean otherwise: no `rc= -1`, no `Could not save` (the one `sqlite3_step()` line is the known startup `spellfix1` warning, rc 1), 0 `lookup` lines, 0 5xx, the scan clean.
+- **Two runs, two causes, neither DNS-1:**
+  - V1c: **WEB-SQLITE-1** (a lost title save, with the browser SQLite write failure);
+  - V1c': **F-R2** (a known harness gap, fixed elsewhere).
+
+  Both stay recorded as **FAIL with their attribution.** DNS-1's E2E regression check is **not done on this branch**; it moves to the combined branch (V5 below). Nothing here is counted as a pass. The F-R2 failure is no evidence against DNS-1 either: the proxy answered every request with 200.
+- **Why not try again here:** a third run on this branch would only roll the same two dice. The harness that removes F-R2 already exists; it is on the other branch.
+
+### (b) The orchestrator's combined-branch plan: **accepted, with amendments**
+It supersedes my earlier "merge DNS-1 to `main` first, AC5 as a post-merge gate". `main` then gets only proven changes.
+
+1. **The lead reviews DNS-1 now.** The scope is the diff and the contract, unit and Pi evidence for DNS1-AC1 to AC4. The review states that DNS-1's E2E regression evidence and DNS1-AC5 come from the combined branch (V5, V3). APPROVE then means "approved to combine", not "done".
+2. **Merge `feat/DNS-1-proxy-dns` into `test/M2-S2-ci-x64-arm64`, `--no-ff`.**
+   - **The one conflict** (checked with `git merge-tree`; it is the only one): `docs/test-plans/DNS-1.md`, add/add. **Resolve it by taking `feat/DNS-1-proxy-dns`'s file whole** (`git checkout --theirs docs/test-plans/DNS-1.md`, seen from the CI branch). Its `## History` section already holds the CI branch's briefs verbatim.
+   - **Auto-merged, and checked by me in the merge tree:**
+     - `tests/stack/stack.ts`: `upDefault` still has `await enableE2ee` (line 489 of the merged file);
+     - `tests/e2e/support/fixtures.ts`: `await enableE2ee` (line 197);
+     - `docs/testing/strategy.md`.
+
+     No caller of `enableE2ee` lacks an `await`. V5 step 2 (lint and tsc) is the gate for the rest.
+3. **V5 (below):** the combined branch on the Pi. The full contract layer, then the full E2E suite, with the CI branch's harness.
+4. **Push the combined branch for proof run 5,** under the user's existing approval for that branch. That one run is both the CI-M2-S2 proof and the DNS1-AC5 evidence (V3), and also the DoD's x64 run of DNS-1's contract tests.
+5. **If the run meets the criterion below,** both merge to `main` together. `--no-ff` keeps both histories.
+
+**The merge criterion for proof run 5** replaces the CI-M2-S2 tie rule for finding I:
+- **x64:** every test passes.
+- **arm64:** every test passes, except failures tied to WEB-SQLITE-1 under the narrow tie below, if the user grants it.
+- **Both runners:** DNS1-AC5 passes (the scan's decision rule DNS1-C5), and the evidence is complete as defined in "Which run decides" (a) to (c).
+- **The finding-I tie rule is retired:** a `lookup server` failure is a regression, with no allowance.
+- **No F-R2 allowance either:** on this branch F-R2 is fixed, so a "no delta request since the press" failure is a regression of `78d3c4d`.
+
+### WEB-SQLITE-1: a narrow tie or block? **Recommendation: a narrow tie, time-boxed. The user decides.**
+Accepting a known red departs from the Definition of Done. So, as with finding I, **this is the user's decision.**
+
+**Why a tie:**
+- The defect sits in the browser database layer of the upstream web build, and is probably an upstream issue. It has nothing to do with either change being proven.
+- It has its own owner (M2-S3). Blocking would hold two finished, proven fixes (the proxy DNS fix and the CI harness) back for an investigation of unknown length.
+
+**Why narrow and time-boxed:** it can lose a user's edit silently. A loose allowance would hide exactly that.
+
+**The tie applies to a failed test only if all of these hold:**
+1. **Every** failed attempt of the test (the first run and the CI retry) has, in its own `browser-console.log`, at least one SQLite failure line before the failing assertion. A failure line is either `sqlite3_step() rc=` **other than** the startup `CREATE VIRTUAL TABLE notes_spellfix USING spellfix1` warning, or `Could not save`. A retry-pass is reported as a flake, as now.
+2. Neither attempt shows another cause: 0 `lookup` lines and 0 5xx in its `web.log` in the attempt's window; no F-R2 signature (`Sync: cancelling` within 1 s of a press, or "no delta request since the press"); no `SEED SYNC FAILED`.
+3. At most **one** tied test per runner. More than one means WEB-SQLITE-1 is frequent enough to block.
+4. The failure is **visible**: it is red or flaky in the report, never skipped, never retried beyond the configured retries.
+5. **The tie expires** when M2-S3 merges, or after the next 3 proof runs, whichever comes first.
+
+**If the user declines:** a WEB-SQLITE-1 failure blocks the combined merge, and M2-S3's WEB-SQLITE-1 work becomes a prerequisite. In either case, the orchestrator puts WEB-SQLITE-1 first in M2-S3's queue: it can lose data.
+
+### (c) Orders (executor). The rules of "Work orders" apply, including HARD STOP
+
+#### V1d: Quick checks on `feat/DNS-1-proxy-dns` (no commit), now
+`corepack yarn jest tests/unit` and `corepack yarn lint` at HEAD. Both must be green; record the counts. **HARD STOP** on any red.
+
+#### V4a': Results on this branch (`docs(test-plans)` commit), now, then HARD STOP
+1. Append `## Results (VERIFY, Pi arm64, 2026-10-24, feat/DNS-1-proxy-dns)`.
+2. **Per AC**, each with its command, duration and log paths. Use the copies in `~/joplin-web-app-work/spikes/DNS-1/evidence-*` where `test-results/` has been overwritten.
+
+   | AC | Status | Evidence |
+   |---|---|---|
+   | DNS1-AC1 | PASS | c0, c1, c1b, c1-neg; the timings in "QA review of the implementation" and from V1b |
+   | DNS1-AC2 | PASS | c2, c2-neg, c2b; `extraKeys` and the listing path |
+   | DNS1-AC3 | PASS | c3a to c3d |
+   | DNS1-AC4 | PASS (contract and unit) | dev1-c1, dev1-neg, dev1-u1; V1b seeded every contract suite through the hardened device with 0 `SEED SYNC FAILED`; the E2E part is PENDING (V5) |
+   | DNS1-AC5 | PENDING (V3, proof run 5) | |
+3. **Regression runs:**
+   - **V1b:** 15 of 16, plus m1-s7 alone with `NOTESTEAD_WEB_ARTIFACT` (11 of 11). Deviation: the planner's command omitted the variable. Add the scan summary.
+   - **V1c:** 13 of 14, M2-AC3 FAIL, WEB-SQLITE-1. Quote the two console lines and give the path.
+   - **V1c':** M2-AC3 FAIL, F-R2. Quote the starting and cancelling lines and give the path.
+   - **Verdict line:** "E2E regression evidence for DNS-1: blocked by known non-DNS causes on this branch; moved to V5 on the combined branch."
+   - **V1d:** its counts.
+4. Commit: `docs(test-plans): DNS-1 VERIFY results on the story branch (Pi arm64)`.
+5. **HARD STOP** and report. The lead review follows.
+
+#### V5: The combined branch on the Pi (after the lead's APPROVE and the orchestrator's merge; no commit until step 6)
+1. **Pre-flight:**
+   - check out the combined `test/M2-S2-ci-x64-arm64`, with a clean status;
+   - `git log --oneline -1` shows the merge commit, and `git show --stat HEAD` shows the DNS-1 files;
+   - no `nst-*` leftovers in podman;
+   - move `test-results/` aside to `~/joplin-web-app-work/spikes/DNS-1/test-results-pre-v5/`.
+2. Run `corepack yarn lint` and `corepack yarn jest tests/unit`. Both must be green, or **HARD STOP**: a merge that type-checks wrongly is reported, not fixed.
+3. **The full contract layer.** In the background, with a 120 min timeout:
+
+   `NOTESTEAD_KEEP_IMAGE=1 NOTESTEAD_WEB_ARTIFACT=<the same value V1b's m1-s7 re-run used> corepack yarn test:contract --verbose --json --outputFile=test-results/contract/jest-results.json > test-results/contract/v5-full.log 2>&1`
+
+   Expected: every suite green, including `tests/contract/dns-1` 13 of 13. Then run `node tests/harness/tools/scan-proxy-dns.ts test-results/contract`. Expected: 0 old-signature lines; the `Last error` count is only `dev1-neg`'s; NXDOMAIN only from ac20.
+4. **The full E2E suite**, only after step 3 is green. In the background, with a 120 min timeout. Use **the exact command and environment of the CI-M2-S2 plan's last accepted full local run** (its WO-11 / round-3 results: under the CI locale, with its `NOTESTEAD_*` variables). Read them from `docs/test-plans/CI-M2-S2-x64-arm64.md` and record them; redirect the output to `test-results/e2e-v5-full.log`.
+
+   Expected: every test passes, the LOC specs included (16 tests, not 14). Then run `node tests/harness/tools/scan-proxy-dns.ts test-results`. Also run `grep -l "sqlite3_step() rc=\|Could not save"` over every `browser-console.log`, and list each hit, leaving out the startup `spellfix1` line.
+5. **HARD STOP:**
+   - **on any failure in step 3;**
+   - **on any failure in step 4.** Classify it first, record it, then stop:
+     - WEB-SQLITE-1: the tie conditions 1 and 2 above;
+     - F-R2: now a regression;
+     - DNS: any `lookup` line or 5xx;
+     - other.
+
+     Copy its output to `~/joplin-web-app-work/spikes/DNS-1/evidence-v5/`, with `MANIFEST.sha256`. A WEB-SQLITE-1-classified failure is still a stop: the planner and the user's tie decision rule on it.
+6. **If everything is green:** append `## Results (V5, combined branch, Pi arm64, <date>)` to `docs/test-plans/DNS-1.md` on the combined branch, with the per-AC update: AC4's E2E part, and DNS-1's E2E regression check. Commit: `docs(test-plans): DNS-1 V5 on the combined branch (Pi arm64)`. Then **HARD STOP** and report. The orchestrator pushes for proof run 5.
+
+#### V3: Proof run 5 (after the push; dispatched separately)
+As written in "V3: CI evidence", on proof run 5's artifacts, plus:
+1. Apply the merge criterion above per runner, including the WEB-SQLITE-1 tie if the user granted it.
+2. Append `## Results (CI, proof run 5, run <id>)` to `docs/test-plans/DNS-1.md` **and** a short cross-reference in `docs/test-plans/CI-M2-S2-x64-arm64.md` on the combined branch. Commit.
+3. **HARD STOP.** The planner gives the final sign-off for DNS-1 and CI-M2-S2, or opens a finding.
+
+### QA status after this ruling
+**Pending.**
+- **AC1 to AC3:** PASS on the Pi (the contract layer).
+- **AC4:** PASS at the contract and unit level; E2E pending V5.
+- **AC5:** pending proof run 5.
+- **The DNS-1 E2E regression check:** blocked on this branch by known non-DNS causes (WEB-SQLITE-1, F-R2); moved to V5.
+- **For the user, through the orchestrator:** the WEB-SQLITE-1 tie, recommended narrow and time-boxed.
+
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
 Kept as written; both were delivered in `docs/worklog/DNS-1.md` (8513a0d, 0753528).
