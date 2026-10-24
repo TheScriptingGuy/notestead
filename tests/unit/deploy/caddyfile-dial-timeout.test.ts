@@ -18,10 +18,12 @@ const blockAt = (text: string, open: number): string => {
 	throw new Error('unbalanced braces');
 };
 
+// The block opened by the line the pattern matches: it opens at that line's LAST `{` (a `{$VAR}` placeholder earlier on
+// the line is not a block).
 const blockAfter = (text: string, pattern: RegExp): string => {
 	const m = pattern.exec(text);
 	if (!m) throw new Error(`no match for ${String(pattern)}`);
-	return blockAt(text, m.index + m[0].length - 1);
+	return blockAt(text, m.index + m[0].lastIndexOf('{'));
 };
 
 const seconds = (value: string): number => {
@@ -32,8 +34,10 @@ const seconds = (value: string): number => {
 
 describe('deploy/web/Caddyfile dial timeout (DNS-1)', () => {
 	test('dns1-s1 the joplin_server_proxy reverse_proxy sets transport http dial_timeout from 6 s to 15 s', () => {
-		const snippet = blockAfter(caddyfile, /^\(joplin_server_proxy\)[ \t]*\{/m);
-		const proxy = blockAfter(snippet, /reverse_proxy[^\n{]*\{/);
+		const snippet = blockAfter(caddyfile, /^\(joplin_server_proxy\)[ \t]*\{[ \t]*$/m);
+		const proxy = blockAfter(snippet, /^[ \t]*reverse_proxy\b[^\n]*\{[ \t]*$/m);
+		// Sanity: this is the proxy block (it holds the Host rewrite), so a wrong block fails here and not at `transport`.
+		expect(proxy).toContain('header_up Host');
 		const transport = /transport[ \t]+http[ \t]*\{/.exec(proxy);
 		expect(transport).not.toBeNull();
 		const body = blockAt(proxy, (transport as RegExpExecArray).index + (transport as RegExpExecArray)[0].length - 1);
