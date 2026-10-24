@@ -340,6 +340,121 @@ WO-9's RED section also records:
 - the corrected counts;
 - every deviation, with D3's verdict on it.
 
+## QA review of the implementation and the VERIFY plan (planner, 2026-10-24)
+
+**The executor's WO-7a to WO-9:** `625b1d2`, `266c0ed`, `39385b8`, `db41d01` and `b7e5521`, with no HARD STOP. The s1 matrix, the u5 mutations, the WO-7d RED and the WO-7e fix simulation (13/13) all match D1 to D3. **Accepted.**
+
+### The SE diff (`385718b`, `5d59f5c`) against "What the senior engineer implements"
+- **`deploy/web/Caddyfile`:** exactly the planned block, `transport http { dial_timeout 10s }`, inside `reverse_proxy` of `(joplin_server_proxy)`, with the required comment (Go's 5 s per nameserver, Caddy's 3 s default, stay at most 15 s). Nothing else changed. **OK.**
+- **`deploy/web/README.md`:** the behaviour note as asked. **OK.**
+- **`docs/worklog/DNS-1.md`:** the implementation section, the commands, "no ADR deviates", and the follow-ups. **OK.**
+- **V2, test integrity (done by reading):** `git log --format='%h %an %s | %(trailers:key=Agent,valueonly)' main..HEAD -- tests/` lists 7 commits, all `Agent: qa-specialist`: `0be311d`, `8e00acb`, `630507f`, `a334db3`, `625b1d2`, `266c0ed`, `39385b8`. **The SE did not touch `tests/**`.**
+- **The "c1 6.6 s" question:** **within tolerance, and not a regression.**
+  - The SE quoted Jest's **test durations**: 6599, 6530, 6938, 7094 and 11552 ms. Those include starting the fresh `web` container.
+  - The request times the bounds apply to are in `test-results/contract/dns-1/proxy-dns/timings.json`, written 13:18:22 by the run whose `Caddyfile.image:73` carries `dial_timeout 10s`:
+
+    | Case | Status | Elapsed |
+    |---|---|---|
+    | c0 | 200 | 12 ms |
+    | c1 | 200 | 5011 ms (Caddy's own log: `"duration":5.0067`) |
+    | c1b | 200 | 5015 ms |
+    | c2 | 200 | 5252 ms (extra keys `is_locked`, `extracted_resource_ids`; listing `children`) |
+    | c2b | 200 | 5239 ms |
+    | c1-neg | 502 | 3006 ms (`removedBlocks` 1) |
+    | c2-neg | 502 | 3009 ms |
+    | c3a | 502 | 14 ms |
+    | c3b | 502 | 6 ms |
+    | c3c | 502 | 3080 ms |
+    | c3d | 502 | 10007 ms |
+    | dev1-neg | exit 3, no `RESULT` | 32.9 s |
+
+    These equal the WO-7e simulation to within 15 ms, and every bound has a margin of 4 s or more.
+  - The mounted `resolv.base` is `search dns.podman` / `nameserver 10.89.200.1` (podman 5.4.2: aardvark only, no host resolver).
+  - **Process note for the lead (non-blocking):** worklog evidence should quote `timings.json`, not Jest durations. `test-results/` is not committed, so V4 copies these figures into `## Results`.
+
+### Which VERIFY steps need a heavy run
+- **V1: two heavy runs are needed. Reading is not enough here.**
+  - WO-4 changed the E2EE device (`tests/fixtures/m1-s5/device/device.mjs`), and made `enableE2ee` async with a server-side `info.json` post-condition. Every E2E test (`tests/e2e/support/fixtures.ts:176`, `upDefault`) and the m1-s5, m1-s6, m1-s6a and m1-s7 contract suites run through these.
+  - The SE's change sits on the `:8089` path the headless syncs through.
+  - Neither the full contract layer nor the full E2E suite has run since. Unit, `tests/contract/dns-1` and `tests/contract/m1-s4` have run (SE), and I read their evidence; they are not repeated except as part of the full contract run.
+- **V2:** done above, by reading.
+- **V3 (DNS1-AC5):** CI only. Decided below.
+- **V4:** after V1 (Pi) and again after V3.
+
+### DNS1-AC5: recommendation
+**Merge DNS-1 to `main` after the lead's APPROVE and a green V1, with DNS1-AC5 as an explicit post-merge gate. Don't ask for a branch push.** Why:
+- A `main` push is covered by the user's standing approval. A branch push would need a new approval and a round trip, for the same evidence.
+- The fix can only remove the old signature. With a 10 s dial timeout, a 502 at 3 s from a lookup cannot happen. The AC3 guards (`c3a` to `c3d`, 15 s) bound the downside, and the fix simulation, the SE run and the negatives all agree.
+- If AC5 fails, the cause is that the hypothesis is wrong (both nameservers silent for more than 10 s), not that the fix is harmful. That means a new investigation story, fix-forward, **not a revert**.
+
+**Conditions:**
+- `STATUS.md` shows DNS-1 as "merged, DNS1-AC5 pending", not done, until V3 passes. QA's final sign-off is given only then.
+- **The tie rule is retired only after V3 passes,** and only then does proof run 5 of `test/M2-S2-ci-x64-arm64` lose its finding-I allowance.
+- **Which run decides:** the first CI e2e run that contains `385718b` and has **complete artifacts on both runners**. On each runner, "complete" means:
+  - (a) the contract `jest-results.json` shows `tests/contract/dns-1` 13 of 13 passed. This is also the DoD's x64 run of the AC1 to AC4 tests;
+  - (b) `test-results/contract/dns-1/proxy-dns/Caddyfile.image` contains `dial_timeout 10s`, so the image that ran has the fix;
+  - (c) the stack `*_web_1.log` files are present.
+
+  `main` does not yet have CI-M2-S2's artifact and timeout fixes (`globalTimeout`, the immediate failure line), so its run can be red on arm64 for known M2-S2 reasons, or lose artifacts. If (a) to (c) don't hold on both runners there, **proof run 5 decides instead.** A red `main` run for reasons other than DNS does not fail DNS1-AC5.
+- **An informational figure, not a pass criterion:** proxied requests in the stack access logs with status 200 and `duration` of 4.5 s or more. These are episodes the fix absorbed. They show whether the CI fault still happens.
+
+### VERIFY work orders (executor). The rules of "Work orders" apply, including HARD STOP
+
+#### V1a: Pre-flight (no commit)
+1. The branch is `feat/DNS-1-proxy-dns`, the HEAD is the planner's sign-off commit or later, and `git status` is clean.
+2. As WO-0: `podman ps -a` / `network ls` hold no `nst-*` leftovers. `NOTESTEAD_KEEP_IMAGE=1` is set for every run.
+3. Move the existing `test-results/` aside to `~/joplin-web-app-work/spikes/DNS-1/test-results-pre-verify/`, so V1's scans see only V1's output.
+
+#### V1b: The full contract layer on the Pi (no commit)
+1. In the background, with a 120 min timeout:
+
+   `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract --verbose --json --outputFile=test-results/contract/jest-results.json > test-results/contract/verify-full.log 2>&1`
+2. **Expected:** every suite passes, including `tests/contract/dns-1` (13 of 13) and m1-s5, m1-s6, m1-s6a and m1-s7, which seed through the hardened device.
+3. Then run `node tests/harness/tools/scan-proxy-dns.ts test-results/contract`. **Expected:**
+   - 0 old-signature lines;
+   - 0 device logs with `Last error`;
+   - 0 `SEED SYNC FAILED`;
+   - NXDOMAIN lines only from the suites that stop `server` on purpose (list them).
+4. **HARD STOP** on any failed test or any unexpected scan count. Record:
+   - the failing test, and the first error;
+   - any `lookup` line in that stack's web log within ±5 s;
+   - any `SEED SYNC FAILED` or `info.json` post-condition message.
+
+   Copy the logs. Don't re-run.
+
+#### V1c: The full E2E suite on the Pi (no commit; only after V1b is green)
+1. In the background, with a 120 min timeout:
+
+   `NOTESTEAD_KEEP_IMAGE=1 corepack yarn playwright test > test-results/e2e-verify-full.log 2>&1`
+
+   Use the repository's config as is: 1 worker, its own retries.
+2. **Expected:** every test passes. A retry-pass is reported as a flake with its first-attempt error; it is not hidden.
+3. Then run `node tests/harness/tools/scan-proxy-dns.ts test-results`. The expectations are as in V1b.
+4. **HARD STOP** as in V1b.
+
+#### V1d: Quick checks (no commit)
+Run `corepack yarn jest tests/unit` and `corepack yarn lint` at HEAD. Both must be green.
+
+#### V4a: Results (Pi) (`docs(test-plans)` commit), then HARD STOP
+1. Append `## Results (VERIFY, Pi arm64, <date>)` to this file.
+2. For each of DNS1-AC1 to AC4, give PASS or FAIL with the command, the duration, the `timings.json` figures and the log paths under `test-results/`.
+3. List DNS1-AC5 as **PENDING (V3)**.
+4. Add the full-contract and E2E totals, each with its scan summary.
+5. Commit: `docs(test-plans): DNS-1 VERIFY results (Pi arm64)`.
+6. **HARD STOP** and report.
+
+#### V3: CI evidence (after the merge to `main` and its CI run; dispatched separately)
+1. The ci-cd-specialist downloads the run's artifacts to `~/joplin-web-app-work/ci-evidence/<run>/extracted/`, as before. It also confirms conditions (a) to (c) per runner.
+2. The QA executor runs `node tests/harness/tools/scan-proxy-dns.ts ~/joplin-web-app-work/ci-evidence/<run>/extracted`. It applies the DNS1-C5 decision rule per runner, adds the informational figure (absorbed episodes), and records each runner's `resolv.base` from the dns-1 results. That answers ci-cd question 3.
+3. It appends `## Results (CI, run <id>)` and commits.
+4. **HARD STOP**, and the planner gives the final sign-off or opens a new finding.
+
+### QA status
+**Pending.** No sign-off yet.
+- **AC1 to AC4:** the evidence on the Pi is green for the units, `dns-1` and `m1-s4`; V1b to V1d are still to run.
+- **AC5:** pending V3.
+- **Disputes:** none were raised.
+
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
 Kept as written; both were delivered in `docs/worklog/DNS-1.md` (8513a0d, 0753528).
