@@ -123,3 +123,68 @@ Changing `dial_timeout` alters a Caddy default, not upstream Joplin: no patch an
 - **Cleanup.** Both stacks (`nst-dev-mvm3pvrs4047b1`, `nst-dev-mvm67sms04f264`) were removed with `cli.ts down`; scratch containers `dns1-probe`, `dns1-silent`, `dns1-vA..E` and temporary `dns1-tmp-*` networks removed. `podman ps -a` shows only the user's `byparr`, networks only `byparr_default` and `podman`. `git status` is clean apart from this file.
 - **Follow-ups:** (a) orchestrator decision on the fix (section 5); (b) M5: put `dns_opt` in the user compose; (c) confirm the aardvark-dns version and the reload hypothesis on the runner (ci-cd-specialist part); (d) the headless readiness retry of 30 s makes every transient 502 cost 33 s; a shorter first retry would shrink the visible window (headless story, out of scope here).
 - The brief's ci-cd-specialist section (per-runner tabulation, runner versions, host resolv.conf chain) is not part of this worklog; I only read the retained logs in `~/joplin-web-app-work/ci-evidence/` for the cross-checks above.
+
+## Runner side (ci-cd-specialist)
+
+Read-only. No workflow, setting or runner change was made or applied. Data: the retained artifacts and job logs of e2e runs 39663284028, 39768694985, 39957733152, 40020973008 and 40075823250 (head 24e6c99) in `~/joplin-web-app-work/ci-evidence/<run>/`. Timestamps are UTC. "Stack" means one compose project (a `web` container log). Reproducible with the scratch script described at the end.
+
+### 1. Lookup-timeout lines per runner and container
+
+Counted from the stack `*_web_1.log` files (the Caddy JSON lines with `"msg":"dial tcp: lookup server: i/o timeout"`). The NEG `web-nohost-*` containers (separate Host-rewrite-free web) logged 0 lines in every run. No other container logs the Caddy line; `headless` shows the effect as `initial cycle failed: the sync target did not answer /api/ping before the sync (HTTP 502)`.
+
+| Run | Runner | Stacks (with lines / total) | `web` lines | After latest headless start: 0-60 s / 60-300 s / over 300 s | First line, s after `web` start (per stack) |
+|---|---|---|---|---|---|
+| 39663284028 | x64 | 1 / 7 | 1 | 1 / 0 / 0 | 44 |
+| 39663284028 | arm64 | 1 / 7 | 4 | 3 / 1 / 0 | 16 |
+| 39768694985 | x64 | 2 / 7 | 8 | 7 / 1 / 0 | 40, 135 |
+| 39768694985 | arm64 | 3 / 7 | 17 | 7 / 10 / 0 | 16, 39, 123 |
+| 39957733152 | x64 | 2 / 7 | 29 | 20 / 9 / 0 | 39, 70 |
+| 39957733152 | arm64 | 3 / 7 | 20 | 11 / 9 / 0 | 17, 30, 35 |
+| 40020973008 | x64 | 3 / 7 | 15 | 9 / 5 / 1 | 15, 16, 308 |
+| 40020973008 | arm64 | 4 / 8 | 47 | 32 / 15 / 0 | 15, 16, 16, 32 |
+| 40075823250 | x64 | 4 / 8 | 29 | 24 / 5 / 0 | 15, 16, 26, 107 |
+| 40075823250 | arm64 | 2 / 8 | 63 | 20 / 43 / 0 | 32, 34 |
+| **Total** | x64 | 12 / 36 | 82 | | |
+| **Total** | arm64 | 13 / 37 | 151 | | |
+
+Facts:
+- 225 of the 233 lines carry `"duration"` 3.00x s (Caddy's `dial_timeout`); the other 8 carry 0.0 s.
+- No line in any stack precedes the start of the first headless container of that stack ("before any headless joined": 0 of 233). In the simple stacks (guard-position, `ac18-up`; one `server`, one `web`, the default headless) the first line is at +15 to +17 s after `web` start, the default headless started at +11 to +12 s.
+- Caveat on that fact: the headless supervisor's first `/api/ping` is the first request that needs a fresh dial, so "no failures before a headless joined" is partly because nothing else dials. It does not separate "headless joining `back` breaks aardvark" from "failure is random and first seen when there is traffic". In the long E2E stacks, 18 to 629 proxied requests with status 200 precede the first failure, and failures later come in bursts roughly 3 s apart (one 3 s dial each) that last 20 to 100 s.
+- Failure windows are not tied to a headless start: in run 40075823250 arm64 the E2E stack had 62 lines, 43 of them 60 to 300 s after the latest headless start.
+
+### 2. Versions on the runners
+
+From the job logs (step "Podman and the pinned podman-compose", `.github/actions/podman`):
+- `podman version 4.9.3`, Go 1.22.2, `podman-compose version 1.3.0`, `cgroupManager=systemd cgroupVersion=v2 eventLogger=journald rootless=true graphDriver=overlay runRoot=/run/user/1001/containers`, on both `ubuntu-24.04` (linux/amd64) and `ubuntu-24.04-arm`.
+- **netavark and aardvark-dns versions are not in any retained log or artifact.** No step runs `podman info` with network fields, and `dpkg -l` is not run. A search of all five runs for `netavark` finds nothing; the only `aardvark` hit is `Terminate orphan process: pid (57927) (aardvark-dns)` in the cleanup of run 39663284028.
+- Not confirmed. A web search of the Ubuntu noble archive was inconclusive (it lists 1.4.0-4 and 1.6.0-1ubuntu1 for both packages without saying which noble ships). Treat "aardvark-dns about 1.4" in section 3 above as unverified. One read-only log step would settle it (proposal P1 below).
+
+### 3. Does the host `resolv.conf` (127.0.0.53) reach the containers?
+
+- **Not answerable from the retained logs.** No log or artifact contains `127.0.0.53` or `nameserver` (all five runs searched). The Caddy error has no `on <ip>:53`, so it does not name the nameserver that was silent.
+- Indirect, labelled as such: `server` is a container name on `front`, so aardvark answers it from its own records and only forwards unknown names to the host resolver. A host stub (127.0.0.53) would matter only for external names, and `web` resolves none. So a host-resolver leak is unlikely to explain `lookup server` failures. This is reasoning, not an observation.
+- Mechanism seen on the Pi (section 2 above) is the better lead: two aardvark gateways in `resolv.conf` (front, then back), Go waits 5 s per server, Caddy gives up at 3 s.
+
+### 4. New runner-side evidence from run 40075823250
+
+The same DNS episodes also break the test seeding, not only the proxied requests. Across the five runs, 3 of 202 `device-*.log` files (some are copies inside report folders) (the throwaway CLI "device" that enables E2EE and uploads the seed) contain `Completed: ... (39s) Last error: Error: Error 502 Bad Gateway`:
+- run 39957733152 arm64, `contract/m1-s6a/c1/stack/device-7825a393.log` (the 600 s `headlessService` wait);
+- run 40075823250 x64, `contract/m1-s6/ac20/stack/device-0bca5973.log` (a 420 s fixture timeout);
+- run 40075823250 arm64, `e2e/stack/device-803d774f.log` (M2-AC3 attempt 1, a 420 s fixture timeout; the retry passed).
+
+In the x64 case the web log shows eight consecutive `POST /joplin-server/api/sessions` 502s, each `"duration":3.0`, from 08:09:21.357 to 08:10:03.518 (the device's login, retried by the CLI until it gave up after 39 s). The device still exits 0 and prints `RESULT`, but it never uploaded the master-key info. The headless container for that account then loops: `[joplin e2ee decrypt] DecryptionWorker: cannot start because no master key is currently loaded.` then `initial cycle failed: e2ee decrypt exited with code 1; retrying in 30 s` (13 times in 420 s), `/healthz` stays 503 `starting`, `lastSync none`. In all three cases this is the only cause I found for the headless readiness timeouts; in the other runs' passing per-test headless starts the device log has no `Last error`.
+
+This is a harness finding as well as a DNS one (the device command should fail on `Last error`), which is outside this brief and goes to QA.
+
+### 5. Proposals (not applied)
+
+None needs a workflow change that I recommend before the orchestrator decides on the Caddy fix.
+
+- **P1, evidence first (read-only, one extra log step in `e2e.yml`, ci-cd-owned):** in the podman action, print `podman info --format '{{json .Host.NetworkBackendInfo}}'` (netavark and aardvark-dns versions and paths), `dpkg-query -W podman netavark aardvark-dns` and, from one throwaway container, `cat /etc/resolv.conf`. It settles sections 2 and 3 in the next run for the cost of seconds.
+- **P2, a runner setting that shortens the hop without touching `deploy/` (reversible):** a per-job `~/.config/containers/containers.conf` with `[containers]` `dns_options = ["timeout:1", "attempts:2"]`. Every container, including `web`, gets that `options` line, so a silent gateway costs 1 s instead of 5 s. Caveat: it hides the weakness in CI instead of fixing it for users; the Caddyfile `dial_timeout` fix (section 5 above) is the one that protects a self-hosted user, and it should be proven first. If both are in place a CI pass no longer shows the user-facing risk. I would use P2 only as an A/B experiment, not as a permanent setting.
+- **P3, remove the second DNS hop at the source (experiment only):** on a throwaway run set `[network] network_backend = "cni"` in the same `containers.conf` (podman 4.9 supports it with the `dnsname` plugin on Ubuntu) to see whether the failures follow aardvark-dns. It changes the network stack under test and invalidates the Pi parity (Pi: netavark 1.14), so it is a diagnosis, not a fix.
+- **P4, newer netavark and aardvark-dns on the runner:** not available from the Ubuntu 24.04 archive for podman 4.9.3. A source or PPA install is a supply-chain change (hash-pinning needed) and I do not recommend it before P1 shows the actual versions.
+- I do not propose pointing `web` at an upstream IP or disabling `dns_enabled` on the CI network; both change the topology under test (ADR-0006).
+
+Method note: counts come from a scratch script in the session scratchpad (not committed) that reads each stack's `*_web_1.log` JSON lines and each stack's headless container log for its first timestamp. The raw files are under `~/joplin-web-app-work/ci-evidence/<run>/extracted/`.
