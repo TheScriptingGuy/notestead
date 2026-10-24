@@ -764,3 +764,39 @@ Each contract run untagged `localhost/notestead-test-device:3.7.1`. I re-tagged 
 
 ### Podman
 Only `byparr` remains as a container. Kept test-labelled images: `localhost/notestead-test-device:3.7.1` (`5d1a82bfa27a`), `localhost/notestead-headless:stack-test` (`1ba8748a155a`), `localhost/notestead-web:stack-test` (`f8dfe49b2c6b`).
+
+## Round 4 review, the user's DNS-1 decision and QA sign-off (2026-10-24)
+- **Reviewed `d953a1d` (RED), `3e499ae` (GREEN) and `a1170c2` (results). They match WO-20 and WO-21, and nothing is weakened.**
+  - `selfTestHealthy` keeps podman `healthy` for `server` and `web`, and needs `/healthz` 200 for `headless`.
+  - The inner spec records `/healthz` in `health.json`, and its message names the rule and the observed values.
+  - S-H1 passed. S-H2 failed as required (`… observed: podman health healthy, /healthz 503 starting`). The first S-H2 attempt, which did not apply its edit, is kept as `sens/unedited-pass.log` and is not counted.
+- **The deviation is accepted.** The outer `ac18-stack.test.ts` asserted `health === 'healthy'` for every service, on the values recorded in `health.json`. It now applies `selfTestHealthy` to those same recorded values.
+  - **Strength for `server` and `web`:** identical to before.
+  - **For `headless`:** the assertion now requires a recorded `/healthz` 200. A missing or failed probe gives `undefined`, so `false`. It no longer fails on podman lag alone, which is the point of H.
+  - **Unchanged:** the outer check stays as independent as before, since it always read the inner run's recorded values. `ac18-neg` is untouched.
+- **The Jest counts differ because the commands differ, not the tests.**
+  - Round 3 ran the harness layers: `corepack yarn jest tests/unit/harness tests/integration/harness`, 18 suites, 112 tests.
+  - Round 4's `r4/jest.log` ran the whole repo. It starts with `packages/web-build` and `packages/headless`, so it includes the product suites: 44 suites, 357 tests.
+  - Both are green.
+
+### The user's decision (2026-10-24): split into DNS-1
+Finding I goes to its own story, **DNS-1** (`docs/test-plans/DNS-1.md`, with the senior-engineer and ci-cd briefs). The orchestrator dispatches those after this branch's review.
+
+**Merge criterion for proof run 4:** the branch merges when **all** of these hold:
+1. **x64:** contract and E2E fully green; E2E flaky 0 with every `retry: 0`; the ci workflow green.
+2. **arm64:** contract and E2E green, **except** failures that each meet the DNS-1 tie below. A failure that doesn't meet it blocks the merge as usual.
+3. **The DNS-1 tie (all three, per failed attempt):**
+   - (a) the test is one whose failure is a 502, or an `Invalid origin`-free proxy error, from a request through `web` to `/joplin-server/api/*`. Concretely: **M1-AC21 NEG**'s positive-control ping (`walking-skeleton.spec.ts`, "the only difference" step), or any E2E/contract step whose error names HTTP 502 from the proxy, or the web app's `Last error` naming a 502;
+   - (b) the stack's `web.log` (or that test's attached `web.log`) has a `dial tcp: lookup server: i/o timeout` line **within the same second** as the failing request's timestamp (from the trace, network log or error time);
+   - (c) the failure is listed in the plan's run-4 section with the test ID, the attempt, the request time and the `web.log` line.
+
+   A DNS-1-tied failure **stays red** in the run. It is never skipped, and never retried or annotated away. If a test passes only on its retry, that still counts as flaky, and a flake outside the DNS-1 tie blocks the merge.
+4. All the earlier must-show items still hold: LOC-01/02, M2-AC3 with `trash-exit`, M2-AC5 with no 600 s wait, `ac18-stack` and `c1-pertest-secrets` passing, the reports and the gate complete.
+
+**Watch items:**
+- **B:** closes with run 4 if no non-DNS-1 timeout occurs.
+- **C:** M1-AC21 NEG's flake is reclassified as DNS-1 evidence when tied, and closes as a harness item.
+
+**QA sign-off on arm64 (Pi): YES for round 4 (H).** The evidence: `ac18-health-01…03`, S-H1, S-H2, the `m1-s6` contract suite 18 of 18, lint, and Jest.
+
+**The whole CI-M2-S2 fix-forward, A to H, is QA-signed on arm64.** Proof run 4 is **PENDING**, to the merge criterion above.
