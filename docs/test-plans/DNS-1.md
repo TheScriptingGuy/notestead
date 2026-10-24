@@ -455,6 +455,117 @@ Run `corepack yarn jest tests/unit` and `corepack yarn lint` at HEAD. Both must 
 - **AC5:** pending V3.
 - **Disputes:** none were raised.
 
+## Planner ruling on the V1c HARD STOP (2026-10-24)
+
+**V1b:** green. 15 of 16 suites passed in the full run. m1-s7 failed only because the V1b command I wrote lacked `NOTESTEAD_WEB_ARTIFACT`. **That is my order's omission, not a test or product defect.** The orchestrator's ruling (re-run m1-s7 alone with the variable: 11 of 11) stands, and V4a records it as a deviation. Scan: 0 old-signature lines; 1 NXDOMAIN (ac20, which stops `server` on purpose); 1 `Last error` device log, which is the `dev1-neg` control, as expected.
+
+**V1c:** 13 of 14 passed in 35.1 min. The one failure is M2-AC3, `tests/e2e/m2-s2/notes.spec.ts:102`, step 6. The headless REST note `95f1a980…` has body B2 but title T1 after the edit cycle. There are 14 tests and not 16 because `main` does not have the CI-M2-S2 LOC-01/02 specs; that is expected.
+
+### (a) Is it F-R2? **No.** Is it caused by DNS-1? **No.**
+The evidence is in `test-results/e2e/output/m2-s2-notes-M2-S2-notes-in-ebbdc--and-one-headless-sync-each-chromium/` (the trace, `network.log`, `browser-console.log`, `web.log`, `supervisor.log`). All times are UTC.
+
+**F-R2's signature is absent.** F-R2 is a press that cancels the app's own sync, so no delta follows, and `syncWebOnce` times out with "no delta request since the press". Here:
+- the press is at 12:30:21.194 (trace);
+- a sync starts at 21.413, uploads the note (`PUT …95f1a980….md:/content` 200 at 22.296, `web.log`), and makes its delta request after the press (22.957);
+- the side menu then reports `Completed:` (innerText at 24.825);
+- the console has **no** "cancelling" line in the edit cycle.
+
+`syncWebOnce` succeeded. The re-press fix (`78d3c4d`) would not have pressed again.
+
+**The headless is not at fault either.** Its restart sync (12:30:39 to 41) requests the delta from the web's last cursor (`C4s8…`) and downloads the note's content at 12:30:40.294, after the web's last upload. "Updated local items: 1" means the note itself. "Created: 1" is a revision.
+
+**What failed is the web app's own copy of the title.**
+- **What the server has:** the server's latest copy, decrypted by the headless, has the **edited body and the old title**. The diff shows only `title`.
+- **What the web shows:** at the failure, the web UI lists "Notestead edited note 9dcb6937 Δ" (the `error-context.md` page snapshot). So the screen shows T2, but the row the app synced had T1.
+- **The only browser-side error in the window**, 1.4 s after the title was typed (11.924 to 12.5):
+
+  ```
+  12:30:13.922 [warning] sqlite3_step() rc= -1 undefined SQL = DELETE FROM settings WHERE key IN (…)
+  12:30:14.637 [error]   models/Setting: Could not save settings {type: error, dbId: db#1@…, messageId: exec#2297, …}
+  ```
+
+  The body was typed after it (15.3 to 18.5).
+- **Best-supported hypothesis (not proven):** the failed settings transaction rolled back the note-title UPDATE that ran on the same connection between its BEGIN and its ROLLBACK. The UI state kept T2; the database kept T1. The body save that followed wrote only `body`, so the synced row is T1 plus B2.
+
+**Not DNS-1:**
+- 0 `lookup` lines and 0 5xx in every `web.log` of the run;
+- every proxied request of this test returned 200;
+- the 10 s dial timeout never fired;
+- the seed was not involved: the device succeeded, and the `info.json` post-condition passed.
+
+**F-R2 is not the right attribution, and the CI-M2-S2 branch does not fix this.** None of its 45 commits touches browser SQLite or the note save path: `78d3c4d` is the re-press, `e393033` the trash exit, and the rest are the locale, readiness and the CI budget.
+
+### The finding: W-DNS1-1 becomes a bug, WEB-SQLITE-1 (routed to M2-S3: QA, then the SE)
+- **Two occurrences within a week (strategy §6 flake policy):**
+  - run 40075823250 arm64 (CI): `SQLITE_IOERR` on `CREATE TABLE migrations` at `openDatabase`;
+  - this Pi run: `rc= -1` on a settings write, with a lost note-title edit.
+
+  So it is not arm64-CI-only, and it can **silently lose a user's edit**: the UI shows the new title, but the synced copy has the old one. **It is user-facing, and it outranks a flake.**
+- **For M2-S3's QA plan:**
+  - (1) a harness rule: every E2E test fails on any browser console `sqlite3_step() rc=` warning or `Could not save` error, naming it. Today the test failed only 60 s later, on data;
+  - (2) a data-level check after every UI edit: the web app's **own** stored row (its database, read in the page) equals the UI before any sync. That separates "the save was lost" from "the sync was lost";
+  - (3) evidence capture: the worker's error object, and the storage estimate of the OPFS origin;
+  - (4) the SE investigates whether upstream's web database layer (`@joplin/lib` with the web SQLite worker) runs unrelated statements inside an open transaction, so that a rollback can undo them. If it does, that is an upstream issue (CLAUDE.md: propose upstream, no fork).
+- **It does not block DNS-1:** different component, different cause, no shared code path.
+
+### (b) How V1c counts
+- **Not** "accepted as F-R2". That attribution is wrong.
+- **No scratch merge with `test/M2-S2-ci-x64-arm64`.** It cannot address WEB-SQLITE-1 (nothing there touches it), costs another 35 min of the Pi, and proof run 5 runs exactly that merged state on both runners anyway.
+- **Ruling:** V1c counts as **13 of 14, with M2-AC3 failed for a cause not attributable to DNS-1** (WEB-SQLITE-1, evidence above). It is **conditional on V1c'**: one targeted re-run of `notes.spec.ts` on the DNS-1 HEAD. That shows M2-AC3's flow passes with DNS-1 in place, so the attribution does not rest on log reading alone.
+- The failure stays visible in the Results as a FAIL with its finding. It is not counted as a pass.
+
+### Orders (executor). The rules of "Work orders" apply, including HARD STOP
+
+#### V1c': Evidence first, then one targeted re-run (no commit)
+1. **Before anything else:** Playwright clears `test-results/e2e/output` on every run. So copy:
+   - the failing test's directory `test-results/e2e/output/m2-s2-notes-M2-S2-notes-in-ebbdc--and-one-headless-sync-each-chromium/`, the full-run log `test-results/e2e-verify-full.log` and the Playwright report, **to** `~/joplin-web-app-work/spikes/DNS-1/evidence-v1c/`;
+   - also the V1b contract output (`test-results/contract/`), if V4a still needs it and it is not copied yet.
+
+   `sha256sum` the copied files into `MANIFEST.sha256` there.
+2. In the background, with a 30 min timeout:
+
+   `NOTESTEAD_KEEP_IMAGE=1 corepack yarn playwright test tests/e2e/m2-s2/notes.spec.ts > test-results/e2e-verify-v1c-prime.log 2>&1`
+
+   Use the same environment as V1c: if V1c set `NOTESTEAD_WEB_ARTIFACT` or other `NOTESTEAD_*` variables, set the same ones, and record them.
+3. **Expected:** M2-AC3 passes. Then:
+   - `grep -c "sqlite3_step() rc=\|Could not save" <the test's browser-console.log>`: record the count, which should be 0;
+   - `node tests/harness/tools/scan-proxy-dns.ts test-results`: 0 old-signature lines, 0 `Last error`.
+4. **HARD STOP if M2-AC3 fails again.**
+   - Copy its output as in step 1, to `evidence-v1c-prime/`.
+   - Record the failing step and its diff.
+   - Say whether the console has a `sqlite3_step() rc=` or `Could not save` line. Say whether a `cancelling` line or a "no delta request since the press" error appears (the F-R2 signature). Count the `lookup` lines and the 5xx in `web.log`.
+   - Don't run anything else.
+
+#### V1d: Quick checks (no commit)
+`corepack yarn jest tests/unit` and `corepack yarn lint` at HEAD. Both must be green.
+
+#### V4a: Results (Pi), as ordered above, with these additions (`docs(test-plans)` commit), then HARD STOP
+1. Append `## Results (VERIFY, Pi arm64, 2026-10-24)` with one row per AC:
+
+   | AC | Status | Evidence |
+   |---|---|---|
+   | DNS1-AC1 | PASS | `tests/contract/dns-1`: c0, c1, c1b, c1-neg; V1b timings |
+   | DNS1-AC2 | PASS | c2, c2-neg, c2b, with `extraKeys` and the listing path |
+   | DNS1-AC3 | PASS | c3a to c3d |
+   | DNS1-AC4 | PASS | dev1-c1, dev1-neg, dev1-u1; the full contract and E2E runs seeded through the hardened device with 0 `SEED SYNC FAILED` |
+   | DNS1-AC5 | PENDING (V3) | |
+
+   Give each row its command, duration and log paths (under `test-results/`, or the `evidence-v1c/` copies).
+2. **The regression runs:**
+   - **V1b:** 15 of 16 suites passed, plus m1-s7 re-run alone with `NOTESTEAD_WEB_ARTIFACT` (11 of 11). This is a **deviation: the planner's V1b command omitted the variable**. Add the scan summary.
+   - **V1c:** 13 of 14, M2-AC3 **FAIL, attributed to WEB-SQLITE-1, not DNS-1**, with the evidence paths and the console lines quoted above.
+   - **V1c':** its result.
+   - **V1d:** its result.
+3. Commit: `docs(test-plans): DNS-1 VERIFY results (Pi arm64)`.
+4. **HARD STOP** and report.
+
+### QA status after this ruling
+- **Still pending.**
+- **DNS1-AC1 to AC4:** sign-off follows V1c' green, V1d and V4a.
+- **DNS1-AC5:** V3, as decided above.
+- **The merge recommendation is unchanged:** merge after the lead's APPROVE and the V4a record; AC5 is a post-merge gate.
+- **WEB-SQLITE-1 is an open finding for M2-S3.** It does not block DNS-1, and the orchestrator puts it in `STATUS.md`.
+
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
 Kept as written; both were delivered in `docs/worklog/DNS-1.md` (8513a0d, 0753528).
