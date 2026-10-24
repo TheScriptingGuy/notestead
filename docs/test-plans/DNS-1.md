@@ -800,3 +800,33 @@ No mutation survived.
 - `dns1-u5` written with its module: accepted with the mutation proof above.
 - Note name `<id>.md`: accepted. Device without a fixed IP: accepted. Nested `describe` for dev1: accepted.
 - Images: `localhost/notestead-web:m1-s4-test` now holds the WO-7e fixsim build (it includes `dial_timeout`; the next run rebuilds it). Kept for sign-off.
+
+## Results (VERIFY, Pi arm64, 2026-10-24, feat/DNS-1-proxy-dns)
+
+HEAD at the runs: `7b9d7d0`/`03d03f1` on top of the fix `385718b` (`dial_timeout 10s`). Evidence lives under `test-results/` (not committed) and, where Playwright overwrote it, in `~/joplin-web-app-work/spikes/DNS-1/evidence-v1c/` and `evidence-v1c-prime/` (each with `MANIFEST.sha256`; the V1b contract output is in `evidence-v1c/contract/`).
+
+| AC | Status | Evidence |
+|---|---|---|
+| DNS1-AC1 | PASS | `NOTESTEAD_KEEP_IMAGE=1 corepack yarn test:contract` (V1b), `dns-1/proxy-dns.test.ts` 138 s. c0 200 in 11 ms; c1 200 in 5011 ms; c1b 200 in 5013 ms; c1-neg 502 in 3008 ms with `removedBlocks` 1. `evidence-v1c/contract/dns-1/proxy-dns/timings.json` and the `nst-proxy-dns-web-*.log` files beside it |
+| DNS1-AC2 | PASS | c2 200 in 5275 ms (note matched field by field, `extraKeys` `is_locked`, `extracted_resource_ids`; 256 KiB blob equal by sha256 and length; listing path `children`); c2-neg 502 in 3007 ms, server unchanged; c2b 200 in 5235 ms. Same `timings.json` |
+| DNS1-AC3 | PASS | c3a 502 in 15 ms; c3b 502 in 5 ms; c3c 502 in 3074 ms; c3d 502 in 10006 ms (bound 15 s). Same `timings.json` |
+| DNS1-AC4 | PASS (contract and unit); E2E part PENDING (V5) | dev1-c1 green, dev1-neg exit 3 after 32.8 s with `SEED SYNC FAILED` and `Last error`, dev1-u1 6 of 6 (unit run V1d). V1b seeded every contract suite through the hardened device with 0 `SEED SYNC FAILED` outside `dev1-neg` |
+| DNS1-AC5 | PENDING (V3, proof run 5) | CI only |
+
+**V1b, the full contract layer** (`test-results/contract/verify-full.log`, `jest-results.json`): 15 of 16 suites, 89 of 100 tests. The one failing suite was m1-s7 (11 tests), with the message "Run it with NOTESTEAD_WEB_ARTIFACT=…". **Deviation: the planner's V1b command omitted `NOTESTEAD_WEB_ARTIFACT`; m1-s7 re-run alone with it: 11 of 11 passed in 462 s** (`test-results/contract/m1-s7-rerun/verify-m1s7.log`; `evidence-v1c/contract/m1-s7-rerun/`). Scan over the contract output: 0 old-signature lines, 0 other durations, 1 NXDOMAIN (m1-s6 ac20, which stops `server` on purpose), 1 device log with `Last error` (`m1-s5/device-dev1-neg.log`, the deliberate control).
+
+**V1c, the full E2E suite** (`NOTESTEAD_KEEP_IMAGE=1 NOTESTEAD_WEB_ARTIFACT=~/joplin-web-app-work/ci-evidence/37285783648/extracted/web-bundle-v3.7.21 corepack yarn playwright test`, 35.1 min, log `evidence-v1c/e2e-verify-full.log`): **13 of 14. M2-AC3 (`tests/e2e/m2-s2/notes.spec.ts:102`) FAIL, attributed to WEB-SQLITE-1, not DNS-1.** The headless REST note had the edited body and the old title. Console lines (`evidence-v1c/m2-s2-notes-M2-S2-notes-in-ebbdc--and-one-headless-sync-each-chromium/attachments/browser-console-log-*.log`):
+- `2026-10-24T12:30:13.922Z [warning] sqlite3_step() rc= -1 undefined SQL = DELETE FROM settings WHERE key IN (…`
+- `2026-10-24T12:30:14.637Z [error] 14:30:14: models/Setting: Could not save settings {type: error, dbId: db#1@661096, …`
+
+0 `lookup` lines and 0 5xx in the stack web logs. 14 tests, not 16: `main` has no LOC-01/02 specs.
+
+**V1c', `notes.spec.ts` alone** (same environment, 7.9 min, log `evidence-v1c-prime/e2e-verify-v1c-prime.log`): **M2-AC3 FAIL, attributed to F-R2.** `syncWebOnce` (`support/flows.ts:79`, from `notes.spec.ts:134`): expected `completed`, received `no delta request since the press`. Console (`evidence-v1c-prime/m2-s2-notes-*/attachments/browser-console-log-*.log`):
+- `2026-10-24T12:51:15.829Z [info] 14:51:15: Starting scheduled sync`
+- `2026-10-24T12:51:15.966Z [info] 14:51:15: Synchronizer: Sync: cancelling`
+
+No `rc= -1`, no `Could not save` (the one `sqlite3_step()` line is the startup `spellfix1` warning, rc 1), 0 `lookup` lines, 0 5xx, scan clean. The fix for F-R2 (`78d3c4d`) is on `test/M2-S2-ci-x64-arm64`, not on this branch.
+
+**Verdict: E2E regression evidence for DNS-1: blocked by known non-DNS causes on this branch; moved to V5 on the combined branch.**
+
+**V1d** (HEAD): `corepack yarn jest tests/unit` 15 suites passed, 111 of 111 tests; `corepack yarn lint` clean (exit 0).
