@@ -194,7 +194,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	e2eeSeed: [{ notes: 1 }, { option: true }],
 
 	e2eeAccount: async ({ stack, e2eeSeed }, use, testInfo) => {
-		const account = enableE2ee(stack, await createAccount(stack), shortId(testInfo), e2eeSeed);
+		const account = await enableE2ee(stack, await createAccount(stack), shortId(testInfo), e2eeSeed);
 		await use(account);
 	},
 

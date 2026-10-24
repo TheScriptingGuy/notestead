@@ -67,6 +67,11 @@
 		# The route sets Cache-Control: no-store, no-transform; the upstream's own value must not be added to it.
 		header_down -Cache-Control
 		flush_interval -1
+		# Go's resolver waits 5 s per resolv.conf nameserver, and Caddy's default 3 s dial timeout turned one
+		# silent first nameserver into a 502 (DNS-1). This value has to stay at most 15 s, so a dead server still fails fast.
+		transport http {
+			dial_timeout 10s
+		}
 	}
 }
 

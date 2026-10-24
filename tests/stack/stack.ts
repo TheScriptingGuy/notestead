@@ -30,6 +30,7 @@ import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
 import { restartVerdict, startVerdict } from './restartReady.ts';
 import type { StackImages } from './images.ts';
+import { checkSeededInfo } from './seedCheck.ts';
 
 export const stackDir = (): string => join(findRepoRoot(), 'tests', 'stack');
 export const coreServices = ['server', 'web'] as const;
@@ -406,7 +407,7 @@ export const createAccount = async (state: StackState): Promise<Account> => {
 // `nst-seed-<tag>` on note 1, and a note `Notestead attachment note <tag>` with a text attachment `nst-seed-<tag>.txt`.
 export interface SeedOptions { notes?: number; extras?: boolean }
 
-export const enableE2ee = (state: StackState, account: Account, label: string, seed: SeedOptions = {}): Account => {
+export const enableE2ee = async (state: StackState, account: Account, label: string, seed: SeedOptions = {}): Promise<Account> => {
 	const tag = randomBytes(5).toString('hex');
 	const folder = `Notestead folder ${tag}`;
 	const notes = [{ title: `Notestead note ${tag}`, body: `Seeded body ${tag} zebracorn` }];
@@ -427,6 +428,11 @@ export const enableE2ee = (state: StackState, account: Account, label: string, s
 	writeFileSync(join(state.logsDir, `device-${label}.log`), redactText(`# exit ${r.status}\n${r.stdout ?? ''}\n--- stderr ---\n${r.stderr ?? ''}`, knownSecrets(state)));
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (r.status !== 0 || !line) throw new Error(`the E2EE device failed (exit ${r.status}; log ${join(state.logsDir, `device-${label}.log`)}): ${redactText(`${r.stdout}\n${r.stderr}`, knownSecrets(state)).slice(-1500)}`);
+	// The post-condition (DNS-1, DNS1-AC4), on the server itself: the seed uploaded a master key. The device fails on a
+	// reported sync error; this catches an upload that failed without being reported.
+	const info = await serverItemContent(state, account, 'info.json');
+	const reason = checkSeededInfo(info.status, info.text);
+	if (reason) throw new Error(`the E2EE device did not seed the account: ${reason} (log ${join(state.logsDir, `device-${label}.log`)})`);
 	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[]; todo?: { id: string }; attachmentNote?: { id: string } };
 	account.e2ee = result.e2ee;
 	account.seedTag = tag;
@@ -480,7 +486,7 @@ export const upHeadless = async (state: StackState, account: Account, label: str
 
 // The default E2EE account and its headless service: the whole stack is healthy before any test starts (M1-AC18).
 export const upDefault = async (state: StackState): Promise<void> => {
-	state.defaultAccount = enableE2ee(state, await createAccount(state), 'default');
+	state.defaultAccount = await enableE2ee(state, await createAccount(state), 'default');
 	state.defaultHeadless = await upHeadless(state, state.defaultAccount, 'default');
 	if (state.owned) saveDescriptor(state);
 };
