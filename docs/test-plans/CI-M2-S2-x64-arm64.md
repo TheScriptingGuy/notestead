@@ -808,3 +808,46 @@ The full V3 reading is in `docs/test-plans/DNS-1.md`, section "Results (CI, proo
   - arm64: contract 100/100, E2E 15 plus 1 flake, M1-AC21 NEG. Its first attempt shows WEB-SQLITE-1 shape B and its retry passed: a flake needs no tie, and it uses no cap.
 - **The finding-I tie rule is retired, as planned.** No test failed with a `lookup server` line.
 - **The combined merge is blocked only by DNS1-AC5.** 2 (x64) and 3 (arm64) `lookup server … i/o timeout` lines remain, all at 10.0 s: the shared aardvark stalled on both gateways, a different mechanism from DNS-1's. The planner recommends that the user re-scope (AC5a passes, AC5b goes to a new story DNS-2) and merge both. Options A to C and the reasons are in DNS-1.md.
+
+## The user's decision (2026-10-25) and the final QA sign-off (planner, 2026-10-25)
+- **The decision:** the user chose (B), re-scope and merge (`docs/backlog/M2.md`, `8887f52`).
+  - DNS1-AC5a **PASSES** on both runners in proof run 5.
+  - The original AC5 **failed** (2 and 3 lines at 10.0 s). It moves as AC5b to DNS2-AC4. That FAIL stays recorded, as history.
+  - **The statement above that "the combined merge is blocked only by DNS1-AC5" is resolved by the decision.**
+- **The lead's r5 (`65948a8`) is APPROVE.** Its T9 check confirmed the M1-AC21 NEG WEB-SQLITE-1 lines. The tie is "applied" for that occurrence; run 5 is tie run 1 of 3.
+- **The flake rule (r5 P2):** `docs/test-plans/DNS-1.md` T4a restores this plan's r4 rule. A flake passes only if every failed attempt meets the WEB-SQLITE-1 tie; any other flake is a FAIL.
+- **This plan's merge items are all met on both runners in proof run 5:**
+  - x64: contract 100/100, E2E 16/16 with 0 flaky;
+  - arm64: contract 100/100, E2E 15 plus 1 tie-conforming flake;
+  - the LOC specs pass;
+  - M2-AC3 and M2-AC5 needed no retry;
+  - redaction complete, the upload gate complete, the leak scan 0;
+  - the finding-I tie retired.
+- **QA signs off CI-M2-S2 for the merge to `main`,** together with DNS-1.
+
+### Watch items
+- **B (the arm64 M2-AC3 stall, very probably E): closed.** No recurrence in proof runs 3, 4 and 5 after the bounded actions and `trashOpenNote`. A recurrence would be a new finding.
+- **C (M1-AC21 NEG): open until 2026-10-28, as set.**
+  - Its DNS cause (finding I) is now DNS-2's.
+  - Its run 5 flake was WEB-SQLITE-1 shape B, a different cause.
+  - Under T4a, any further M1-AC21 NEG flake that is not tie-conforming is a FAIL.
+
+### Follow-ups (QA; the full list is in DNS-1.md "Follow-ups for STATUS")
+- **r1:**
+  - C1: the failure line should carry the first `Expected:`/`Received:`/`waiting for` line;
+  - C2: strategy §5 "presses once";
+  - C3: reword F-R2 as a candidate trigger of B;
+  - C4: the CI-T-02 message, the CI-T-03 per-test timeout pattern, `printsToStdio()`;
+  - C5: extract the `syncWebOnce` loop and add a fake-driven unit test;
+  - `ci-fail-04`: a secret planted in the error;
+  - P1: hard stops in work orders (applied from DNS-1 on);
+  - P2: run the whole harness Jest set at every shared-module GREEN;
+  - P3: done by this sign-off.
+- **r2:**
+  - C1: the late-leave race in the `stayed` branch of `trashOpenNote`, with no E2E run of `stayed`;
+  - C2: the `restartReady.ts` comment states F's mechanism as fact.
+- **r3:**
+  - C1: fixture cleanup can mask the original error (`fixtures.ts:107-122`, `:208-214`);
+  - C2: the token is not yet registered on the failure path;
+  - **F-H1:** the contract `globalTeardown` untags the shared device image (M2-S3).
+- **Forward note (r1):** M2-S3's 25-minute specs against CI-T-03/T-04: use `longSpecTimeoutMs`, or raise it with `ciGlobalTimeoutMs`.

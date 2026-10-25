@@ -909,6 +909,61 @@ I take these from the ci-cd report and did not re-verify them:
 - **If the user chooses (B):** the criterion is met on both runners, and **QA signs off CI-M2-S2 and DNS-1 for the merge.** That is subject to the lead's T9 check of the M1-AC21 NEG lines, and the architect records AC5a/AC5b and DNS-2 in the backlog. WO-F1 follows on `main`, or in DNS-2; it does not block.
 - **If the user chooses (A):** both wait for DNS-2.
 
+## The user's decision (2026-10-25) and the final QA sign-off (planner, 2026-10-25)
+
+**The decision.** On 2026-10-25 the user chose option **(B), re-scope and merge**. The architect recorded it in `docs/backlog/M2.md` (`8887f52`):
+- **DNS1-AC5a:** 0 proxy lookup failures under 9 s, and 0 device logs with `Last error` apart from the `dev1-neg` control. **PASS** on both runners in proof run 5:
+  - x64: 0 lines under 9 s, and 1 device log, `device-dev1-neg.log`;
+  - arm64: the same.
+
+  The lead re-ran the scan in r5 check 2 with the same figures.
+- **DNS1-AC5b:** no proxy lookup failure in CI, of any duration. As originally written, AC5 **failed** in proof run 5: 2 lines on x64 and 3 on arm64, all at 10.0 s. That FAIL stays recorded above, as history. AC5b moved to **DNS2-AC4** in the new story DNS-2.
+- **While DNS-2 is open:**
+  - the 10 s lines stay visible in every scan;
+  - no allowance, no tie, no retry-until-green;
+  - a test failure with a `lookup server` line in its window is a FAIL.
+
+**The lead's checks.**
+- r5 (`65948a8`) is APPROVE.
+- **T9 is done (r5 check 1):** the M1-AC21 NEG `browser-console.log` sha256 and lines 33 to 35 match the quotes, and shape B, T3 and T5 are confirmed. **The WEB-SQLITE-1 tie status is "applied"** for that occurrence; the outcome would be the same as a flake under T4.
+- **The tie's run budget:** proof run 5 counts as tie run 1 of 3 (T8), as the lead records. The T6 cap was not exceeded: one test.
+
+### T4a: a flake must meet a tie shape to pass (r5 P2; narrows T4)
+**T4 is amended:** a test that failed an attempt and passed on retry (a flake) counts as passing **only if** every failed attempt meets the WEB-SQLITE-1 tie:
+- T1: arm64;
+- T2 and T3: shape A or B, with lines S and E in the window;
+- T5: nothing else explains it;
+- T6: the cap;
+- T8: the run budget.
+
+**Any other flake is a FAIL**, on either runner, and comes to the planner as a finding.
+
+The lead's T9 check applies to flakes too.
+
+This deliberately returns to the stricter rule of CI-M2-S2 r4 ("a flake outside the tie blocks", written for finding I). **T4 as first written** ("a flaky test needs no tie") was **looser than r4's rule**. My V3 remark, "the orchestrator's premise is mistaken", was right only about T4's wording; **the orchestrator's premise matched r4's rule**, and T4a now matches it again. The one flake so far (M1-AC21 NEG, run 5, arm64) meets every element, so the run 5 verdict does not change.
+
+### QA sign-off
+- **Signed off for the merge to `main`:** the combined branch `test/M2-S2-ci-x64-arm64` (CI-M2-S2 and DNS-1) as of this commit.
+- **DNS-1 is done** on DNS1-AC1 to AC4 and AC5a:
+  - **arm64 (Pi):** the contract layer, V1b and V5;
+  - **arm64 (CI):** proof run 5;
+  - **x64 (CI):** proof run 5, with `tests/contract/dns-1` 13 of 13 on both runners;
+  - **E2E regression:** V5, plus proof run 5 on both runners.
+- **Disputes:** none were raised; nothing to resolve.
+
+### Follow-ups for STATUS (QA's list; owners as routed)
+1. **DNS-2:** the aardvark-dns stall on podman 4.9.3 (both nameservers silent for 10 s or more, probably on a container join). DNS2-AC1 to AC5 are in the backlog. It needs ci-cd P1 (versions) and the QA `dns-watch` probe with its NEG; owned by the SE with ci-cd and QA.
+2. **WEB-SQLITE-1:** browser SQLite write and startup failures in the upstream web build. It can silently lose a UI edit. **First in M2-S3's queue.** 3 occurrences, all arm64:
+   - CI run 40075823250 (shape B);
+   - the Pi, V1c (shape A);
+   - CI run 40102184409 (shape B).
+
+   The tie expires after proof run 7, or when M2-S3 merges. M2-S3's QA plan items are under "The finding: W-DNS1-1 becomes a bug".
+3. **WO-F1 (QA):** the dns-1 suite writes its device logs under `test-results/contract/dns-1/proxy-dns/`, not `contract/m1-s5/`.
+4. **The scan tool's self-check (r5 C2, QA, with DNS-2):** an `expectedControl` check, so that exactly one `device-dev1-neg.log` per runner is required and reported, and a missing or extra control fails loudly.
+5. **F-H1 (QA, M2-S3):** the contract `globalTeardown` removes the shared device image tag that the E2E run keeps (a harness-order hazard on the Pi).
+6. **CI-M2-S2 r1 to r3 minors and nits (QA, next touch):** listed in the cross-reference in `docs/test-plans/CI-M2-S2-x64-arm64.md`.
+
 ## History: the investigation briefs (CI-M2-S2 round 4, commit 7752875 on test/M2-S2-ci-x64-arm64)
 
 Kept as written; both were delivered in `docs/worklog/DNS-1.md` (8513a0d, 0753528).
