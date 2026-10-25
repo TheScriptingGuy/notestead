@@ -52,3 +52,13 @@ export const sqliteFailures = (lines: string[]): SqliteFailure[] => {
 
 export const sqliteFailureLines = (failures: SqliteFailure[]): string[] =>
 	failures.map(f => `SQLite ${f.kind}: rc ${f.rc}, ${f.statement} (console line ${f.line})`);
+
+// Which page reads navigator.storage.estimate(): the app's own page when it is on the web origin, else a fresh same-origin
+// probe (an about:blank or data: page has an opaque origin, where the estimate fails; WS-5a).
+export const estimatePageChoice = (appPageUrl: string | undefined, webOrigin: string): 'app' | 'probe' => {
+	try {
+		return appPageUrl !== undefined && new URL(appPageUrl).origin === new URL(webOrigin).origin ? 'app' : 'probe';
+	} catch {
+		return 'probe';
+	}
+};

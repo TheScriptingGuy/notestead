@@ -37,7 +37,7 @@ import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabl
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
 import { userTimeZone } from './dueDate.ts';
-import { sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
+import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
 import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
@@ -131,7 +131,7 @@ const maxSqliteArgs = 20;
 // logs dir): the value-free failures, the argument objects of the console messages, and the origin's storage estimate (is the
 // quota or persistence the cause?). Nothing here throws: the failure itself is asserted by the caller.
 const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: unknown[], args: unknown[][]): Promise<void> => {
-	const readStorage = async (page: Page): Promise<unknown> => {
+	const readStorage = async (page: Page): Promise<{ estimate: unknown; persisted: boolean }> => {
 		return await page.evaluate(async () => {
 			const g = globalThis as unknown as { navigator: { storage: { estimate: () => Promise<unknown>; persisted: () => Promise<boolean> } } };
 			return { estimate: await g.navigator.storage.estimate(), persisted: await g.navigator.storage.persisted() };
@@ -139,13 +139,13 @@ const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { conte
 	};
 	let storage: unknown;
 	try {
-		if (!app.page.isClosed()) {
-			storage = await readStorage(app.page);
+		if (!app.page.isClosed() && estimatePageChoice(app.page.url(), app.baseURL) === 'app') {
+			storage = { from: 'app', ...await readStorage(app.page) };
 		} else {
 			const probe = await app.context.newPage();
 			try {
 				await probe.goto(new URL('/manifest.json', app.baseURL).href);
-				storage = await readStorage(probe);
+				storage = { from: 'probe', ...await readStorage(probe) };
 			} finally {
 				await probe.close();
 			}
