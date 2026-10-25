@@ -37,6 +37,7 @@ import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabl
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
 import { userTimeZone } from './dueDate.ts';
+import { sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
 import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
@@ -68,6 +69,9 @@ export interface WebApp {
 	page: Page;
 	baseURL: string;
 	console: string[];
+	// Opts this test out of the browser SQLite failure check (WEB-SQLITE-1), with the reason recorded as an annotation. No
+	// spec uses it; it exists for a future story that injects faults on purpose.
+	allowSqliteFailures: (reason: string) => void;
 }
 
 interface WorkerFixtures {
@@ -278,10 +282,19 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		// snapshots and network bodies are text, which the redacting reporter redacts.
 		await context.tracing.start({ screenshots: false, snapshots: true, sources: true, title: testInfo.titlePath.join(' > ') });
 		const page = await context.newPage();
+		let allowed: string | undefined;
+		const allowSqliteFailures = (reason: string): void => {
+			allowed = reason;
+			testInfo.annotations.push({ type: 'allow-sqlite', description: reason });
+		};
 		try {
-			await use({ context, page, baseURL: stack.webUrl, console: lines });
+			await use({ context, page, baseURL: stack.webUrl, console: lines, allowSqliteFailures });
 		} finally {
-			if (failed(testInfo)) {
+			// A real SQLite failure in the browser (a lost write, a failed start) fails the test here, at once, instead of
+			// 60 s later as a data mismatch, or never (WEB-SQLITE-1). The evidence is kept as for any failure.
+			const sqlite = sqliteFailures(lines);
+			const sqliteFailing = sqlite.length > 0 && allowed === undefined;
+			if (failed(testInfo) || sqliteFailing) {
 				await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
 				const path = testInfo.outputPath('trace.zip');
 				await context.tracing.stop({ path });
@@ -290,6 +303,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 				await context.tracing.stop();
 			}
 			await context.close();
+			if (allowed === undefined) expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
 		}
 	},
 });
