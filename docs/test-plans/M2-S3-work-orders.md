@@ -1511,3 +1511,44 @@ The comment says F's lost podman timer is a hypothesis, and that `health-lag` fi
 WO-24's full E2E run is under `LANG=C.UTF-8 LC_ALL=C.UTF-8`, as CI-M2-S2's was. All tests must pass with no retry, and **no WS-1 failure**.
 - List every `web-sqlite.json` and every `allow-sqlite` annotation; there should be none.
 - A WS-1 failure is a **HARD STOP**: report it with its `web-sqlite.json` and the worker lines, and don't re-run.
+
+## WS-5a to WS-5d (planner, after the WS-5 HARD STOP, 2026-10-25)
+The HARD STOP definition above applies. The order of work is WS-5a → WS-5b → WS-5c → WS-5d (= WS-6), then **stop**: the orchestrator dispatches the senior engineer's WEB-SQLITE-1 investigation before WO-1.
+
+### WS-5a: The storage estimate from a page on the web origin (RED commit)
+- **RED:** add `sql-08…09` to `tests/unit/harness/webSqlite.test.ts`, for a new pure `estimatePageChoice(appPageUrl: string | undefined, webOrigin: string): 'app' | 'probe'`:
+  - `sql-08`: `'http://127.0.0.1:41234/'` with `'http://127.0.0.1:41234'` gives `'app'`;
+  - `sql-09`: `'about:blank'`, `undefined`, `'http://127.0.0.1:41235/'` (another port) and `'data:text/html,x'` each give `'probe'`.
+
+  **Commit 1:** `test(harness): failing unit tests for choosing a web-origin page for the storage estimate (WEB-SQLITE-1)`.
+- **GREEN:**
+  - `webSqlite.ts` gets `estimatePageChoice` (compare `new URL(url).origin`, inside a `try`).
+  - `keepWebSqlite` uses the app page only when the choice is `'app'`, else a fresh same-origin `/manifest.json` page of the context (closed afterwards).
+  - `web-sqlite.json` gains `storage.from: 'app' | 'probe'`.
+  - **Commit 2:** `test(harness): read the storage estimate from a web-origin page, the app's or a probe (WEB-SQLITE-1)`.
+  - Run the whole harness Jest set.
+
+### WS-5b: S-WS1 again, and S-WS1b on the app page (no commit)
+Make temporary edits and revert each with `git checkout --`.
+- **S-WS1:** as ordered, in `type-like-user.spec.ts`; log `sens/ws5-s-ws1-both-2.log`.
+- **S-WS1-spellfix:** the same spec with only `console.warn('sqlite3_step() rc= 1 SQLITE_ERROR SQL = CREATE VIRTUAL TABLE notes_spellfix USING spellfix1(…)')`; log `sens/ws5-s-ws1-spellfix.log`.
+- **S-WS1b:** in `tests/e2e/m2-s1/sync-through-proxy.spec.ts`, M2-AC1, right after step 1 (the app page is on the web origin), run `webApp.page.evaluate(() => { console.warn('sqlite3_step() rc= 10 SQLITE_IOERR SQL = INSERT INTO notes (id) VALUES (1)'); console.error('models/Note: Could not save note {}'); })`; log `sens/ws5-s-ws1b-app.log`.
+
+Each must:
+- **S-WS1 and S-WS1b:** fail in teardown, naming `SQLite step: rc 10, INSERT notes` and `SQLite save`, with no SQL text or value. `web-sqlite.json` must hold numeric `storage.estimate.usage` and `quota`, a boolean `persisted`, and `storage.from`: `'probe'` for S-WS1 and **`'app'`** for S-WS1b. Copy each `web-sqlite.json` to `sens/ws-sqlite-evidence/`.
+- **S-WS1-spellfix:** pass.
+
+**HARD STOP** if any differs. That includes S-WS1b reporting `from: 'probe'`, or an estimate error.
+
+### WS-5c: S-WS3 (no commit)
+As ordered in WS-5: in `notes.spec.ts` step 3, `expectStoredLocally(webApp, \`never typed ${run}\`, 'a value that was never typed')`. Log `sens/ws5-s-ws3.log`. It must fail after about 30 s with "a value that was never typed is not in the web app's own database", and the log and report must not contain `never typed`; check with `grep -c`. Revert afterwards. **HARD STOP** if it passes, or if the needle is printed.
+
+### WS-5d (= WS-6): Strategy and plan
+- **Strategy:** as WS-6, plus one clause: "the storage estimate is read from a page on the web origin (the app's, or a same-origin probe)".
+- **This plan:** move `## Findings (executor)` content into `## Harness validation (WS)`, with the feasibility result, S-WS1 (first run, the deviation), S-WS1 (second run), S-WS1-spellfix, S-WS1b and S-WS3, each with its log.
+
+Commits:
+- `docs(testing): browser SQLite failures fail a test; stored-value checks after UI edits (WEB-SQLITE-1)`;
+- `docs(test-plans): M2-S3 WEB-SQLITE-1 harness RED and validation`.
+
+**Then stop and report.** The next agent is the senior engineer (`docs/test-plans/WEB-SQLITE-1.md`). Do not start WO-1.
