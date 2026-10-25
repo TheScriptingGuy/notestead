@@ -61,3 +61,65 @@ export const scanLocalProfile = async (webApp: WebApp, needle: string, opts?: { 
 		await probe.close();
 	}
 };
+
+// The path of the first file that is the app's database (a .sqlite3 file, never its -journal) and holds `needle` as UTF-8, or
+// undefined. The result carries the path only, never a byte or the needle (WEB-SQLITE-1, docs/test-plans/M2-S3.md WS-3).
+export const findInDatabaseFile = (files: { path: string; bytes: Uint8Array }[], needle: string): { file: string } | undefined => {
+	if (needle === '') return undefined;
+	const wanted = Buffer.from(needle, 'utf8');
+	for (const f of files) {
+		if (!f.path.endsWith('.sqlite3')) continue;
+		if (Buffer.from(f.bytes.buffer, f.bytes.byteOffset, f.bytes.byteLength).includes(wanted)) return { file: f.path };
+	}
+	return undefined;
+};
+
+// After a UI edit and before any sync: the web app's own database file holds the new value (WEB-SQLITE-1). A lost save and a
+// lost sync become different failures. There is no in-page API in the served bundle (window.joplin is __DEV__ only), so this
+// reads the app's *.sqlite3 files from OPFS in a second same-origin page of the context while the app page stays open (the
+// WS-3 feasibility run: the first probe read it, 0.6 s after the edit). A file that cannot be read yet counts as "not yet".
+// Only the main database file is searched, never the -journal, so a rolled-back write is not found. The message names what
+// was edited, never the value.
+export const expectStoredLocally = async (webApp: WebApp, needle: string, what: string, opts?: { timeoutMs?: number }): Promise<void> => {
+	const probe = await webApp.context.newPage();
+	try {
+		await probe.goto(new URL('/manifest.json', webApp.baseURL).href);
+	} catch (error) {
+		await probe.close();
+		throw error;
+	}
+	try {
+		await waitFor(what, async () => {
+			const read = await probe.evaluate(async () => {
+				interface Handle { kind: string; entries?: () => AsyncIterable<[string, Handle]>; getFile?: () => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> }> }
+				const g = globalThis as unknown as { navigator: { storage: { getDirectory: () => Promise<Handle> } }; btoa: (s: string) => string };
+				const out: { path: string; base64: string }[] = [];
+				let unreadable = 0;
+				const walk = async (dir: Handle, path: string): Promise<void> => {
+					for await (const [name, handle] of dir.entries?.() ?? []) {
+						const p = `${path}/${name}`;
+						if (handle.kind === 'directory') {
+							await walk(handle, p);
+						} else if (p.endsWith('.sqlite3')) {
+							try {
+								const data = new Uint8Array(await (await handle.getFile?.())!.arrayBuffer());
+								let binary = '';
+								for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i, i + 0x8000));
+								out.push({ path: p, base64: g.btoa(binary) });
+							} catch {
+								unreadable++;
+							}
+						}
+					}
+				};
+				await walk(await g.navigator.storage.getDirectory(), '');
+				return { files: out, unreadable };
+			});
+			return findInDatabaseFile(read.files.map(f => ({ path: f.path, bytes: Buffer.from(f.base64, 'base64') })), needle);
+		}, { timeoutMs: opts?.timeoutMs ?? 30_000, intervalMs: 250 });
+	} catch {
+		throw new Error(`${what} is not in the web app's own database (a lost save, WEB-SQLITE-1)`);
+	} finally {
+		await probe.close();
+	}
+};
