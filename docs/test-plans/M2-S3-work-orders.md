@@ -1389,3 +1389,125 @@ Append to `docs/test-plans/M2-S3.md`, in the M2-S2 format:
 - the M2-AC7a measurement and the CC-1(b) status;
 - every RECORD;
 - the podman state (images kept).
+
+---
+
+## Revision 2026-10-25 (planner): WS-1 to WS-6 first, WO-26 to WO-28, and changes to WO-0 and WO-22
+Read `docs/test-plans/M2-S3.md` §Revision 2026-10-25 (R1 to R5) first. The rules for every order above apply, including the HARD STOP definition:
+- **Allowed at a HARD STOP:** read logs and traces; copy evidence under `test-results/verify/m2-s3/`; write the finding, with paths, into the plan; report.
+- **Forbidden:** changing an assertion, a bound, an upstream string or the harness logic beyond the order; re-running to get a green; any fix not ordered.
+
+**The order of work:**
+1. WO-0, as amended below;
+2. WS-1 to WS-6;
+3. WO-1 to WO-21;
+4. WO-22, as amended;
+5. WO-23 to WO-25;
+6. WO-26 to WO-28. Fold them in before WO-24's runs.
+
+### WO-0 amendments
+- **Step 1:** also `git merge-base --is-ancestor 37e5471 HEAD`, the merge of CI-M2-S2 and DNS-1. If it fails: **HARD STOP**.
+- **Also check** that `tests/stack/restartReady.ts` and `tests/stack/seedCheck.ts` exist, and that `tests/e2e/support/timeouts.ts` has `ciGlobalTimeoutMs = 55 * 60_000` and `headlessUpTimeoutMs = 7 * 60_000`. If not: **HARD STOP**.
+
+### WS-1: Fail a test on a real browser SQLite failure (RED commit)
+- **RED:** `tests/unit/harness/webSqlite.test.ts` holds `sql-01…07` for the pure `sqliteFailures(lines: string[]): { rc: number | null; kind: 'step' | 'save' | 'startup'; statement: string; line: number }[]`. The lines are `browser-console.log` format: `<ISO> [<level>] <message>`.
+  - `sql-01`: `[warning] sqlite3_step() rc= 10 SQLITE_IOERR SQL = CREATE TABLE migrations (id …)` gives `{ rc: 10, kind: 'step', statement: 'CREATE TABLE migrations' }`.
+  - `sql-02`: `rc= -1 undefined SQL = DELETE FROM settings WHERE key IN (…)` gives `{ rc: -1, statement: 'DELETE settings' }`. The verb and the table only, never the `WHERE` or the values.
+  - `sql-03`: `rc= 1 SQLITE_ERROR SQL = CREATE VIRTUAL TABLE notes_spellfix USING spellfix1` gives `[]`, because it is the startup spellfix line. The same message at `rc= 10` **is** reported.
+  - `sql-04`: `rc= 1 … ROLLBACK` and `rc= 0 …` give `[]`.
+  - `sql-05`: `[error] … models/Setting: Could not save settings {…}` gives `kind: 'save'`, `statement: 'settings'`.
+  - `sql-06`: `[error] … root: Startup failure during task: buildStartupTasks/openDatabase` gives `kind: 'startup'`.
+  - `sql-07`: `JSON.stringify` of every result for a line whose SQL holds `'Notestead secret title abc'` doesn't contain `secret title`.
+
+  Log `red/ws1-unit.log`. **Commit 1:** `test(harness): failing unit tests for recognising a real browser SQLite failure (WEB-SQLITE-1)`.
+- **GREEN:**
+  - `tests/e2e/support/webSqlite.ts` (no Playwright import) holds `sqliteFailures` and `sqliteFailureLines(failures): string[]`. Each line reads `` `SQLite ${kind}: rc ${rc}, ${statement} (console line ${line})` ``.
+  - `fixtures.ts` `webApp` teardown, after the trace handling:
+    ```ts
+    const sqlite = sqliteFailures(lines);
+    if (sqlite.length > 0 && !allowed) { /* WS-2 capture */ }
+    expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
+    ```
+    This assertion is skipped only when the test called `webApp.allowSqliteFailures(reason)`. That records an `allow-sqlite` annotation with the reason. `WebApp` gains that method; no spec calls it.
+  - Run the whole harness Jest set.
+  - **Commit 2:** `test(harness): every E2E test fails on a real browser SQLite failure in its console (WEB-SQLITE-1)`.
+
+### WS-2: Capture the worker error and the storage estimate (one commit)
+- In `webApp`, keep, for each console message whose text matches a WS-1 kind, its `msg.args()` mapped through `jsonValue()` (each in `try`; a failure records `'(unserialisable)'`). Bound it to the first 20 such messages.
+- On a WS-1 failure, before the context closes, evaluate in the app page (if it is still open; else in a fresh same-origin page of the context): `{ estimate: await navigator.storage.estimate(), persisted: await navigator.storage.persisted() }`.
+- Write `web-sqlite.json`, `{ failures, args, storage }`, redacted with `workerSecrets(stack)`. Attach it, and also write it to `stack.logsDir` as `<project>-<shortId>-web-sqlite.json`.
+- **Commit:** `test(harness): keep the worker's SQLite error object and the storage estimate of a failing test (WEB-SQLITE-1)`.
+
+### WS-3: The web app's own stored value after a UI edit (RED commit, with a feasibility gate)
+1. **Feasibility, temporary and not committed.** In a scratch spec on a dev or E2E run on the Pi, after `openUnlockedWebApp` and a typed title change, open a second page in the same context (`/manifest.json`). In it, read the app's `*.sqlite3` file from OPFS with `getFile()` while the app page stays open. Try 10 s of retries every 250 ms.
+   - **RECORD** whether it reads, and whether the typed title's bytes are found.
+   - If live reading fails: **HARD STOP**. Report the error names. The planner chooses the close-and-reopen variant.
+2. **RED:** `tests/unit/harness/localProfile.test.ts` holds `stored-01…03` for the pure `findInDatabaseFile(files: { path: string; bytes: Uint8Array }[], needle: string): { file: string } | undefined`:
+   - it searches only paths ending `.sqlite3` and never `-journal`;
+   - it finds UTF-8 needles with non-ASCII text;
+   - its result carries the path only.
+
+   **Commit 1:** `test(harness): failing unit tests for finding an edited value in the web app's database file (WEB-SQLITE-1)`.
+3. **GREEN:**
+   - In `localProfile.ts`, `expectStoredLocally(webApp: WebApp, needle: string, what: string, opts?: { timeoutMs?: number }): Promise<void>`:
+     - it opens a probe page in `webApp.context` (the app page stays open);
+     - it polls up to 30 s (`waitFor`). Each probe reads the `.sqlite3` files from a same-origin page, retrying a busy file. Busy files count as "not yet";
+     - it closes the probe;
+     - on timeout it throws `` `${what} is not in the web app's own database (a lost save, WEB-SQLITE-1)` ``, which never includes the needle.
+   - Calls, each right after the UI step and before any sync:
+     - **M2-AC3:** step 3 (T1, B1), step 5 (T2, B2) and step 7. The move: the target notebook's id is not known in the UI, so use the title T2 and record that a move is not byte-checkable;
+     - **M2-AC4:** step 3 (A, B) and step 5 (P2, B2);
+     - **M2-S3:** the specs that edit in the UI (trash and restore: the note's title stays; attach: the resource file name).
+
+     Each call's `what` names the field, for example `'the edited title'`.
+   - **Commit 2:** `test(harness): after each UI edit the test checks the web app stored it before it syncs (WEB-SQLITE-1)`.
+
+### WS-4: Dispatch point (no commit)
+After WS-1 to WS-3, the orchestrator dispatches `docs/test-plans/WEB-SQLITE-1.md` to the senior engineer. The executor goes on with WO-1 and does not wait.
+
+### WS-5: Sensitivity (no commit)
+Make temporary edits; `git checkout --` each one afterwards.
+- **S-WS1:**
+  - in `tests/e2e/harness/type-like-user.spec.ts`, run `page.evaluate(() => { console.warn('sqlite3_step() rc= 10 SQLITE_IOERR SQL = INSERT INTO notes (id) VALUES (1)'); console.error('models/Note: Could not save note {}'); })`;
+  - it must fail in teardown naming `SQLite step: rc 10, INSERT notes` and `SQLite save`;
+  - `web-sqlite.json` must exist, with a storage estimate;
+  - repeat with only the spellfix line (`rc= 1 … spellfix1`): it must pass.
+- **S-WS3:** in `notes.spec.ts` step 3, call `expectStoredLocally(webApp, \`never typed ${run}\`, 'a value that was never typed')`. It must fail at 30 s with that `what` and without the needle.
+
+**HARD STOP** if either does not behave as stated.
+
+### WS-6: Strategy and plan (`docs(testing)`, `docs(test-plans)`)
+- **Strategy §5:** "**Browser SQLite failures fail the test** (WEB-SQLITE-1): a `sqlite3_step() rc=` other than 0 or 1 (the startup `spellfix1` line excepted), `Could not save`, or the `openDatabase` startup failure, named by kind, rc and statement verb/table, never the SQL. After every UI edit a test checks, before it syncs, that the web app's own database holds the new value."
+- **This plan:** append the WS RED, the S-WS1/S-WS3 runs and the feasibility result.
+
+### WO-22 (amended)
+- The precondition already holds on this branch: step 60 min, `607942c` `ci-cd-specialist`. `ciGlobalTimeoutMs` is already 55 min.
+- **WO-22 only sets `longSpecTimeoutMs = 25 * 60_000`, and only if WO-21 measured M2-AC7a above 7.5 min on the Pi.** Otherwise **RECORD** "15 min kept, M2-AC7a measured X min" and skip it.
+- The comment and strategy edits name only the spec timeout. Run `CI-T-01…05`; all must pass.
+- **Commit (if changed):** `chore(harness): CC-1(b): the longest spec 25 min for M2-AC7a's 100 MiB attachment (M2-S3 D7)`.
+- **No ci-cd work is needed.**
+
+### WO-26: The late-leave race in `trashOpenNote` (CI-M2-S2 r2 C1) (RED commit)
+- **RED:** `tests/unit/harness/trashExit.test.ts` gains `trash-06`: after `stayed`, an observation `{ onList: true, onNote: false }` gives `left` again. That one already holds. The new pure `afterStayed(click: 'done' | 'detached' | 'timeout', s: TrashScreen): 'left' | 'retry' | 'fail'`:
+  - `detached` + `onList` gives `left`;
+  - `timeout` + `onNote` gives `fail`;
+  - `detached` + neither gives `retry`.
+- **GREEN:** in `trashOpenNote`'s `stayed` branch, click `Back` with `{ timeout: 10_000 }` in a `try`. On an error, re-observe and apply `afterStayed`. `retry` re-observes for at most 10 s; `fail` rethrows.
+- Commits: `test(harness): failing unit tests for a late leave after the trashed note seemed to stay (CI-M2-S2 r2 C1)`, then `test(harness): trashOpenNote tolerates upstream leaving the trashed note after the Back press began (CI-M2-S2 r2 C1)`.
+
+### WO-27: The `restartReady.ts` comment (CI-M2-S2 r2 C2) (`chore`)
+The comment says F's lost podman timer is a hypothesis, and that `health-lag` fires on every cycle on the Pi too (podman checks every 2 s). **Commit:** `chore(harness): restartReady states F's podman mechanism as unproven (CI-M2-S2 r2 C2)`.
+
+### WO-28: The `headlessService` failure path (CI-M2-S2 r3 C1, C2) (RED commit)
+- **RED:** `tests/unit/harness/fixtureCleanup.test.ts` holds `clean-01…02` for a pure `cleanupAll(steps: (() => Promise<void>)[], original: unknown): Promise<never>`:
+  - every step runs, even when an earlier one throws;
+  - the error that is rethrown is `original`, with the cleanup errors listed in its `cause` or a `suppressed` array, value-free.
+- **GREEN:**
+  - in `fixtures.ts`, the `headlessService` catch registers the half-started container's Data API token first (`registerToken` on `{ container: projectContainers(project).headless, label }`, if any);
+  - it then runs `keepStartLogs` and `downHeadless` through `cleanupAll`, and rethrows the original.
+- Commits: `test(harness): failing unit tests for cleanup that never masks the original error (CI-M2-S2 r3 C1)`, then `test(harness): the headless fixture's failure path registers the token, keeps the logs and rethrows the original error (CI-M2-S2 r3 C1, C2)`.
+
+### Runs (WO-24, amended)
+WO-24's full E2E run is under `LANG=C.UTF-8 LC_ALL=C.UTF-8`, as CI-M2-S2's was. All tests must pass with no retry, and **no WS-1 failure**.
+- List every `web-sqlite.json` and every `allow-sqlite` annotation; there should be none.
+- A WS-1 failure is a **HARD STOP**: report it with its `web-sqlite.json` and the worker lines, and don't re-run.
