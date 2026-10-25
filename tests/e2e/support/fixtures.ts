@@ -125,6 +125,42 @@ const keepStartLogs = async (stack: StackState, project: string, error: unknown,
 	}
 };
 
+const maxSqliteArgs = 20;
+
+// WEB-SQLITE-1 (WS-2): the evidence of a failing browser SQLite, written to web-sqlite.json (attached, and kept in the stack's
+// logs dir): the value-free failures, the argument objects of the console messages, and the origin's storage estimate (is the
+// quota or persistence the cause?). Nothing here throws: the failure itself is asserted by the caller.
+const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: unknown[], args: unknown[][]): Promise<void> => {
+	const readStorage = async (page: Page): Promise<unknown> => {
+		return await page.evaluate(async () => {
+			const g = globalThis as unknown as { navigator: { storage: { estimate: () => Promise<unknown>; persisted: () => Promise<boolean> } } };
+			return { estimate: await g.navigator.storage.estimate(), persisted: await g.navigator.storage.persisted() };
+		});
+	};
+	let storage: unknown;
+	try {
+		if (!app.page.isClosed()) {
+			storage = await readStorage(app.page);
+		} else {
+			const probe = await app.context.newPage();
+			try {
+				await probe.goto(new URL('/manifest.json', app.baseURL).href);
+				storage = await readStorage(probe);
+			} finally {
+				await probe.close();
+			}
+		}
+	} catch (error) {
+		storage = `(storage estimate failed: ${(error as Error).name})`;
+	}
+	const text = redactText(JSON.stringify({ failures, args, storage }, null, 2), workerSecrets(stack));
+	mkdirSync(stack.logsDir, { recursive: true });
+	writeFileSync(join(stack.logsDir, `${stack.project}-${shortId(testInfo)}-web-sqlite.json`), text);
+	const path = testInfo.outputPath('web-sqlite.json');
+	writeFileSync(path, text);
+	await testInfo.attach('web-sqlite.json', { path, contentType: 'application/json' });
+};
+
 const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}${testInfo.retry ? `r${testInfo.retry}` : ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // The M1-S5 in-container Data API probe, piped to `node -` on stdin: no test files are mounted into the headless
@@ -269,8 +305,23 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
 		const context = await browser.newContext({ baseURL: stack.webUrl, locale: browserLocale, timezoneId: webTimezone });
 		const lines: string[] = [];
+		// WEB-SQLITE-1 evidence: the argument objects of the first 20 console messages that are a SQLite failure (they hold the
+		// worker's error object: type, dbId, messageId, the result code). Each is read in a `try`: a page can be closing.
+		const sqliteArgs: Promise<unknown[]>[] = [];
 		const watch = (page: Page): void => {
-			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));
+			page.on('console', m => {
+				const text = `${new Date().toISOString()} [${m.type()}] ${m.text()}`;
+				lines.push(text);
+				if (sqliteArgs.length < maxSqliteArgs && sqliteFailures([text]).length > 0) {
+					sqliteArgs.push(Promise.all(m.args().map(async a => {
+						try {
+							return await a.jsonValue() as unknown;
+						} catch {
+							return '(unserialisable)';
+						}
+					})));
+				}
+			});
 			page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
 		};
 		context.on('page', watch);
@@ -302,6 +353,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			} else {
 				await context.tracing.stop();
 			}
+			if (sqliteFailing) await keepWebSqlite(stack, testInfo, { context, page, baseURL: stack.webUrl }, sqlite, await Promise.all(sqliteArgs));
 			await context.close();
 			if (allowed === undefined) expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
 		}
