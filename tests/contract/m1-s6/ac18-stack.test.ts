@@ -6,6 +6,7 @@ import { describe, expect, test } from '@jest/globals';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { selfTestHealthy } from '../../stack/restartReady.ts';
 import { snapshot } from '../../stack/stack.ts';
 import type { PodmanSnapshot } from '../../stack/stack.ts';
 import { repoRoot } from '../support/podman.ts';
@@ -47,10 +48,11 @@ describe('M1-AC18 compose test stack: up, healthy, down clean', () => {
 		const after = snapshot();
 		expect({ leftovers: diff(before, after) }).toEqual({ leftovers: [] });
 		expect({ code: run.code, why: run.code === 0 ? '' : describeRun(run) }).toEqual({ code: 0, why: '' });
-		const seen = JSON.parse(readFileSync(join(run.out, 'health.json'), 'utf8')) as { seen: Record<string, { health: string; check: string[]; init: boolean; networkMode: string; pod: string } | null> };
+		const seen = JSON.parse(readFileSync(join(run.out, 'health.json'), 'utf8')) as { seen: Record<string, { health: string; check: string[]; init: boolean; networkMode: string; pod: string } | null>; healthz?: { headless: { status: number } | null } };
 		for (const service of ['server', 'web', 'headless']) {
 			const info = seen.seen[service];
-			expect({ service, health: info?.health }).toEqual({ service, health: 'healthy' });
+			// server and web by podman's status, headless by its /healthz (CI-M2-S2 H; the inner spec applies the same rule).
+			expect({ service, healthy: selfTestHealthy(service as 'server' | 'web' | 'headless', { podmanHealth: info?.health ?? '', healthz: seen.healthz?.headless ?? undefined }) }).toEqual({ service, healthy: true });
 			// The check comes from the compose file (the images carry no HEALTHCHECK, ADR-0006 amendment).
 			expect({ service, check: info?.check.join(' ') ?? '' }).toEqual({ service, check: expect.stringMatching(/^CMD-SHELL /) });
 			expect({ service, pod: info?.pod }).toEqual({ service, pod: '' });

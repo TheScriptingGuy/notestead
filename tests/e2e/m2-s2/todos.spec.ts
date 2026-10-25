@@ -14,13 +14,14 @@ import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { installNotificationSpy, readNotificationSpy } from '../support/notificationSpy.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { holdsFor } from '../../support/poll.ts';
 
 const todoFields = 'id,is_todo,todo_due,todo_completed,parent_id';
 const l1Warning = 'Warning: The due-date has been saved, but showing notifications is not supported by Joplin Web.';
 
 test.describe('M2-S2 to-dos in the web app', () => {
-	test.describe.configure({ timeout: 25 * 60_000 });
+	test.describe.configure({ timeout: longSpecTimeoutMs });
 
 	test('M2-AC5 a to-do created in the web UI with a due date has is_todo and the due epoch under Europe/Amsterdam in the REST API, marking it done sets todo_completed, and (NEG, L1) no notification is shown at the due time', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {
 		await requireUpstreamBundle(stack, 'M2-S2');
@@ -36,8 +37,9 @@ test.describe('M2-S2 to-dos in the web app', () => {
 
 		const readTodo = (id: string): Record<string, unknown> => pick(ok(dataApi.get(`/notes/${id}?fields=${todoFields}`), `GET /notes/${id}`), todoFields.split(','));
 		const cycle = async (label: string): Promise<void> => {
-			const { webMs, headlessMs } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
+			const { webMs, headlessMs, healthAtReady } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
 			test.info().annotations.push({ type: 'cycle', description: `${label}: web ${webMs} ms, headless ${headlessMs} ms` });
+			if (healthAtReady !== 'healthy') test.info().annotations.push({ type: 'health-lag', description: `${label}: podman health ${healthAtReady} while /healthz was ready` });
 		};
 
 		let seedFolderId = '';

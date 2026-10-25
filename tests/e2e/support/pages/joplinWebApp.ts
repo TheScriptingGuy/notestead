@@ -10,6 +10,7 @@ import { waitFor } from '../../../support/poll.ts';
 import { datetimeLocalValue } from '../dueDate.ts';
 import type { LocalParts } from '../dueDate.ts';
 import { SecretInVisibleFieldError, clearLikeUser, knownSecretsNow, secretIn, typeLikeUser } from '../typeLikeUser.ts';
+import { trashExit } from '../trashExit.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
 export const appStartTimeoutMs = 3 * 60_000;
@@ -189,6 +190,22 @@ export class JoplinWebApp {
 		await this.sidebarButton().waitFor();
 	}
 
+	// Deletes the open note to the trash and ends on the note list. Upstream either stays on the note screen or leaves it by
+	// itself (CI-M2-S2 E); both are accepted, within 30 s, and which one happened is returned.
+	public async trashOpenNote(note: NoteScreen): Promise<'left' | 'stayed'> {
+		const deletedAt = Date.now();
+		await note.menuAction('Delete');
+		const outcome = await waitFor('the note screen to leave by itself, or to settle on the trashed note', async () => trashExit({
+			onList: (await this.sidebarButton().isVisible()) && (await note.titleField().count()) === 0,
+			onNote: await note.titleField().isVisible(),
+			backVisible: await this.page.getByRole('button', { name: 'Back', exact: true }).isVisible(),
+			msSinceDelete: Date.now() - deletedAt,
+		}), { timeoutMs: 30_000, intervalMs: 100 });
+		if (outcome === 'stayed') await this.backToList();
+		await this.sidebarButton().waitFor();
+		return outcome;
+	}
+
 	// The HTML of the page and of every frame, for absence checks (it holds attributes such as aria-label and hidden text).
 	// The note viewer is a sandboxed srcdoc iframe (ExtendedWebView/index.web.tsx), so the page's own DOM never holds a body.
 	public async frameHtml(): Promise<string> {
@@ -360,7 +377,7 @@ export class EncryptionSettings {
 }
 
 // The note screen (upstream Note.tsx): title field, Markdown editor (CodeMirror in an iframe), the header's notebook
-// dropdown and the Actions menu (plan §Page objects; docs/test-plans/M2-S2.md F4, F7).
+// dropdown and the Actions menu (plan §Page objects; docs/test-plans/M2-S2.md F4 (upstream may stay on a trashed note or leave it, CI-M2-S2 E), F7).
 export class NoteScreen {
 	public readonly page: Page;
 
@@ -496,10 +513,6 @@ export class NoteScreen {
 		return dialog;
 	}
 
-	// To the trash, with no confirmation; the screen stays on the note (F4).
-	public async deleteToTrash(): Promise<void> {
-		await this.menuAction('Delete');
-	}
 }
 
 // Upstream's "Set alarm" dialog (SelectDateTimeDialog.tsx, web branch): a native datetime-local input.

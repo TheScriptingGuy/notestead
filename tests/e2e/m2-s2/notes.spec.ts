@@ -13,12 +13,13 @@ import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
 import { foldersTitled } from '../support/restQueries.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { serverItemContent } from '../../stack/stack.ts';
 
 const noteFields = 'id,title,body,parent_id,is_todo,deleted_time,is_conflict,encryption_applied';
 
 test.describe('M2-S2 notes in the web app', () => {
-	test.describe.configure({ timeout: 25 * 60_000 });
+	test.describe.configure({ timeout: longSpecTimeoutMs });
 
 	test('M2-AC3 a note created, edited (typed like a user), moved and deleted to the trash in the web UI is reflected exactly in the headless REST API after one web sync and one headless sync each', async ({ stack, joplinServer, e2eeAccount, headlessService, dataApi, webApp, webNetwork }) => {
 		await requireUpstreamBundle(stack, 'M2-S2');
@@ -39,8 +40,9 @@ test.describe('M2-S2 notes in the web app', () => {
 		const readNote = (id: string): Record<string, unknown> => pick(ok(dataApi.get(`/notes/${id}?fields=${noteFields}`), `GET /notes/${id}`), noteFields.split(','));
 		// One web sync, then one headless sync (a restart of the test's own service); the durations feed watch item W1.
 		const cycle = async (label: string): Promise<void> => {
-			const { webMs, headlessMs } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
+			const { webMs, headlessMs, healthAtReady } = await syncWebThenHeadless(app, webNetwork, stack, headlessService);
 			test.info().annotations.push({ type: 'cycle', description: `${label}: web ${webMs} ms, headless ${headlessMs} ms` });
+			if (healthAtReady !== 'healthy') test.info().annotations.push({ type: 'health-lag', description: `${label}: podman health ${healthAtReady} while /healthz was ready` });
 		};
 
 		let seedFolderId = '';
@@ -125,8 +127,9 @@ test.describe('M2-S2 notes in the web app', () => {
 			await app.openNote(T2);
 			await note.waitOpen();
 			deletedAt = Date.now();
-			await note.deleteToTrash();
-			await app.backToList();
+			const exit = await app.trashOpenNote(note);
+			test.info().annotations.push({ type: 'trash-exit', description: exit === 'left' ? 'the app left the trashed note by itself' : 'the app stayed on the trashed note; Back pressed' });
+			await expect(app.notesHeading(target), 'the list of the note\'s notebook').toBeVisible();
 			await expect.poll(() => app.noteInList(T2).count(), { timeout: 30_000, intervals: [500] }).toBe(0);
 		});
 
