@@ -2,7 +2,7 @@
 // M2-S3.md R1/WS-1). A failure is named by its kind, rc and the statement's verb and table, never by the SQL, which can hold
 // note content. The lines are browser-console.log lines: `<ISO> [<level>] <message>`.
 import { describe, expect, test } from '@jest/globals';
-import { sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
+import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
 
 const at = '2026-10-25T08:00:00.000Z';
 const line = (level: string, message: string): string => `${at} [${level}] ${message}`;
@@ -59,5 +59,15 @@ describe('web sqlite failures', () => {
 		expect(JSON.stringify(r)).not.toContain('secret title');
 		expect(sqliteFailureLines(r).join('\n')).not.toContain('secret title');
 		expect(sqliteFailureLines(r)[0]).toBe('SQLite step: rc 10, INSERT notes (console line 1)');
+	});
+
+	test('sql-08 the app page is used for the storage estimate when it is on the web origin', () => {
+		expect(estimatePageChoice('http://127.0.0.1:41234/', 'http://127.0.0.1:41234')).toBe('app');
+	});
+
+	test('sql-09 any other page (blank, none, another port, a data URL) gets a same-origin probe', () => {
+		for (const url of ['about:blank', undefined, 'http://127.0.0.1:41235/', 'data:text/html,x']) {
+			expect(`${String(url)} -> ${estimatePageChoice(url, 'http://127.0.0.1:41234')}`).toBe(`${String(url)} -> probe`);
+		}
 	});
 });
