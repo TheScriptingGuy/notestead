@@ -1552,3 +1552,47 @@ Commits:
 - `docs(test-plans): M2-S3 WEB-SQLITE-1 harness RED and validation`.
 
 **Then stop and report.** The next agent is the senior engineer (`docs/test-plans/WEB-SQLITE-1.md`). Do not start WO-1.
+
+## WO-29: `tests/e2e/harness/web-sqlite-scope.spec.ts`, the L20 characterisation (planner, 2026-10-25; plan §D-W1)
+Run it after WO-21 and before WO-24. The HARD STOP definition above applies.
+
+### Step 1, the fault script (RED commit)
+- **RED:** `tests/unit/harness/webSqlite.test.ts` gains `wsq-01…03` for the pure message classifier the init script uses, `classifyWorkerMessage(msg: unknown): 'settings-delete' | 'notes-title-update' | 'begin' | 'other'`. It reads sqlite-wasm's worker-1 message shape `{ type: 'exec', args: { sql } }`, case-insensitive on the SQL verb and table:
+  - `wsq-01`: `DELETE FROM settings WHERE key IN (?)` gives `settings-delete`;
+  - `wsq-02`: `UPDATE notes SET title = ?, …` gives `notes-title-update`;
+  - `wsq-03`: `BEGIN TRANSACTION` gives `begin`; anything else, and a non-object, give `other`.
+
+  **Commit 1:** `test(harness): failing unit tests for classifying the web app's SQLite worker messages (L20 characterisation)`.
+- **GREEN:** `tests/e2e/support/sqliteFault.ts` holds `classifyWorkerMessage` and `installSettingsFault(context)`, an init script that:
+  - wraps `Worker.prototype.postMessage` (self-contained, `globalThis` casts, like `notificationSpy.ts`);
+  - records `begin`, `held` and `update-seen` events with times in `globalThis.__nstFault`;
+  - on the first `settings-delete` after `armed`, rewrites its SQL to `DELETE FROM settings_nst_missing_table` and holds it until `__nstReleaseFault()`, then forwards it;
+  - exposes `__nstArmFault()`;
+  - forwards everything else unchanged.
+
+  `readFault(page)` returns the events. **Commit 2:** `test(harness): an init script that holds and fails one settings batch in the web app's SQLite worker (L20 characterisation)`.
+- **Feasibility gate:** if the app's SQLite worker messages are not visible through `Worker.prototype.postMessage` (no `exec` with `sql` seen within 60 s of startup), **HARD STOP**. Report the message shapes seen (types only, no SQL).
+
+### Step 2, the spec (one commit)
+Fixtures `{ stack, joplinServer, e2eeAccount, webApp, webNetwork }`. The unlock is needed for a real profile; there is no headless service. `test.describe.configure({ timeout: longSpecTimeoutMs })`.
+- **`WSQ-01 documents L20: a title edit made while a failing settings batch is open is rolled back with it`:**
+  1. `allowSqliteFailures('WSQ: a failing settings statement is injected on purpose (L20 characterisation)')`, `installSettingsFault`, `openUnlockedWebApp`.
+  2. Open the seeded note, then `__nstArmFault()`.
+  3. Change a setting the app persists, to provoke a settings batch, through the UI, for example a configuration toggle. If no UI path provokes one within 60 s, rely on the app's periodic settings save and wait for `held` (up to 3 min). If neither works: **HARD STOP**.
+  4. On `held`: `typeTitle(newTitle, { replace: true })`, and wait for `update-seen` after `held` (30 s).
+  5. `__nstReleaseFault()`.
+  6. **Assert:**
+     - (a) within 10 s the console has `Could not save settings`, and a `ROLLBACK` line after the held `BEGIN`;
+     - (b) after `backToList`, the list shows `newTitle`;
+     - (c) `expectNotStoredLocally(webApp, newTitle, 'the edited title', { holdMs: 15_000 })` holds. On failure its message is the **flip text** of plan §D-W1.
+- **`WSQ-02 control: the same failing batch, with the edit made after it rolled back, keeps the edit`:** the same as WSQ-01, but the title is typed only after the release and the `ROLLBACK`. Then `expectStoredLocally(webApp, newTitle, 'the edited title')`.
+- **`WSQ-03 control: no fault, the edit is stored, and WS-1 stays in force`:** no `allowSqliteFailures` and no fault; edit, then `expectStoredLocally`.
+- `expectNotStoredLocally` goes in `localProfile.ts`, beside `expectStoredLocally`: `holdsFor` over the same file read, each second, failing if the needle appears.
+- **Commit:** `test(e2e): WSQ-01 to WSQ-03 characterise L20, a rolled-back settings batch takes a concurrent title edit with it (WEB-SQLITE-1)`.
+
+### Runs and sensitivity (no commit)
+- Run the spec 3 times in a row on the Pi (`--repeat-each 3`). All 9 must pass. A single WSQ-01 that keeps the edit is a determinism failure: **HARD STOP**.
+- **S-WSQ:** a temporary edit that removes the hold (the fault fails at once, as the SE's `FAULT=1`). WSQ-01 must fail with the flip text. This proves (c) can tell a kept edit from a lost one.
+
+### Plan
+Record the gate results, the 3 × 3 runs and S-WSQ in the plan.
