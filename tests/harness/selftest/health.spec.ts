@@ -4,6 +4,8 @@
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { selfTestHealthy } from '../../stack/restartReady.ts';
+import { headlessHealthz } from '../../stack/stack.ts';
 import { expect, test } from '../../e2e/support/fixtures.ts';
 
 const inspect = (container: string): { health: string; check: string[]; init: boolean; networkMode: string; pod: string } => {
@@ -22,9 +24,17 @@ test('stack services are healthy when the first test starts', async ({ stack }) 
 	};
 	const seen: Record<string, ReturnType<typeof inspect> | null> = {};
 	for (const [service, container] of Object.entries(services)) seen[service] = container ? inspect(container) : null;
-	writeFileSync(join(out, 'health.json'), JSON.stringify({ project: stack.project, run: stack.run, containers: services, seen }, null, 2));
+	// The headless service is judged by its supervisor's /healthz, as its readiness is (CI-M2-S2 H): podman's status can lag.
+	const headlessContainer = services.headless;
+	const healthz = headlessContainer ? headlessHealthz(headlessContainer) : undefined;
+	writeFileSync(join(out, 'health.json'), JSON.stringify({ project: stack.project, run: stack.run, containers: services, seen, healthz: { headless: healthz ?? null } }, null, 2));
 	for (const [service, info] of Object.entries(seen)) {
 		expect(info, `${service} has a container`).not.toBeNull();
-		expect(info?.health, `${service} health when the test started`).toBe('healthy');
+		const name = service as 'server' | 'web' | 'headless';
+		const observed = name === 'headless'
+			? `podman health ${info?.health}, /healthz ${healthz ? `${healthz.status} ${healthz.state ?? ''}`.trim() : 'no answer'}`
+			: `podman health ${info?.health}`;
+		const rule = name === 'headless' ? 'headless is healthy when its /healthz is 200' : `${name} is healthy when podman health is healthy`;
+		expect(selfTestHealthy(name, { podmanHealth: info?.health ?? '', healthz }), `${rule}; observed: ${observed}`).toBe(true);
 	}
 });

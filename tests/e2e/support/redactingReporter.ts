@@ -7,6 +7,7 @@
 // - onStepBegin/onStepEnd: the step's title (`Fill "<value>"`, `Type "<text>"`), its titlePath() and its error;
 // - onTestEnd: every attachment (the Playwright trace zip entry by entry, error-context, test attachments), the
 //   errors (message, stack, value, snippet, cause), the stdout/stderr chunks, the step tree;
+//   then, for a test that did not pass, one redacted `[notestead] FAILED …` line on stdout at once (failureLine.ts);
 // - onEnd: every file under each project's outputDir (for example the original of an attachment added by path);
 // - onExit: the registry file is removed (it must outlive globalSetup's teardown, which Playwright runs before onEnd).
 // Markers for the upload gate (M1-S8 C1-R2, tests/support/uploadGate.ts): onBegin writes `redaction-pending.json` next
@@ -16,13 +17,15 @@
 // The worker redacts its stdout/stderr at the source (fixtures.ts `redactStdio`), because `list` prints those chunks
 // live, before any reporter callback could change them.
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import type { FullConfig, Reporter, TestCase, TestError, TestResult, TestStep } from '@playwright/test/reporter';
 import { credentialValues, isZip, looksLikeText, redactBuffer, redactFile, redactText, sessionIdsFromTrace, textViews } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
+import { findRepoRoot } from '../../support/repoRoot.ts';
 import { mergeSecrets, readSecretsFile, removeSecretsFile, secretFeedEnabled, secretsFileEnv } from '../../support/secrets.ts';
 import { completeMarker, pendingMarker } from '../../support/uploadGate.ts';
 import { readZip } from '../../support/zip.ts';
+import { failureLine } from './failureLine.ts';
 
 const stackSecrets = (): KnownSecret[] => {
 	const raw = process.env.NOTESTEAD_E2E_STACK;
@@ -186,7 +189,7 @@ export default class RedactingReporter implements Reporter {
 		if (learnt.length > 0) this.known = mergeSecrets(this.known, learnt);
 	}
 
-	public onTestEnd(_test: TestCase, result: TestResult): void {
+	public onTestEnd(test: TestCase, result: TestResult): void {
 		this.secrets(); // the registry first: learnFromTraces adds to what it loaded
 		this.learnFromTraces(result.attachments as { path?: string; body?: Buffer }[]);
 		const secrets = this.secrets();
@@ -207,6 +210,27 @@ export default class RedactingReporter implements Reporter {
 		this.redactChunks(result.stdout, secrets);
 		this.redactChunks(result.stderr, secrets);
 		for (const step of result.steps) this.redactStep(step, secrets);
+		this.printFailure(test, result, secrets);
+	}
+
+	// One redacted line per failure, at once: `list` prints error details only at the end of the run, and a run killed by
+	// its step limit never gets there (docs/test-plans/CI-M2-S2-x64-arm64.md Decisions C, D). It is a diagnostic: whatever
+	// goes wrong while building it (the unit tests call onTestEnd with partial objects) must never stop the redaction.
+	private printFailure(test: TestCase, result: TestResult, secrets: KnownSecret[]): void {
+		if (typeof result.status !== 'string' || result.status === 'passed' || result.status === 'skipped') return;
+		try {
+			process.stdout.write(`${failureLine({
+				title: test.titlePath().slice(-1)[0] ?? test.title,
+				file: relative(findRepoRoot(), test.location.file),
+				line: test.location.line,
+				retry: result.retry,
+				status: result.status,
+				durationMs: result.duration,
+				error: result.error?.message ?? result.status,
+			}, secrets)}\n`);
+		} catch {
+			// not a line this time
+		}
 	}
 
 	public onEnd(): void {

@@ -31,6 +31,9 @@ podman run -d -p 127.0.0.1:8080:8080 \
 The image runs as uid 65532 and writes only to `/tmp`. Point the web app's Joplin Server sync target at
 `https://<web host>/joplin-server`.
 
+Reaching the server: the proxy waits up to 10 s to connect. A slow first nameserver costs up to about 5 s instead of
+a 502, and an unreachable server is reported as a 502 within about 10 s (it was 3 s).
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `JOPLIN_SERVER_URL` | required | The server's **direct** address that Caddy dials (`scheme://host[:port]`; trailing `/`s are removed), never a Cloudflare-proxied hostname. |

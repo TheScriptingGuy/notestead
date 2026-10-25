@@ -33,3 +33,9 @@ Plan: `docs/test-plans/CI-e2e-browser-gate.md`. Failing tests: a2e89af. Only `.g
 - Re-run: new gate test 8/8 (`new2.log`); workflow acceptance files (ci-e2e-browser-gate, m1-s3 ac8, m1-s8 ac22,
   ac30-ac32, ac33, shellcheck) 75/75 (`workflow-suite2.log`); m1-s8 dir 51/51; `check:workflows` OK (`check2.log`);
   `lint` exit 0 (`lint2.log`). Logs under `~/joplin-web-app-work/ci-evidence/gate-impl/`.
+
+## CI-M2-S2 WO-12 (CC-1): E2E step to 60 minutes
+
+- Approach: in `.github/workflows/e2e.yml`, step `id: e2e`, `timeout-minutes` 45 -> 60, with a comment citing CC-1 and proof run 1 (arm64 E2E 1645 s, 69% of the 40-minute run budget). Nothing else changed. The job-level `timeout-minutes: 150` already covers setup + contract step (75) + E2E step (60), so it stays.
+- Order: lands before WO-13 (run budget to 55 minutes; 55 <= 60 - 4 holds).
+- Evidence (all pass): `node --test tests/acceptance/ci-m2-s2/timeouts.test.mts` (CI-T-01..04, 4/4, run budget still 40 min); `node --test tests/acceptance/ci-e2e-browser-gate/*.test.mts` and m1-s9 acceptance; m1-s8 ac22, ac30-ac32, ac33; `corepack yarn check:workflows` OK; `corepack yarn lint` exit 0. E2E and contract suites not run.

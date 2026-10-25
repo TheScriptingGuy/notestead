@@ -28,7 +28,9 @@ import { descriptorDir, descriptorPath, ensureDescriptorDir, readDescriptorFile 
 import { checkServerUrl, projectLabel, roleLabel, runLabel, testLabel } from './guard.ts';
 import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
+import { restartVerdict, startVerdict } from './restartReady.ts';
 import type { StackImages } from './images.ts';
+import { checkSeededInfo } from './seedCheck.ts';
 
 export const stackDir = (): string => join(findRepoRoot(), 'tests', 'stack');
 export const coreServices = ['server', 'web'] as const;
@@ -90,9 +92,15 @@ export interface StackState {
 
 export class StackHealthError extends Error {
 	public readonly service: string;
-	public constructor(service: string, message: string) {
+	// `compose up`'s redacted output and the last readiness observation (value-free), for the log files of a failed start
+	// (CI-M2-S2 G); both are also in the message only in part.
+	public readonly output?: string;
+	public readonly readiness?: string;
+	public constructor(service: string, message: string, extra: { output?: string; readiness?: string } = {}) {
 		super(message);
 		this.service = service;
+		this.output = extra.output;
+		this.readiness = extra.readiness;
 	}
 }
 
@@ -158,7 +166,11 @@ const composeSync = (state: StackState, label: string, project: string, files: s
 
 // Runs `compose up -d …` in the background while the health of the project's containers is polled: a service that
 // turns unhealthy or exits aborts at once (podman-compose would otherwise wait on it for ever).
-const composeUp = async (state: StackState, label: string, project: string, files: string[], services: string[], extra: Record<string, string>, timeoutMs: number): Promise<Record<string, string>> => {
+// `ready` replaces the default rule (every service podman-healthy, compose exited 0) for a caller that reads a better signal
+// (the headless service: its own /healthz, CI-M2-S2 G); it gets compose's exit code (undefined while it still runs).
+type ComposeReady = (containers: Record<string, string>, composeExit: number | null | undefined, note: (observation: string) => void) => 'done' | 'wait' | { fail: string };
+
+const composeUp = async (state: StackState, label: string, project: string, files: string[], services: string[], extra: Record<string, string>, timeoutMs: number, ready?: ComposeReady): Promise<Record<string, string>> => {
 	const argv = composeArgs(project, files, ['up', '-d', ...services]);
 	const child = spawn(argv[0], argv.slice(1), { cwd: stackDir(), env: composeEnv(state, extra), stdio: ['ignore', 'pipe', 'pipe'] });
 	let output = '';
@@ -174,9 +186,20 @@ const composeUp = async (state: StackState, label: string, project: string, file
 		resolve();
 	}));
 	let fatal: StackHealthError | undefined;
+	let observation = 'no observation';
+	const began = Date.now();
+	const extra_ = (): { output: string; readiness: string } => ({ output: redactText(output), readiness: `${observation}; elapsed ${Math.round((Date.now() - began) / 1000)} s` });
 	try {
 		return await waitFor(`${services.join(', ')} of ${project} to be healthy`, async () => {
 			const containers = projectContainers(project);
+			if (ready) {
+				const verdict = ready(containers, exitCode, o => {
+					observation = o;
+				});
+				if (verdict === 'done') return containers;
+				if (typeof verdict === 'object') fatal = new StackHealthError(services.join(','), `${verdict.fail}; \`${argv.join(' ')}\` exit ${exitCode ?? 'pending'}`, extra_());
+				return undefined;
+			}
 			const health = healthOf(services, containers);
 			return exitCode === 0 && health.every(h => h.status === 'healthy') ? containers : undefined;
 		}, {
@@ -184,11 +207,12 @@ const composeUp = async (state: StackState, label: string, project: string, file
 			intervalMs: 1_000,
 			// An unhealthy, exited or unchecked service, or a failed `compose up`, ends the wait at once.
 			failFast: () => {
+				if (ready) return fatal?.message;
 				if (exitCode !== undefined && exitCode !== 0) {
-					fatal = new StackHealthError(services.join(','), `\`${argv.join(' ')}\` exited ${exitCode}:\n${redactText(output).slice(-3000)}`);
+					fatal = new StackHealthError(services.join(','), `\`${argv.join(' ')}\` exited ${exitCode}:\n${redactText(output).slice(-3000)}`, extra_());
 				} else {
 					const sick = healthOf(services, projectContainers(project)).find(h => h.status === 'unhealthy' || h.status === 'exited' || h.status === 'no healthcheck');
-					if (sick) fatal = new StackHealthError(sick.service, describeSick(sick));
+					if (sick) fatal = new StackHealthError(sick.service, describeSick(sick), extra_());
 				}
 				return fatal?.message;
 			},
@@ -198,7 +222,7 @@ const composeUp = async (state: StackState, label: string, project: string, file
 		// A timeout: name every service that is not healthy.
 		const pending = healthOf(services, projectContainers(project)).filter(h => h.status !== 'healthy');
 		throw new StackHealthError(pending.map(h => h.service).join(',') || services.join(','),
-			`stack services not healthy within ${timeoutMs / 1000} s: ${pending.map(describeSick).join('; ') || (error as Error).message}`);
+			`stack services not healthy within ${timeoutMs / 1000} s: ${pending.map(describeSick).join('; ') || (error as Error).message}${ready ? `; last observation: ${observation}` : ''}`, extra_());
 	} finally {
 		if (exitCode === undefined) child.kill('SIGTERM');
 		await exited;
@@ -383,7 +407,7 @@ export const createAccount = async (state: StackState): Promise<Account> => {
 // `nst-seed-<tag>` on note 1, and a note `Notestead attachment note <tag>` with a text attachment `nst-seed-<tag>.txt`.
 export interface SeedOptions { notes?: number; extras?: boolean }
 
-export const enableE2ee = (state: StackState, account: Account, label: string, seed: SeedOptions = {}): Account => {
+export const enableE2ee = async (state: StackState, account: Account, label: string, seed: SeedOptions = {}): Promise<Account> => {
 	const tag = randomBytes(5).toString('hex');
 	const folder = `Notestead folder ${tag}`;
 	const notes = [{ title: `Notestead note ${tag}`, body: `Seeded body ${tag} zebracorn` }];
@@ -404,6 +428,11 @@ export const enableE2ee = (state: StackState, account: Account, label: string, s
 	writeFileSync(join(state.logsDir, `device-${label}.log`), redactText(`# exit ${r.status}\n${r.stdout ?? ''}\n--- stderr ---\n${r.stderr ?? ''}`, knownSecrets(state)));
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (r.status !== 0 || !line) throw new Error(`the E2EE device failed (exit ${r.status}; log ${join(state.logsDir, `device-${label}.log`)}): ${redactText(`${r.stdout}\n${r.stderr}`, knownSecrets(state)).slice(-1500)}`);
+	// The post-condition (DNS-1, DNS1-AC4), on the server itself: the seed uploaded a master key. The device fails on a
+	// reported sync error; this catches an upload that failed without being reported.
+	const info = await serverItemContent(state, account, 'info.json');
+	const reason = checkSeededInfo(info.status, info.text);
+	if (reason) throw new Error(`the E2EE device did not seed the account: ${reason} (log ${join(state.logsDir, `device-${label}.log`)})`);
 	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[]; todo?: { id: string }; attachmentNote?: { id: string } };
 	account.e2ee = result.e2ee;
 	account.seedTag = tag;
@@ -422,6 +451,20 @@ export const enableE2ee = (state: StackState, account: Account, label: string, s
 	return account;
 };
 
+// A fresh headless service is ready when its own /healthz is 200 (initial cycle done); podman's health status only fails fast,
+// as after a restart (CI-M2-S2 F, G).
+const headlessReady: ComposeReady = (containers, composeExit, note) => {
+	const container = containers.headless;
+	if (!container) {
+		note(`compose exit ${composeExit ?? 'pending'}, no headless container yet`);
+		return 'wait';
+	}
+	const [h] = healthOf(['headless'], containers);
+	const healthz = h.status === 'not created' ? undefined : headlessHealthz(container);
+	note(`compose exit ${composeExit ?? 'pending'}, podman health ${h.status}, /healthz ${healthz ? `${healthz.status} ${healthz.state ?? ''}`.trim() : 'no answer'}, lastSync ${healthz?.lastSync ?? 'none'}`);
+	return startVerdict({ composeExit, running: h.status !== 'exited', health: h.status, healthz });
+};
+
 // One compose project (compose.headless.yaml) for `account`, healthy (its /healthz is 200: initial sync and decryption
 // done). Secrets are files in a 0700 dir, mounted by compose as /run/secrets/*.
 export const upHeadless = async (state: StackState, account: Account, label: string, timeoutMs = 10 * 60_000): Promise<HeadlessService> => {
@@ -434,7 +477,7 @@ export const upHeadless = async (state: StackState, account: Account, label: str
 	const service: HeadlessService = { label, project, container: '', secretsDir, email: account.email };
 	state.headless.push(service);
 	const containers = await composeUp(state, `up-headless-${label}`, project, ['compose.headless.yaml'], ['headless'],
-		{ NST_JOPLIN_USERNAME: account.email, NST_SECRETS_DIR: secretsDir }, timeoutMs);
+		{ NST_JOPLIN_USERNAME: account.email, NST_SECRETS_DIR: secretsDir }, timeoutMs, headlessReady);
 	service.container = containers.headless;
 	registerToken(service);
 	if (state.owned) saveDescriptor(state);
@@ -443,7 +486,7 @@ export const upHeadless = async (state: StackState, account: Account, label: str
 
 // The default E2EE account and its headless service: the whole stack is healthy before any test starts (M1-AC18).
 export const upDefault = async (state: StackState): Promise<void> => {
-	state.defaultAccount = enableE2ee(state, await createAccount(state), 'default');
+	state.defaultAccount = await enableE2ee(state, await createAccount(state), 'default');
 	state.defaultHeadless = await upHeadless(state, state.defaultAccount, 'default');
 	if (state.owned) saveDescriptor(state);
 };
@@ -478,25 +521,35 @@ export const headlessHealthz = (container: string): { status: number; state?: st
 // `lastSync` later than the restart. The CLI rotates the Data API token on every start: the new one is registered
 // for redaction at once (review M1-S6a-r1 C1-R6). M3 (`requestSync('manual')`) can replace the restart with the
 // supervisor's own trigger without changing callers.
-export const syncHeadlessOnce = async (state: StackState, service: HeadlessService, timeoutMs = 10 * 60_000): Promise<{ lastSync: string; durationMs: number }> => {
+export const syncHeadlessOnce = async (state: StackState, service: HeadlessService, timeoutMs = 10 * 60_000): Promise<{ lastSync: string; durationMs: number; healthAtReady: string }> => {
 	const started = Date.now();
 	podmanSync(['restart', '-t', '30', service.container], { timeoutMs: 2 * 60_000 });
-	const lastSync = await waitFor(`${service.container} to sync once more (healthy again, lastSync after the restart)`, async () => {
+	// Ready is the supervisor's /healthz with a sync newer than the restart; podman's health status only fails fast (it can lag
+	// after a restart, CI-M2-S2 F). The last observation goes into the timeout message, value-free.
+	let fail: string | undefined;
+	let healthAtReady = '';
+	let last = 'no observation';
+	const observe = (): { verdict: ReturnType<typeof restartVerdict>; lastSync?: string } => {
 		const [health] = healthOf(['headless'], { headless: service.container });
-		if (health.status !== 'healthy') return undefined;
-		const report = headlessHealthz(service.container);
-		return report?.status === 200 && report.lastSync && Date.parse(report.lastSync) > started ? report.lastSync : undefined;
-	}, {
-		timeoutMs,
-		intervalMs: 1_000,
-		failFast: () => {
-			const [health] = healthOf(['headless'], { headless: service.container });
-			return health.status === 'exited' || health.status === 'unhealthy' ? describeSick(health) : undefined;
-		},
-	});
+		const healthz = headlessHealthz(service.container);
+		last = `podman health ${health.status}, /healthz ${healthz ? `${healthz.status} ${healthz.state ?? ''}`.trim() : 'no answer'}, lastSync ${healthz?.lastSync ?? 'none'}, restart at ${new Date(started).toISOString()}`;
+		healthAtReady = health.status;
+		return { verdict: restartVerdict({ running: health.status !== 'exited' && health.status !== 'not created', health: health.status, healthz, startedMs: started }), lastSync: healthz?.lastSync };
+	};
+	let lastSync: string;
+	try {
+		lastSync = await waitFor(`${service.container} to sync once more (/healthz ready, lastSync after the restart)`, async () => {
+			const { verdict, lastSync: seen } = observe();
+			if (verdict === 'done') return seen;
+			if (typeof verdict === 'object') fail = `${verdict.fail}; ${last}`;
+			return undefined;
+		}, { timeoutMs, intervalMs: 1_000, failFast: () => fail });
+	} catch (error) {
+		throw new Error(`${(error as Error).message}; last observation: ${last}`);
+	}
 	registerToken(service);
 	if (state.owned) saveDescriptor(state);
-	return { lastSync, durationMs: Date.now() - started };
+	return { lastSync, durationMs: Date.now() - started, healthAtReady };
 };
 
 // A free TCP port on 127.0.0.1 (released before it is returned: the caller binds it at once).

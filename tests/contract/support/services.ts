@@ -28,7 +28,8 @@ export interface JoplinServer {
 export const direct = (server: JoplinServer, path: string, opts: { method?: string; headers?: Record<string, string>; body?: string | Buffer } = {}): Promise<HttpResponse> =>
 	request({ port: server.port, path, method: opts.method, headers: { Host: publicHost, ...(opts.headers ?? {}) }, body: opts.body });
 
-export const startJoplinServer = async (stack: Stack, { role, host, testing }: { role: string; host: number; testing: boolean }): Promise<JoplinServer> => {
+// `aliases`: extra DNS names on the stack network (`--network-alias`), for example `server` as in compose (DNS-1).
+export const startJoplinServer = async (stack: Stack, { role, host, testing, aliases = [] }: { role: string; host: number; testing: boolean; aliases?: string[] }): Promise<JoplinServer> => {
 	const pin = readPin();
 	const name = startContainer(stack, {
 		role,
@@ -36,6 +37,7 @@ export const startJoplinServer = async (stack: Stack, { role, host, testing }: {
 		image: `${pin.server.image}:${pin.server.tag}`,
 		publish: [22300],
 		env: { APP_PORT: '22300', APP_BASE_URL: publicUrl, JOPLIN_IS_TESTING: testing ? '1' : undefined },
+		args: aliases.flatMap(alias => ['--network-alias', alias]),
 		command: ['node', 'dist/index.js', '--env', 'dev', '--env-file', '/dev/null'],
 	});
 	const server = { name, ip: ipOf(stack, host), port: hostPort(name, 22300), url: `http://${ipOf(stack, host)}:22300` };
@@ -70,8 +72,8 @@ export interface Web {
 export const hardening = ['--read-only', '--tmpfs', '/tmp', '--cap-drop=ALL', '--security-opt', 'no-new-privileges', '--memory', '128m'];
 
 // `extraArgs` exists for negative controls only (for example `--user 0:0` in `ac12-s7-neg`); the positive tests
-// run the image's own defaults.
-export const startWeb = async (stack: Stack, { role, host, env, caddyfile, extraArgs = [] }: { role: string; host: number; env: WebEnv; caddyfile?: string; extraArgs?: string[] }): Promise<Web> => {
+// run the image's own defaults. `resolvConf`: a file bind-mounted read-only at /etc/resolv.conf (DNS-1 fault injection).
+export const startWeb = async (stack: Stack, { role, host, env, caddyfile, resolvConf, extraArgs = [] }: { role: string; host: number; env: WebEnv; caddyfile?: string; resolvConf?: string; extraArgs?: string[] }): Promise<Web> => {
 	const { image } = webImageInfo();
 	const name = startContainer(stack, {
 		role,
@@ -80,7 +82,7 @@ export const startWeb = async (stack: Stack, { role, host, env, caddyfile, extra
 		publish: [8080, 8089],
 		env: { ...env },
 		args: [...hardening, ...extraArgs],
-		volumes: caddyfile ? [`${caddyfile}:/etc/caddy/Caddyfile:ro,Z`] : [],
+		volumes: [...(caddyfile ? [`${caddyfile}:/etc/caddy/Caddyfile:ro,Z`] : []), ...(resolvConf ? [`${resolvConf}:/etc/resolv.conf:ro,Z`] : [])],
 	});
 	const web = { name, ip: ipOf(stack, host), port: hostPort(name, 8080), internalPort: hostPort(name, 8089) };
 	await waitFor(`${name} GET :8080/ → 200`, async () => ((await request({ port: web.port, path: '/' })).status === 200 ? true : undefined),

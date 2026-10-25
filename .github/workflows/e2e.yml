@@ -235,7 +235,9 @@ jobs:
       - name: E2E layer, every Playwright spec
         id: e2e
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bundle-check.outcome == 'success' && steps.podman.outcome == 'success' && steps.browser.outcome == 'success' }}
-        timeout-minutes: 45
+        # CC-1 (CI-M2-S2): the arm64 E2E step took 1645 s in proof run 1, 69% of the 40-minute run budget, and M2-S3
+        # adds large attachments. The step limit stays at least 4 minutes above the run budget (CI-T-02/04).
+        timeout-minutes: 60
         env:
           NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
         run: corepack yarn playwright test

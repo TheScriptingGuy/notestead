@@ -5,6 +5,10 @@
 // Input (stdin, one JSON object; never argv, so the passwords stay out of /proc/*/cmdline):
 //   {"syncUrl","email","password","masterPassword","folder","notes":[{"title","body"}],
 //    "extras"?: {"todo":{"title","due"},"tag":{"title","note"},"attachment":{"note","fileName","contentBase64"}}}
+// The seed sync must succeed (DNS-1, DNS1-AC4): after the batch the output needs a `Completed:` line and no line with
+// `Last error:`. Otherwise the device writes `SEED SYNC FAILED: <that line>` to stderr and exits 3, before `RESULT`.
+// It never retries: a retry would hide the very class of fault (a proxy 502) the check exists to surface. The CLI exits 0
+// after a failed sync, so without this check the master key is never uploaded and the failure shows up much later.
 // Output: the CLI's output, then one last line
 //   `RESULT {"e2ee": "...", "notes": [{"id","title"}], "todo"?: {"id","title"}, "attachmentNote"?: {"id","title"}}`.
 // `extras` is optional (docs/test-plans/M2-S2.md D7): a to-do with todo_due (epoch ms), a tag on a note, and a note with
@@ -77,6 +81,13 @@ const batch = [
 const batchFile = '/tmp/home/device-batch.txt';
 writeFileSync(batchFile, `${batch}\n`, { mode: 0o600 });
 const output = await joplin(profile, ['batch', batchFile]);
+
+const outputLines = output.split('\n');
+const lastError = outputLines.find(line => line.includes('Last error:'));
+if (lastError !== undefined || !outputLines.some(line => line.includes('Completed:'))) {
+	process.stderr.write(`\nSEED SYNC FAILED: ${lastError ?? 'the batch printed no `Completed:` line'}\n`);
+	process.exit(3);
+}
 
 const listed = output.split('\n').filter(line => line.startsWith('[')).pop();
 if (!listed) throw new Error('the batch printed no `ls --format json` line');
