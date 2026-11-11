@@ -13,6 +13,7 @@
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
 //                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
 //                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
+//           testFiles     files generated from a per-test seed in a temp dir outside test-results/, removed at teardown (M2-S3 D4)
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -20,7 +21,9 @@
 // is redacted before it is written (tests/support/redact.ts); the redacting reporter then redacts the Playwright trace,
 // every other attachment, errors, stdout/stderr and step titles once more (tests/e2e/support/redactingReporter.ts).
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
@@ -37,6 +40,8 @@ import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabl
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
 import { userTimeZone } from './dueDate.ts';
+import { writeBinary, writePng } from './testFiles.ts';
+import type { GeneratedFile } from './testFiles.ts';
 import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
 import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
@@ -64,6 +69,13 @@ export interface DataApi {
 	request: (method: string, path: string, body?: unknown) => DataApiResult;
 }
 
+export interface TestFiles {
+	dir: string;
+	png: (name: string, opts: { width: number; height: number; totalBytes?: number }) => GeneratedFile;
+	binary: (name: string, size: number) => GeneratedFile;
+	made: () => GeneratedFile[];
+}
+
 export interface WebApp {
 	context: BrowserContext;
 	page: Page;
@@ -88,6 +100,7 @@ interface TestFixtures {
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	testFiles: TestFiles;
 	webTimezone: string;
 	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
@@ -270,6 +283,26 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			request: (method: string, path: string, body?: unknown): DataApiResult => runProbe(headlessService.container, requestProbe,
 				[method, path, ...(body === undefined ? [] : [Buffer.from(JSON.stringify(body), 'utf8').toString('base64')])]),
 		});
+	},
+
+	// Files generated at test time from a per-test seed, outside test-results/ (never uploaded), removed at teardown; on failure
+	// only their names, seeds, sizes and hashes are attached (docs/test-plans/M2-S3.md D4).
+	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
+	testFiles: async ({}, use, testInfo) => {
+		const dir = mkdtempSync(join(tmpdir(), 'nst-files-'));
+		const run = randomBytes(4).toString('hex');
+		const made: GeneratedFile[] = [];
+		try {
+			await use({
+				dir,
+				png: (name, opts) => { const f = writePng(dir, name, `${run}/${name}`, opts); made.push(f); return f; },
+				binary: (name, size) => { const f = writeBinary(dir, name, `${run}/${name}`, size); made.push(f); return f; },
+				made: () => made.map(f => ({ ...f })),
+			});
+		} finally {
+			if (failed(testInfo)) await attachText(testInfo, 'test-files.json', `${JSON.stringify(made.map(({ name, seed, size, sha256, width, height }) => ({ name, seed, size, sha256, width, height })), null, 2)}\n`);
+			rmSync(dir, { recursive: true, force: true });
+		}
 	},
 
 	// A second web container whose proxy does not rewrite Host (M1-AC21 NEG; tests/stack/stack.ts upWebWithoutHostRewrite).
