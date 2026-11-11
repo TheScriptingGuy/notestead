@@ -3,6 +3,7 @@
 import { expect, test } from '@playwright/test';
 import { syncHeadlessOnce } from '../../stack/stack.ts';
 import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
+import { decodedPathOf } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
 import type { EncryptionSettings, JoplinWebApp, SyncSettings } from './pages/joplinWebApp.ts';
 import { syncProbe } from './syncPress.ts';
@@ -57,15 +58,6 @@ export const openUnlockedWebApp = async (app: JoplinWebApp, origin: string, sync
 
 export const deltaPath = '/joplin-server/api/items/root:/:/delta';
 
-const decodedPath = (url: string): string => {
-	const path = new URL(url).pathname;
-	try {
-		return decodeURIComponent(path);
-	} catch {
-		return path;
-	}
-};
-
 // One web sync (docs/test-plans/M2-S2.md D3), from the note list: idle first, one press of Synchronise, then a delta
 // request after the press, idle again, and a report with Completed: and no Last error:. Upstream runs update_remote
 // before delta, so a delta after the press means that sync's upload ran after the caller's change. Ends with the side
@@ -81,7 +73,7 @@ export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, t
 	const state = { presses: 1, pressedAt: Date.now(), report: '' };
 	await app.syncIdle().click();
 	const deps = {
-		deltaSinceMark: () => network.entries().slice(mark).some(e => e.method === 'GET' && e.status === 200 && decodedPath(e.url) === deltaPath),
+		deltaSinceMark: () => network.entries().slice(mark).some(e => e.method === 'GET' && e.status === 200 && decodedPathOf(e.url) === deltaPath),
 		idle: () => app.syncIdle().isVisible(),
 		press: () => app.syncIdle().click(),
 		setMark: () => { mark = network.entries().length; },

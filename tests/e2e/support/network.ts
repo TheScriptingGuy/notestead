@@ -117,3 +117,24 @@ export const recordNetwork = (context: BrowserContext): NetworkRecorder => {
 		text: () => list.map(e => [e.at, e.method, withoutQuery(e.url), e.resourceType, e.fromServiceWorker ? 'sw' : 'page', e.status ?? '', e.failure ?? ''].join(' ').trimEnd()).join('\n'),
 	};
 };
+
+// The decoded path of a URL (the sync client may encode the ":" and "/" of root:/…:/), the raw path when it does not decode,
+// undefined when the URL does not parse.
+export const decodedPathOf = (url: string): string | undefined => {
+	let path: string;
+	try {
+		path = new URL(url).pathname;
+	} catch {
+		return undefined;
+	}
+	try {
+		return decodeURIComponent(path);
+	} catch {
+		return path;
+	}
+};
+
+// The requests for one item's content on the sync target through the proxy (Joplin Server's api/items/root:/<name>:/content):
+// an attachment's blob is ".resource/<id>", a note "<id>.md" (docs/test-plans/M2-S3.md D3 to D5).
+export const itemContentRequests = (entries: NetEntry[], method: string, itemName: string): NetEntry[] =>
+	entries.filter(e => e.method === method && decodedPathOf(e.url) === `/joplin-server/api/items/root:/${itemName}:/content`);
