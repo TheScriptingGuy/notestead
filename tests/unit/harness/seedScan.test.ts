@@ -1,7 +1,7 @@
 // The value-free seed scan (tests/e2e/support/seedScan.ts; review M2-S1-r1 C1): which seeded value occurs in a text is
 // named by a label, never by the value, because a failing assertion prints its received value and CI logs are public.
 import { describe, expect, test } from '@jest/globals';
-import { seedLabelIn } from '../../e2e/support/seedScan.ts';
+import { fieldsThatDiffer, seedLabelIn } from '../../e2e/support/seedScan.ts';
 import type { SeedValues } from '../../e2e/support/seedScan.ts';
 
 // Every value occurs in the others' text (the tag is part of each title, body and the folder).
@@ -44,5 +44,22 @@ describe('seed scan', () => {
 				for (const other of values) expect(shown.includes(other)).toBe(false);
 			}
 		}
+	});
+
+	test('seed-04 fieldsThatDiffer names the fields of expected whose values differ, sorted', () => {
+		expect(fieldsThatDiffer({ id: 'a', title: 'T', body: 'B2', extra: 1 }, { id: 'a', title: 'T', body: 'B' })).toEqual(['body']);
+		expect(fieldsThatDiffer({ id: 'a', title: 'T' }, { id: 'a', title: 'T' })).toEqual([]);
+		expect(fieldsThatDiffer({ id: 'a' }, { id: 'a', title: 'T' })).toEqual(['title']);
+		expect(fieldsThatDiffer({ x: [1, 2] }, { x: [1, 2] })).toEqual([]);
+		expect(fieldsThatDiffer({ x: { y: [1] } }, { x: { y: [2] } })).toEqual(['x']);
+	});
+
+	test('seed-05 fieldsThatDiffer never returns a compared value', () => {
+		const actual = { title: 'Notestead note abc12', body: 'Seeded body abc12 zebracorn' };
+		const expected = { title: 'other', body: 'other body' };
+		const result = fieldsThatDiffer(actual, expected);
+		const shown = JSON.stringify(result);
+		for (const v of [...Object.values(actual), ...Object.values(expected)]) expect(shown.includes(v)).toBe(false);
+		expect(shown).toBe('["body","title"]');
 	});
 });
