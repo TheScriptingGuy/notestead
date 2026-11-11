@@ -5,7 +5,8 @@
 // has a timeout, every spec is bounded, a test plus its CI retry fits the run's global timeout, and the global timeout
 // ends Playwright at least four minutes before the E2E step does.
 // CI-T-01: playwright.config.ts uses the constants of tests/e2e/support/timeouts.ts. CI-T-02: the global timeout fits the
-// step limit of e2e.yml. CI-T-03: no spec sets a timeout above longSpecTimeoutMs; the M2-S2 specs use it. CI-T-04: two
+// step limit of e2e.yml. CI-T-03: no spec sets a timeout above longSpecTimeoutMs (a describe's, a `setTimeout`'s, and also a per-test
+// `{ timeout }` option, review CI-M2-S2-r1 C4); the M2-S2 specs use it. CI-T-04: two
 // attempts of the longest spec fit the global timeout.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -76,6 +77,12 @@ const specTimeouts = (longSpecTimeoutMs: number): { file: string; expression: st
 	const found: { file: string; expression: string; ms: number }[] = [];
 	for (const m of source.matchAll(/describe\.configure\(\{[^}]*?\btimeout:\s*([^,}]+?)\s*[,}]/g)) found.push({ file, expression: m[1], ms: evaluate(m[1], file, longSpecTimeoutMs) });
 	for (const m of source.matchAll(/\.setTimeout\(\s*([^)]+?)\s*\)/g)) found.push({ file, expression: m[1], ms: evaluate(m[1], file, longSpecTimeoutMs) });
+	// A per-test options object after a string title. The title may contain commas, so the literal is matched.
+	const titled = /\btest(?:\.\w+)?\(\s*(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*,\s*\{([^}]*)\}/g;
+	for (const m of source.matchAll(titled)) {
+		const t = /\btimeout:\s*([^,}]+?)\s*(?:,|$)/.exec(m[1]);
+		if (t) found.push({ file, expression: t[1], ms: evaluate(t[1], file, longSpecTimeoutMs) });
+	}
 	return found;
 });
 
@@ -101,7 +108,7 @@ describe('CI-M2-S2 bounded actions, specs and run (CI 39663284028 B, D)', () => 
 		const t = await loadTimeouts();
 		const minutes = e2eStepMinutes();
 		const limit = (minutes - marginMinutes) * 60_000;
-		assert.ok(t.ciGlobalTimeoutMs <= limit, `ciGlobalTimeoutMs ${t.ciGlobalTimeoutMs / 60_000} min must be at most ${minutes - marginMinutes} min: the step has ${minutes} min and ${marginMinutes} min cover globalTeardown's stack removal and the reporters' onEnd (${plan} Budget)`);
+		assert.ok(t.ciGlobalTimeoutMs <= limit, `ciGlobalTimeoutMs ${t.ciGlobalTimeoutMs / 60_000} min must be at most ${minutes - marginMinutes} min: the step has ${minutes} min and ${marginMinutes} min cover the reporters' onEnd/onExit and the upload gate (the global deadline also bounds globalTeardown; F-B1) (${plan} Budget)`);
 	});
 
 	it('CI-T-03 no spec sets a timeout above longSpecTimeoutMs, and the three M2-S2 specs use it', async () => {
