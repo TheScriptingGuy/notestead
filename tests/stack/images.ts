@@ -14,6 +14,7 @@ import { cleanContext, headlessContainerfileRel } from '../contract/support/head
 import { redactText } from '../support/redact.ts';
 import { findRepoRoot, readVersionPin } from '../support/repoRoot.ts';
 import { testLabel } from './guard.ts';
+import { stackDeviceTag } from './imageTags.ts';
 
 export interface StackImages {
 	server: string;
@@ -65,7 +66,7 @@ const buildHeadless = (work: string, logsDir: string): string => {
 
 const buildDevice = (logsDir: string): string => {
 	const { cli } = readVersionPin();
-	const tag = `localhost/notestead-test-device:${cli.version}`;
+	const tag = stackDeviceTag(cli.version);
 	const dir = join(findRepoRoot(), 'tests', 'fixtures', 'm1-s5', 'device');
 	const r = logged(logsDir, 'build-device', 'podman', ['build', '-f', join(dir, 'Containerfile'), '--build-arg', `JOPLIN_CLI_VERSION=${cli.version}`,
 		'--label', `${testLabel}=stack`, '--layer-label', `${testLabel}=stack`, '-t', tag, dir], 30 * 60_000);

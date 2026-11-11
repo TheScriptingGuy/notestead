@@ -2,7 +2,8 @@
 // - Images, built lazily once per run and shared by the suite's files (a record per image under <work>/images/, removed
 //   by globalTeardown): the headless image under test (packages/headless/Containerfile, built from a clean copy of the
 //   repository's files) and the CLI "other device" fixture image (tests/fixtures/m1-s5/device, never the image under
-//   test).
+//   test). NOTESTEAD_DEVICE_IMAGE is used as prebuilt (never removed); otherwise the contract layer builds its own tag, never
+//   the one the E2E run keeps (CI-M2-S2 F-H1, tests/stack/imageTags.ts).
 // - The ADR-0006 topology: a `front` network (server, web, other device) and an `--internal` `back` network (web's
 //   internal listener :8089 and the headless container, nothing else). The headless container is on `back` only.
 // - Per test: a fresh server user (strong unique password), a fresh E2EE "other device", fresh secrets, a fresh
@@ -21,6 +22,7 @@ import {
 import type { Stack } from './podman.ts';
 import { direct, startJoplinServer, startWeb, webEnvFor } from './services.ts';
 import type { JoplinServer, Web } from './services.ts';
+import { contractDeviceChoice } from '../../stack/imageTags.ts';
 
 export const story = 'm1-s5';
 export const resultsDir = join(repoRoot, 'test-results', 'contract', story);
@@ -139,13 +141,14 @@ export const headlessImage = (): string => lazyImage('headless', () => {
 });
 
 export const deviceImage = (): string => lazyImage('device', () => {
+	const choice = contractDeviceChoice(process.env.NOTESTEAD_DEVICE_IMAGE);
+	if (choice.prebuilt) return { image: choice.image, prebuilt: true };
 	const { cli } = readFullPin();
-	const tag = `localhost/notestead-test-device:${cli.version}`;
 	const dir = join(fixtures, 'device');
 	const built = runLogged('build-device', 'podman', ['build', '-f', join(dir, 'Containerfile'), '--build-arg', `JOPLIN_CLI_VERSION=${cli.version}`,
-		'--label', `${testLabel}=contract`, '--layer-label', `${testLabel}=contract`, '-t', tag, dir], { timeoutMs: 30 * 60_000 });
+		'--label', `${testLabel}=contract`, '--layer-label', `${testLabel}=contract`, '-t', choice.image, dir], { timeoutMs: 30 * 60_000 });
 	if (built.code !== 0) throw new Error(`the device fixture image failed to build (log ${built.log}): ${built.stderr.slice(-2000)}`);
-	return { image: tag };
+	return { image: choice.image };
 });
 
 // ---- Stack ----
