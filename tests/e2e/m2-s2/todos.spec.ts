@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { requireUpstreamBundle } from '../support/bundle.ts';
 import { notesTitled, ok, pick } from '../support/dataApi.ts';
-import { userTimeZone, nextWholeMinute, partsIn } from '../support/dueDate.ts';
+import { userTimeZone, nextWholeMinute, partsIn, wallClockIsUnique } from '../support/dueDate.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
@@ -71,7 +71,10 @@ test.describe('M2-S2 to-dos in the web app', () => {
 			await note.waitOpen();
 			const alarm = await note.openAlarm();
 			due = nextWholeMinute(Date.now(), 150_000);
+			expect(wallClockIsUnique(due, userTimeZone), `the due time's ${userTimeZone} wall clock names one instant: it is not in the repeated hour when summer time ends (02:00-03:00 local), which datetime-local cannot name (M2-S2 r1 C2); rerun after 03:00 local`).toBe(true);
 			await alarm.enterLocal(partsIn(due, userTimeZone));
+			const typed = await alarm.input().inputValue();
+			expect(await webApp.page.evaluate(v => new Date(v).getTime(), typed), 'the page reads the typed wall clock as the due epoch, in its own time zone (M2-S2 D5, r1 C2)').toBe(due);
 			expect(due - Date.now(), 'at least a minute before the due time when it is saved').toBeGreaterThan(60_000);
 			expect(await alarm.save()).toBe(l1Warning);
 			await app.backToList();
