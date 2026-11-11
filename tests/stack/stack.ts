@@ -30,7 +30,8 @@ import type { HarnessServer } from './guard.ts';
 import { removeBuiltImages, resolveImages } from './images.ts';
 import { restartVerdict, startVerdict } from './restartReady.ts';
 import type { StackImages } from './images.ts';
-import { checkSeededInfo } from './seedCheck.ts';
+import { checkSeededInfo, missingSeedItems } from './seedCheck.ts';
+import type { SeedItem } from './seedCheck.ts';
 
 export const stackDir = (): string => join(findRepoRoot(), 'tests', 'stack');
 export const coreServices = ['server', 'web'] as const;
@@ -433,7 +434,18 @@ export const enableE2ee = async (state: StackState, account: Account, label: str
 	const info = await serverItemContent(state, account, 'info.json');
 	const reason = checkSeededInfo(info.status, info.text);
 	if (reason) throw new Error(`the E2EE device did not seed the account: ${reason} (log ${join(state.logsDir, `device-${label}.log`)})`);
-	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string }[]; todo?: { id: string }; attachmentNote?: { id: string } };
+	const result = JSON.parse(line.slice('RESULT '.length)) as { e2ee: string; notes: { id: string; title: string; parent_id?: string }[]; todo?: { id: string }; attachmentNote?: { id: string } };
+	// Every seeded item is on the server (WO-30): a seed sync can end `Completed:` with the folder unsent.
+	const folderId = result.notes[0]?.parent_id;
+	if (!folderId) throw new Error(`the E2EE device did not report the seeded folder's id (log ${join(state.logsDir, `device-${label}.log`)})`);
+	const expectedItems: SeedItem[] = [
+		{ kind: 'folder', id: folderId },
+		...result.notes.map((n): SeedItem => ({ kind: 'note', id: n.id })),
+		...(result.todo ? [{ kind: 'todo' as const, id: result.todo.id }] : []),
+		...(result.attachmentNote ? [{ kind: 'attachment-note' as const, id: result.attachmentNote.id }] : []),
+	];
+	const missing = missingSeedItems(expectedItems, await serverItemNames(state, account));
+	if (missing.length > 0) throw new Error(`SEED INCOMPLETE: ${missing.join(', ')} missing on the server after the device's sync (see ${join(state.logsDir, `device-${label}.log`)})`);
 	account.e2ee = result.e2ee;
 	account.seedTag = tag;
 	account.folder = folder;

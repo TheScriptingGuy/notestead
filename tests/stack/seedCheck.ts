@@ -16,3 +16,11 @@ export const checkSeededInfo = (status: number, text: string): string | undefine
 	if (e2ee?.value !== true) return 'info.json does not have E2EE switched on (e2ee.value is not true)';
 	return undefined;
 };
+
+// The seed's items that are not on the server, named by kind (never an id or a title): every seeded item is one `<id>.md` in
+// the account's items (docs/test-plans/M2-S3-work-orders.md WO-30). A seed sync can end `Completed:` with an item unsent.
+export interface SeedItem { kind: 'folder' | 'note' | 'todo' | 'attachment-note'; id: string }
+export const missingSeedItems = (expected: SeedItem[], serverNames: string[]): string[] => {
+	const present = new Set(serverNames);
+	return expected.filter(item => !present.has(`${item.id}.md`)).map(item => item.kind);
+};
