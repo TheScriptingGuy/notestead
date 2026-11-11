@@ -17,7 +17,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { request } from '../contract/support/http.ts';
+import { request, requestDigest } from '../contract/support/http.ts';
 import type { HttpResponse } from '../contract/support/http.ts';
 import { waitFor } from '../support/poll.ts';
 import { redactText } from '../support/redact.ts';
@@ -614,6 +614,15 @@ export const removeContainer = (state: StackState, container: string): void => {
 
 // The server's view of an account (data-level assertions): its item names (`<id>.md`, `.resource/<id>`, info.json …)
 // and an item's serialized content, through the server's own API (this stack's published port only).
+// An item's content on the server streamed into a sha256, with its first bytes (latin1): attachment blobs can be over 130 MiB
+// (docs/test-plans/M2-S3.md D4). This stack's published port only, with the Host of APP_BASE_URL.
+export const serverItemDigest = async (state: StackState, account: Account, name: string, opts: { headBytes?: number; timeoutMs?: number } = {}): Promise<{ status: number; size: number; sha256: string; head: string }> => {
+	if (!state.serverUrl) throw new Error('the stack server is not up');
+	const session = await sessionFor(state, account.email, account.password);
+	const r = await requestDigest({ port: Number.parseInt(new URL(state.serverUrl).port, 10), path: `/api/items/root:/${name}:/content`, headers: { Host: publicHost, 'X-API-AUTH': session }, timeoutMs: opts.timeoutMs ?? 300_000 }, opts.headBytes ?? 8);
+	return { status: r.status, size: r.size, sha256: r.sha256, head: r.head.toString('latin1') };
+};
+
 export const serverItemNames = async (state: StackState, account: Account): Promise<string[]> => {
 	const session = await sessionFor(state, account.email, account.password);
 	const names: string[] = [];

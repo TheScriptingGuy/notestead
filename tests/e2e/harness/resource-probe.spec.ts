@@ -6,9 +6,7 @@ import { readFileSync } from 'node:fs';
 import { ok, pick } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
-import { serverItemContent, serverItemNames, syncHeadlessOnce } from '../../stack/stack.ts';
-// A namespace import: serverItemDigest does not exist yet (the RED), and a named import would fail at ESM link time before any step.
-import * as stackApi from '../../stack/stack.ts';
+import { serverItemContent, serverItemDigest, serverItemNames, syncHeadlessOnce } from '../../stack/stack.ts';
 
 test.describe('M2-S3 resource probe', () => {
 	test.describe.configure({ timeout: longSpecTimeoutMs });
@@ -32,7 +30,7 @@ test.describe('M2-S3 resource probe', () => {
 
 		await test.step('2. its metadata and its bytes', async () => {
 			expect(pick(ok(dataApi.get(`/resources/${id}?fields=${meta}`), 'GET the resource'), meta.split(','))).toEqual({ id, title: bin.name, mime: 'application/octet-stream', size: 40960, file_extension: 'bin' });
-			expect(pick(dataApi.fileDigest(id) as unknown as Record<string, unknown>, ['status', 'sha256', 'size'])).toEqual({ status: 200, sha256: bin.sha256, size: 40960 });
+			expect(pick(dataApi.fileDigest(id) as Record<string, unknown>, ['status', 'sha256', 'size'])).toEqual({ status: 200, sha256: bin.sha256, size: 40960 });
 			expect(JSON.stringify(dataApi.fileDigest(id)).length).toBeLessThan(400);
 		});
 
@@ -41,7 +39,7 @@ test.describe('M2-S3 resource probe', () => {
 			expect(r.status).toBe(200);
 			pngId = String((r.body as { id: unknown }).id);
 			expect(pick(ok(dataApi.get(`/resources/${pngId}?fields=${meta}`), 'GET the PNG resource'), ['title', 'mime', 'size', 'file_extension'])).toEqual({ title: png.name, mime: 'image/png', size: 18564, file_extension: 'png' });
-			expect(pick(dataApi.fileDigest(pngId) as unknown as Record<string, unknown>, ['status', 'sha256', 'size'])).toEqual({ status: 200, sha256: png.sha256, size: png.size });
+			expect(pick(dataApi.fileDigest(pngId) as Record<string, unknown>, ['status', 'sha256', 'size'])).toEqual({ status: 200, sha256: png.sha256, size: png.size });
 		});
 
 		await test.step('4. NEG: an unknown id', async () => {
@@ -56,7 +54,7 @@ test.describe('M2-S3 resource probe', () => {
 			const names = await serverItemNames(stack, e2eeAccount);
 			expect(names).toContain(`.resource/${id}`);
 			expect(names).toContain(`${id}.md`);
-			const d = await stackApi.serverItemDigest(stack, e2eeAccount, `.resource/${id}`, { headBytes: 5 });
+			const d = await serverItemDigest(stack, e2eeAccount, `.resource/${id}`, { headBytes: 5 });
 			expect(d.status).toBe(200);
 			expect(d.head).toBe('JED01');
 			expect(d.sha256).not.toBe(bin.sha256);
@@ -67,7 +65,7 @@ test.describe('M2-S3 resource probe', () => {
 		await test.step('6. serverItemDigest agrees with serverItemContent', async () => {
 			const content = await serverItemContent(stack, e2eeAccount, `${id}.md`);
 			const bytes = Buffer.from(content.text, 'utf8');
-			const d = await stackApi.serverItemDigest(stack, e2eeAccount, `${id}.md`);
+			const d = await serverItemDigest(stack, e2eeAccount, `${id}.md`);
 			expect(d.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
 			expect(d.size).toBe(bytes.length);
 		});

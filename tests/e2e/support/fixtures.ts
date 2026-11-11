@@ -7,7 +7,8 @@
 //           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
-//           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
+//           dataApi       GET, any method, fileDigest and createResource on that headless service's Data API, from inside its network
+//                         namespace (never published; no token and no file body leaves the container)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin,
 //                         en-GB, in the time zone of the option `webTimezone` (default Europe/Amsterdam)
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
@@ -63,10 +64,16 @@ export interface DataApiResult {
 	error?: string;
 }
 
+export interface FileDigest { status?: number; sha256?: string; size?: number; contentType?: string; error?: string }
+
 export interface DataApi {
 	get: (path: string) => DataApiResult;
 	// Any method, with a JSON body made by the test (M1-S7: POST /notes); tests/fixtures/m1-s7/in-container
 	request: (method: string, path: string, body?: unknown) => DataApiResult;
+	// GET /resources/:id/file streamed into a sha256 inside the container (M2-S3 D4); no file body leaves it
+	fileDigest: (resourceId: string, opts?: { timeoutMs?: number }) => FileDigest;
+	// POST /resources (multipart) of a small file (at most 64 KiB), from inside the container
+	createResource: (file: { title: string; fileName: string; mime: string; bytes: Buffer }) => DataApiResult;
 }
 
 export interface TestFiles {
@@ -180,10 +187,12 @@ const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}$
 // container, and the token never leaves it.
 const dataApiProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s5', 'in-container', 'data-api.mjs'), 'utf8');
 // The M1-S7 probe: any method, the JSON body base64-encoded in argv (a test-made note, never a secret).
+// The M2-S3 probe: a resource's file digested inside the container, or a small resource created (docs/test-plans/M2-S3.md D4, D5).
+const dataApiResourceProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm2-s3', 'in-container', 'data-api-resource.mjs'), 'utf8');
 const dataApiRequestProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s7', 'in-container', 'data-api-request.mjs'), 'utf8');
 
-const runProbe = (container: string, probe: string, args: string[]): DataApiResult => {
-	const r = spawnSync('podman', ['exec', '-i', container, 'node', '-', ...args], { input: probe, encoding: 'utf8', timeout: 120_000 });
+const runProbe = (container: string, probe: string, args: string[], timeoutMs = 120_000): DataApiResult => {
+	const r = spawnSync('podman', ['exec', '-i', container, 'node', '-', ...args], { input: probe, encoding: 'utf8', timeout: timeoutMs });
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (!line) return { error: `data-api probe printed no result (exit ${r.status}): ${redactText(`${r.stdout}\n${r.stderr}`).slice(-1000)}` };
 	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
@@ -278,10 +287,23 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	dataApi: async ({ headlessService }, use) => {
 		const probe = dataApiProbe();
 		const requestProbe = dataApiRequestProbe();
+		const resourceProbe = dataApiResourceProbe();
 		await use({
 			get: (path: string): DataApiResult => runProbe(headlessService.container, probe, [path]),
 			request: (method: string, path: string, body?: unknown): DataApiResult => runProbe(headlessService.container, requestProbe,
 				[method, path, ...(body === undefined ? [] : [Buffer.from(JSON.stringify(body), 'utf8').toString('base64')])]),
+			fileDigest: (resourceId, opts = {}) => {
+				if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('fileDigest: a resource id is 32 hex characters');
+				const timeoutMs = opts.timeoutMs ?? 120_000;
+				return runProbe(headlessService.container, resourceProbe, ['digest', resourceId, String(timeoutMs)], timeoutMs + 30_000) as FileDigest;
+			},
+			createResource: file => {
+				// The bytes travel base64 in argv (the probe itself comes on stdin): 64 KiB keeps them under Linux's 128 KiB argument limit.
+				if (file.bytes.length > 64 * 1024) throw new Error(`createResource: ${file.bytes.length} bytes is over the probe's 64 KiB limit`);
+				if (!/^[a-z0-9][a-z0-9.-]*$/.test(file.fileName)) throw new Error('createResource: unsafe file name');
+				const meta = Buffer.from(JSON.stringify({ title: file.title, fileName: file.fileName, mime: file.mime }), 'utf8').toString('base64');
+				return runProbe(headlessService.container, resourceProbe, ['create', '60000', meta, file.bytes.toString('base64')]);
+			},
 		});
 	},
 

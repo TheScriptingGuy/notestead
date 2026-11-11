@@ -67,6 +67,27 @@ export const requestHashed = async (req: HttpRequest): Promise<HashedResponse> =
 	res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, sha256: hash.digest('hex'), size }));
 }) as Promise<HashedResponse>;
 
+export interface DigestResponse extends HashedResponse { head: Buffer }
+// Streams the response body into a hash and keeps its first `headBytes` bytes (an attachment blob on the server can be over
+// 130 MiB; docs/test-plans/M2-S3.md F8).
+export const requestDigest = async (req: HttpRequest, headBytes: number): Promise<DigestResponse> => send(req, (res, resolve, reject) => {
+	const hash = createHash('sha256');
+	const head: Buffer[] = [];
+	let size = 0;
+	let kept = 0;
+	res.on('data', (part: Buffer) => {
+		hash.update(part);
+		size += part.length;
+		if (kept < headBytes) {
+			const piece = part.subarray(0, headBytes - kept);
+			head.push(piece);
+			kept += piece.length;
+		}
+	});
+	res.on('error', reject);
+	res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, sha256: hash.digest('hex'), size, head: Buffer.concat(head) }));
+}) as Promise<DigestResponse>;
+
 export const headerValue = (headers: IncomingHttpHeaders | Record<string, string | string[] | undefined>, name: string): string | undefined => {
 	const value = headers[name.toLowerCase()];
 	return Array.isArray(value) ? value.join(', ') : value;
