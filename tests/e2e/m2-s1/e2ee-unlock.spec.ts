@@ -13,7 +13,7 @@ import { configureJoplinServerSync, firstSyncTimeoutMs } from '../support/flows.
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { scanLocalProfile } from '../support/localProfile.ts';
 import { JoplinWebApp } from '../support/pages/joplinWebApp.ts';
-import { seedLabelIn } from '../support/seedScan.ts';
+import { fieldsThatDiffer, seedLabelIn } from '../support/seedScan.ts';
 import { holdsFor } from '../../support/poll.ts';
 import { registerSecrets } from '../../support/secrets.ts';
 import { serverItemContent, serverItemNames, syncHeadlessOnce } from '../../stack/stack.ts';
@@ -76,9 +76,9 @@ const activeKeyOf = (info: InfoJson): string => {
 const noteFields = 'id,title,body,parent_id,encryption_applied,is_conflict';
 
 // The reference: each seeded note as the headless REST API has it (decrypted), checked against the seed.
-const readReference = (dataApi: DataApi, seed: Seed): Record<string, unknown>[] => seed.notes.map(n => {
+const readReference = (dataApi: DataApi, seed: Seed): Record<string, unknown>[] => seed.notes.map((n, i) => {
 	const note = pick(ok(dataApi.get(`/notes/${n.id}?fields=${noteFields}`), `GET /notes/${n.id}`), noteFields.split(','));
-	expect(note, `note "${n.title}" through the headless REST API`).toMatchObject({ id: n.id, title: n.title, body: n.body, encryption_applied: 0, is_conflict: 0 });
+	expect(fieldsThatDiffer(note, { id: n.id, title: n.title, body: n.body, encryption_applied: 0, is_conflict: 0 }), `seeded note ${i + 1} through the headless REST API: the fields that differ from the seed`).toEqual([]);
 	return note;
 });
 
@@ -170,8 +170,9 @@ test.describe('M2-S1 E2EE unlock in the web app', () => {
 
 		await test.step('9. data level after: one headless sync, the same values, no conflict copy, info.json unchanged', async () => {
 			await syncHeadlessOnce(stack, headlessService);
-			expect(readReference(dataApi, seed)).toEqual(reference);
-			for (const n of seed.notes) expect(notesTitled(dataApi, n.title).map(x => x.id), `exactly one note titled "${n.title}"`).toEqual([n.id]);
+			const after = readReference(dataApi, seed);
+			expect(after.map((n, i) => fieldsThatDiffer(n, reference[i])), 'the fields of each seeded note that changed after one headless sync').toEqual(reference.map(() => []));
+			seed.notes.forEach((n, i) => expect(notesTitled(dataApi, n.title).map(x => x.id), `exactly one note with seeded title ${i + 1}, the seeded one`).toEqual([n.id]));
 			const info = await infoJson(stack, e2eeAccount);
 			expect(info.version).toBe(3);
 			expect(info.e2ee?.value).toBe(true);
