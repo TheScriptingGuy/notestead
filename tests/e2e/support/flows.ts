@@ -5,7 +5,7 @@ import { syncHeadlessOnce } from '../../stack/stack.ts';
 import type { Account, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { NetworkRecorder } from './network.ts';
 import type { EncryptionSettings, JoplinWebApp, SyncSettings } from './pages/joplinWebApp.ts';
-import { pressAgain } from './syncPress.ts';
+import { syncProbe } from './syncPress.ts';
 
 // The app's own first sync after the target changed downloads the master key, and the decryption banner appears
 // (~10 s on the Pi from "Back"; the sync itself ~2 s).
@@ -72,41 +72,32 @@ const decodedPath = (url: string): string => {
 // menu closed. The app starts syncs of its own about two seconds after an edit; a press that lands just after one starts
 // cancels it (the button already reads "Cancel"), and then no delta follows. The press is made again, at most `maxPresses`
 // in all, when the button is idle again and no delta was seen since the last press (syncPress.ts). A re-press is recorded
-// as an annotation on the test.
+// as an annotation on the test. The poll body is `syncProbe` (syncPress.ts).
 export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, timeoutMs = 3 * 60_000): Promise<{ report: string; durationMs: number; presses: number }> => {
 	const started = Date.now();
 	await app.openSidebar();
 	await expect(app.syncIdle(), 'no sync running before the web sync').toBeVisible({ timeout: timeoutMs });
 	let mark = network.entries().length;
-	let pressedAt = Date.now();
-	let presses = 1;
+	const state = { presses: 1, pressedAt: Date.now(), report: '' };
 	await app.syncIdle().click();
-	let report = '';
-	await expect.poll(async () => {
-		const deltaSeen = network.entries().slice(mark).some(e => e.method === 'GET' && e.status === 200 && decodedPath(e.url) === deltaPath);
-		if (!deltaSeen) {
-			if (pressAgain({ deltaSeen, idle: await app.syncIdle().isVisible(), msSincePress: Date.now() - pressedAt, presses })) {
-				presses++;
-				mark = network.entries().length;
-				pressedAt = Date.now();
-				await app.syncIdle().click();
-				return `pressed again (press ${presses}): the last press started no sync`;
-			}
-			return 'no delta request since the press';
-		}
-		if (!(await app.syncIdle().isVisible())) return 'a sync is running';
-		report = await app.syncReport();
-		if (/Last error:/.test(report)) return `the sync reported an error: ${report}`;
-		return /\bCompleted: /.test(report) ? 'completed' : `no completed report yet: ${JSON.stringify(report)}`;
-	}, { timeout: timeoutMs, intervals: [1_000] }).toBe('completed');
-	if (presses > 1) test.info().annotations.push({ type: 'sync-repress', description: `the web sync needed ${presses} presses of Synchronise: the earlier ones started no sync` });
+	const deps = {
+		deltaSinceMark: () => network.entries().slice(mark).some(e => e.method === 'GET' && e.status === 200 && decodedPath(e.url) === deltaPath),
+		idle: () => app.syncIdle().isVisible(),
+		press: () => app.syncIdle().click(),
+		setMark: () => { mark = network.entries().length; },
+		report: () => app.syncReport(),
+		now: () => Date.now(),
+	};
+	await expect.poll(() => syncProbe(state, deps), { timeout: timeoutMs, intervals: [1_000] }).toBe('completed');
+	if (state.presses > 1) test.info().annotations.push({ type: 'sync-repress', description: `the web sync needed ${state.presses} presses of Synchronise: the earlier ones started no sync` });
 	await app.closeSidebar();
-	return { report, durationMs: Date.now() - started, presses };
+	return { report: state.report, durationMs: Date.now() - started, presses: state.presses };
 };
 
-// One web sync, then one headless sync of the test's own service (D2, D3): one "cycle" of M2-S2.
-export const syncWebThenHeadless = async (app: JoplinWebApp, network: NetworkRecorder, stack: StackState, service: HeadlessService): Promise<{ webMs: number; headlessMs: number; webReport: string; healthAtReady: string }> => {
-	const web = await syncWebOnce(app, network);
-	const headless = await syncHeadlessOnce(stack, service);
-	return { webMs: web.durationMs, headlessMs: headless.durationMs, webReport: web.report, healthAtReady: headless.healthAtReady };
+// One web sync, then one headless sync of the test's own service (M2-S2 D2, D3). The timeouts are for waits above the
+// defaults (M2-S3 D7: M2-AC7a's 100 MiB attachment). healthAtReady stays in the result: the M2-S2 specs record a `health-lag`.
+export const syncWebThenHeadless = async (app: JoplinWebApp, network: NetworkRecorder, stack: StackState, service: HeadlessService, opts: { webTimeoutMs?: number; headlessTimeoutMs?: number } = {}): Promise<{ webMs: number; headlessMs: number; healthAtReady: string }> => {
+	const web = await syncWebOnce(app, network, opts.webTimeoutMs);
+	const headless = await syncHeadlessOnce(stack, service, opts.headlessTimeoutMs);
+	return { webMs: web.durationMs, headlessMs: headless.durationMs, healthAtReady: headless.healthAtReady };
 };

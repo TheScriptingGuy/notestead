@@ -19,3 +19,31 @@ export interface PressState {
 }
 
 export const pressAgain = (s: PressState): boolean => !s.deltaSeen && s.idle && s.msSincePress >= pressSettleMs && s.presses < maxPresses;
+
+export interface SyncProbeState { presses: number; pressedAt: number; report: string }
+export interface SyncProbeDeps {
+	deltaSinceMark: () => boolean;
+	idle: () => Promise<boolean>;
+	press: () => Promise<void>;
+	setMark: () => void;
+	report: () => Promise<string>;
+	now: () => number;
+}
+// One probe of syncWebOnce's poll (review CI-M2-S2-r1 C5: the wiring gets a fake-driven test). A re-press sets the mark and
+// restarts the clock before it clicks, so the next probe cannot press again at once.
+export const syncProbe = async (s: SyncProbeState, d: SyncProbeDeps): Promise<string> => {
+	if (!d.deltaSinceMark()) {
+		if (pressAgain({ deltaSeen: false, idle: await d.idle(), msSincePress: d.now() - s.pressedAt, presses: s.presses })) {
+			s.presses++;
+			d.setMark();
+			s.pressedAt = d.now();
+			await d.press();
+			return `pressed again (press ${s.presses}): the last press started no sync`;
+		}
+		return 'no delta request since the press';
+	}
+	if (!(await d.idle())) return 'a sync is running';
+	s.report = await d.report();
+	if (/Last error:/.test(s.report)) return `the sync reported an error: ${s.report}`;
+	return /\bCompleted: /.test(s.report) ? 'completed' : `no completed report yet: ${JSON.stringify(s.report)}`;
+};
