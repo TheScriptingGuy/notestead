@@ -4,7 +4,7 @@
 // test, minus the requests a test plants on purpose (review M2-S1-r1 C2).
 import { describe, expect, test } from '@jest/globals';
 import type { BrowserContext } from '@playwright/test';
-import { classifyRequests, endOfTestViolations, recordNetwork, violationLines } from '../../e2e/support/network.ts';
+import { classifyRequests, decodedPathOf, endOfTestViolations, itemContentRequests, recordNetwork, violationLines } from '../../e2e/support/network.ts';
 import type { NetEntry, NetVerdict } from '../../e2e/support/network.ts';
 
 const app = 'http://127.0.0.1:41234';
@@ -95,6 +95,28 @@ describe('network policy classifier', () => {
 			expect(() => rec.allow('https://x.invalid')).toThrow(/must end with "\/"/);
 			rec.allow('https://x.invalid/');
 			expect(rec.allowed()).toEqual(['https://x.invalid/']);
+		});
+	});
+
+	describe('item content requests', () => {
+		test('net-16 itemContentRequests finds one item\'s content requests through the proxy', () => {
+			const raw = `${app}/joplin-server/api/items/root:/.resource/abc:/content?x=1`;
+			const encoded = `${app}/joplin-server/api/items/root%3A%2F.resource%2Fabc%3A%2Fcontent`;
+			const entries = [
+				entry('PUT', raw),
+				entry('PUT', encoded),
+				entry('GET', raw),
+				entry('PUT', `${app}/joplin-server/api/items/root:/.resource/abd:/content`),
+				entry('PUT', 'http://127.0.0.1:22300/api/items/root:/.resource/abc:/content'),
+				entry('PUT', 'not a url'),
+			];
+			expect(itemContentRequests(entries, 'PUT', '.resource/abc')).toEqual([entries[0], entries[1]]);
+		});
+
+		test('net-17 decodedPathOf decodes, falls back to the raw path, and gives undefined for an unparsable URL', () => {
+			expect(decodedPathOf(`${app}/a%3Ab%2Fc`)).toBe('/a:b/c');
+			expect(decodedPathOf(`${app}/a%E0%A4%A`)).toBe('/a%E0%A4%A');
+			expect(decodedPathOf('not a url')).toBeUndefined();
 		});
 	});
 });
