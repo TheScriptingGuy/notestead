@@ -124,6 +124,23 @@ export class JoplinWebApp {
 		await this.notesHeading(title).waitFor();
 	}
 
+	// The note list's header search button (ScreenHeader/index.tsx searchButton: an IconButton described "Search").
+	public searchButton(): Locator {
+		return this.page.getByRole('button', { name: 'Search', exact: true });
+	}
+
+	public async openSearch(): Promise<SearchScreen> {
+		await this.searchButton().click();
+		const search = new SearchScreen(this.page);
+		await search.waitOpen();
+		return search;
+	}
+
+	// The side menu's "Trash" notebook, which upstream always lists (folders-screen-utils.ts includeTrash).
+	public async openTrash(): Promise<void> {
+		await this.openFolder('Trash');
+	}
+
 	// The side menu's "New Notebook" opens upstream's notebook screen (the same one that edits a notebook).
 	public async createNotebook(title: string): Promise<void> {
 		await this.openSidebar();
@@ -526,6 +543,81 @@ export class NoteScreen {
 		await this.folderPicker(target).waitFor();
 	}
 
+	// Upstream's Attach... (Note.tsx menuOptions) → "Choose an option" (DialogManager showMenu, test id prompt-dialog) → "Attach file"
+	// → pickDocument creates a hidden <input type="file" multiple> and clicks it, so Playwright sees a file chooser. The file goes
+	// in by path (a local browser reads it itself: no buffer limit), never as a buffer.
+	public async attachFile(path: string, timeoutMs: number): Promise<void> {
+		await this.menuAction('Attach...');
+		const chooserEvent = this.page.waitForEvent('filechooser', { timeout: 30_000 });
+		await this.page.getByTestId('prompt-dialog').getByRole('button', { name: 'Attach file', exact: true }).click();
+		const chooser = await chooserEvent;
+		if (!chooser.isMultiple()) throw new Error('the file chooser is not upstream\'s attach input (pickDocument: multiple)');
+		await chooser.setFiles(path, { timeout: timeoutMs });
+	}
+
+	// The link upstream inserts into the Markdown editor for an attachment (Resource.markupTag): ![name](:/<id>) or [name](:/<id>).
+	// Returns the resource id.
+	public async waitForAttachmentLink(fileName: string, timeoutMs: number): Promise<string> {
+		const link = new RegExp(`\\[${escapeRegExp(fileName)}\\]\\(:/([0-9a-f]{32})\\)`);
+		return waitFor(`the editor to hold the link to ${fileName}`, async () => link.exec(await this.editorText())?.[1], { timeoutMs, intervalMs: 500 });
+	}
+
+	// A trashed note's Actions offer "Restore" (Note.tsx: restoreItems, then back to the list).
+	public async restore(): Promise<void> {
+		await this.menuAction('Restore');
+	}
+
+	// The note viewer (a sandboxed srcdoc iframe) shows an image attachment as <img data-resource-id> with a blob: URL it made from
+	// the File the app passed it, or upstream's placeholder .not-loaded-resource[data-resource-id] (docs/test-plans/M2-S3.md D5, F4).
+	public async viewerImage(resourceId: string): Promise<{ found: boolean; complete?: boolean; naturalWidth?: number; naturalHeight?: number; scheme?: string; placeholder: boolean }> {
+		if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('viewerImage: a resource id is 32 hex characters');
+		type Reading = { found: boolean; complete?: boolean; naturalWidth?: number; naturalHeight?: number; scheme?: string; placeholder: boolean };
+		const readings = await Promise.all(this.page.frames().map(async (frame): Promise<Reading> => {
+			try {
+				return await frame.evaluate((id): Reading => {
+					interface Img { complete: boolean; naturalWidth: number; naturalHeight: number; src: string }
+					const doc = (globalThis as unknown as { document: { querySelector: (s: string) => unknown } }).document;
+					const img = doc.querySelector(`img[data-resource-id="${id}"]`) as Img | null;
+					const placeholder = !!doc.querySelector(`.not-loaded-resource[data-resource-id="${id}"]`);
+					if (!img) return { found: false, placeholder };
+					return { found: true, complete: img.complete, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, scheme: new URL(img.src).protocol, placeholder };
+				}, resourceId);
+			} catch {
+				return { found: false, placeholder: false };
+			}
+		}));
+		return readings.find(r => r.found) ?? readings.find(r => r.placeholder) ?? { found: false, placeholder: false };
+	}
+
+	// The bytes the viewer shows: fetched inside that frame from its own blob: URL (the page's CSP allows connect-src blob:).
+	public async viewerImageBytes(resourceId: string): Promise<Buffer> {
+		if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('viewerImageBytes: a resource id is 32 hex characters');
+		for (const frame of this.page.frames()) {
+			let read: { b64?: string; error?: string } | undefined;
+			try {
+				read = await frame.evaluate(async id => {
+					const g = globalThis as unknown as { document: { querySelector: (s: string) => { src: string } | null }; fetch: (u: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> }>; btoa: (s: string) => string };
+					const img = g.document.querySelector(`img[data-resource-id="${id}"]`);
+					if (!img) return undefined;
+					try {
+						const bytes = new Uint8Array(await (await g.fetch(img.src)).arrayBuffer());
+						let binary = '';
+						for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+						return { b64: g.btoa(binary) };
+					} catch (e) {
+						return { error: `${(e as Error).name}: ${(e as Error).message}` };
+					}
+				}, resourceId);
+			} catch {
+				read = undefined; // a detached frame
+			}
+			if (!read) continue;
+			if (read.error) throw new Error(`the viewer frame could not read its image: ${read.error}`);
+			return Buffer.from(read.b64 ?? '', 'base64');
+		}
+		throw new Error(`no frame shows the image of resource ${resourceId}`);
+	}
+
 	public async openTags(): Promise<TagsDialog> {
 		await this.menuAction('Tags');
 		const dialog = new TagsDialog(this.page);
@@ -673,5 +765,65 @@ export class FolderScreen {
 	public async save(): Promise<void> {
 		await this.page.getByRole('button', { name: 'Save changes', exact: true }).click();
 		await this.heading().waitFor({ state: 'detached' });
+	}
+}
+
+// Upstream's Search screen (SearchScreen/index.tsx, SearchResults.tsx, NoteItem.tsx; docs/test-plans/M2-S3.md D3).
+export class SearchScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public heading(): Locator {
+		return this.page.getByRole('heading', { name: 'Search', exact: true });
+	}
+
+	public field(): Locator {
+		return this.page.getByPlaceholder('Search notes, notebooks...', { exact: true });
+	}
+
+	// The search screen itself: the deepest element holding its header and its field (hidden screens are aria-hidden anyway).
+	public root(): Locator {
+		return this.page.locator('div').filter({ has: this.heading() }).filter({ has: this.field() }).last();
+	}
+
+	public result(title: string): Locator {
+		return this.root().getByRole('button', { name: title, exact: true });
+	}
+
+	public async waitOpen(): Promise<void> {
+		await this.field().waitFor();
+	}
+
+	// Upstream runs a query only when its text changes, and indexes a synced note about 10 s after it changes
+	// (docs/test-plans/M2-S3.md D3): clear and retype the word, as a user would, until the result shows.
+	public async searchUntilFound(word: string, title: string, opts: { timeoutMs?: number; attemptMs?: number } = {}): Promise<{ attempts: number; ms: number }> {
+		const started = Date.now();
+		let attempts = 0;
+		await waitFor(`the search to list the note titled "${title}"`, async () => {
+			attempts++;
+			await clearLikeUser(this.field());
+			await typeLikeUser(this.field(), word);
+			try {
+				await this.result(title).waitFor({ timeout: opts.attemptMs ?? 5_000 });
+				return true;
+			} catch {
+				return undefined;
+			}
+		}, { timeoutMs: opts.timeoutMs ?? 180_000, intervalMs: 250 });
+		return { attempts, ms: Date.now() - started };
+	}
+
+	// From a note opened from the results, "Back" returns here (the search screen has no Sidebar button).
+	public async backFromNote(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+		await this.field().waitFor();
+	}
+
+	public async close(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+		await this.page.getByRole('button', { name: 'Sidebar', exact: true }).waitFor();
 	}
 }
