@@ -1596,3 +1596,38 @@ Fixtures `{ stack, joplinServer, e2eeAccount, webApp, webNetwork }`. The unlock 
 
 ### Plan
 Record the gate results, the 3 × 3 runs and S-WSQ in the plan.
+
+## Planner addendum after the WO-11 HARD STOP (2026-11-11): the local L20 rule, WO-30, and resuming
+**The local L20 classification (all local runs from now on).** A WS-1 failure whose qualifying lines are only `rc= -1` or `rc= 10`:
+- excluding the spellfix line;
+- with `web-sqlite.json` attached;
+- with nothing else failing in that test (shape A, B or WS-1-only);
+- on the Pi (arm64)
+
+is **RECORDED** as an L20 occurrence: the test, the line number, the console sha256 and the `web-sqlite.json` path. It is not a HARD STOP, and the test is **never re-run for green**. A **second** L20 occurrence in the same run **is** a HARD STOP. Any other failure is a HARD STOP as before. Proof runs follow the user's tie (option 1) as recorded in STATUS.
+
+### WO-30: The seed lands on the server completely (RED commit)
+- **RED:** `tests/unit/harness/seedCheck.test.ts` (extend, or create beside `seedCheck.ts`) holds `seed-items-01…03` for a pure `missingSeedItems(expected: { kind: 'folder' | 'note' | 'todo' | 'attachment-note'; id: string }[], serverNames: string[]): string[]`:
+  - `seed-items-01`: all `<id>.md` present gives `[]`;
+  - `seed-items-02`: the folder's `.md` missing gives `['folder']`;
+  - `seed-items-03`: the result never contains an id or title (value-free).
+
+  **Commit 1:** `test(harness): failing unit tests for a seed that reached the server only partly (M2-S3 WO-11 failure 2)`.
+- **GREEN:**
+  - `tests/fixtures/m1-s5/device/device.mjs`: the batch's single `sync` becomes `sync` then `sync` again. Add a comment: "a real device syncs again; the first sync after `e2ee enable` can leave an item unsent (M2-S3 WO-11)".
+  - `tests/stack/stack.ts` `enableE2ee`, after the device run and the existing `checkSeededInfo`:
+    - list the account's server items (`serverItemNames`);
+    - build `expected`: the folder (note 1's `parent_id`, read from the device's `ls` output; add `parent_id` to the device's `RESULT` notes), every note, and with extras the to-do and the attachment note;
+    - if `missingSeedItems` is not empty, throw `SEED INCOMPLETE: <kinds> missing on the server after the device's sync (see device-<label>.log)`.
+  - Rebuild the device image (`device.mjs` changed): the next heavy run without `NOTESTEAD_DEVICE_IMAGE`, with `NOTESTEAD_KEEP_IMAGE=1`.
+  - **Commit 2:** `test(harness): the E2EE device syncs twice, and the seed is checked item by item on the server (M2-S3 WO-11 failure 2)`.
+  - Run the whole harness Jest set.
+
+### Resuming (in this order; nothing else heavy runs alongside, and no Jest during heavy runs)
+1. **WO-30**, as above.
+2. **WO-11 again**, the full regression set as ordered, in the background, with the device image rebuilt (see WO-30). Apply the local L20 rule.
+   - Expected: every test passes, apart from at most one recorded L20 occurrence.
+   - A `SEED INCOMPLETE` is a **HARD STOP**: report the device log.
+   - Record the run in the plan, with M2-AC2's earlier occurrence as L20 occurrence 4.
+3. **WO-12** (the F-H1 proof and the contract self-tests), unchanged.
+4. **WO-14:** commit the uncommitted RED spec `tests/e2e/harness/test-files.spec.ts` as WO-14's RED commit, after re-running its RED as ordered. Then continue WO-14 onward (WO-15 to WO-21, WO-29, WO-22 to WO-28) under the local L20 rule.
