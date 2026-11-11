@@ -104,6 +104,23 @@ test.describe('M2-S2 to-dos in the web app', () => {
 				void new N('nst-spy-control');
 			});
 			expect((await readNotificationSpy(webApp.page)).main?.constructed, 'the spy counts the control').toBe(1);
+
+			// C3 (M2-S2 r1): the init script reaches the app's own sandboxed frames: the note viewer, then the Markdown editor.
+			await app.openNote(note1.title);
+			await note.waitOpen();
+			const coverage = async (): Promise<string> => {
+				const r = await readNotificationSpy(webApp.page);
+				if (r.frames < 2) return `only ${r.frames} frame(s)`;
+				return r.framesWithSpy === r.frames ? 'covered' : `${r.framesWithSpy} of ${r.frames} frames have the spy`;
+			};
+			await expect.poll(coverage, { message: 'every frame of the open note has the spy (the viewer)', timeout: 60_000, intervals: [500] }).toBe('covered');
+			const viewer = await readNotificationSpy(webApp.page);
+			await note.startEditing();
+			await expect.poll(coverage, { message: 'every frame has the spy (the editor)', timeout: 60_000, intervals: [500] }).toBe('covered');
+			const editing = await readNotificationSpy(webApp.page);
+			test.info().annotations.push({ type: 'spy-frames', description: `viewer: ${viewer.framesWithSpy} of ${viewer.frames}; editor: ${editing.framesWithSpy} of ${editing.frames}` });
+			expect(editing.main?.docId, 'the same document throughout the test').toBe(docId);
+			await app.backToList();
 		});
 
 		await test.step('5. mark it done in the note list', async () => {
