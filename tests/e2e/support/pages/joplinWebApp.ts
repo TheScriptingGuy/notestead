@@ -5,11 +5,13 @@
 // accessibilityLabel and accessibilityLabelledBy to ARIA); the strings are upstream's en_GB UI texts at the pinned ref.
 // Every text goes in through typeLikeUser (real key events; secrets only into password fields, C1-R1).
 // M2-S2 adds the note, notebook, tag and alarm screens (docs/test-plans/M2-S2.md §Page objects, F3 to F7).
-import type { Locator, Page } from '@playwright/test';
+import { test } from '@playwright/test';
+import type { Frame, Locator, Page } from '@playwright/test';
 import { waitFor } from '../../../support/poll.ts';
 import { datetimeLocalValue } from '../dueDate.ts';
 import type { LocalParts } from '../dueDate.ts';
 import { SecretInVisibleFieldError, clearLikeUser, knownSecretsNow, secretIn, typeLikeUser } from '../typeLikeUser.ts';
+import { focusTargetFor, settleTracker } from '../settle.ts';
 import { trashExit } from '../trashExit.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
@@ -172,7 +174,8 @@ export class JoplinWebApp {
 		await this.page.getByRole('button', { name: item, exact: true }).click();
 		const screen = new NoteScreen(this.page);
 		await screen.waitOpen();
-		await screen.waitSettled();
+		const timing = await screen.waitSettled(item === 'New to-do' ? 'todo' : 'note');
+		test.info().annotations.push({ type: 'settle', description: `${timing.kind}: editor ${timing.editorMs} ms, focus on the ${focusTargetFor(timing.kind)} at ${timing.landedMs} ms, settled ${timing.settledMs} ms` });
 		return screen;
 	}
 
@@ -393,29 +396,50 @@ export class NoteScreen {
 		await this.titleField().waitFor({ timeout: 60_000 });
 	}
 
-	// A new note opens in edit mode, and the focus moves when the Markdown editor's frame has loaded (a few seconds after
-	// the title field on the Pi): in the first full M2-S2 run the first characters of a title went into the title field and
-	// the rest into the body. So a test waits for the editor frame, then for the focus to stay with the same element for
-	// a second of polls (a stabilisation anchored to the editor's load, not a sleep), before it types.
-	public async waitSettled(): Promise<void> {
-		await this.editor();
-		let last = '';
-		let steady = 0;
-		await waitFor('the focus to settle after the editor loaded', async () => {
+	// A new note opens in edit mode, and upstream then moves the focus: to a to-do's title, to a note's body, which is the
+	// Markdown editor, by a command queued to the editor's frame, so it lands when that frame has loaded (Note.tsx
+	// scheduleFocusUpdate; docs/test-plans/M2-S3.md D8 C1, F5). In the first full M2-S2 run the first characters of a title
+	// went into the title field and the rest into the body. So a test waits for the editor frame (the positive event), then for
+	// the focus to land on upstream's target and stay there for 10 polls (a stabilisation anchored to an observed event, not a
+	// sleep), before it types. The lag is returned and recorded as the `settle` annotation.
+	public async waitSettled(kind: 'note' | 'todo'): Promise<{ kind: 'note' | 'todo'; editorMs: number; landedMs: number; settledMs: number }> {
+		const started = Date.now();
+		await this.editorFrame();
+		const editorMs = Date.now() - started;
+		const target = focusTargetFor(kind);
+		const settled = settleTracker(target, 10);
+		let landedMs: number | undefined;
+		const settledMs = await waitFor(`the focus to land on the ${target} (upstream's focus for a new ${kind}) and stay for 10 polls`, async () => {
 			const owner = await this.focusOwner();
-			steady = owner === last ? steady + 1 : 0;
-			last = owner;
-			return steady >= 10 ? true : undefined;
+			if (owner === target) landedMs ??= Date.now() - started;
+			else landedMs = undefined;
+			return settled(owner) ? Date.now() - started : undefined;
 		}, { timeoutMs: 60_000, intervalMs: 100 });
+		return { kind, editorMs, landedMs: landedMs ?? settledMs, settledMs };
 	}
 
-	// Who holds the focus in the page's own document: the title field, or another element (an iframe holds it while the
-	// editor's frame is focused).
+	// Who holds the focus: 'title' (the title field), 'editor' (inside the Markdown editor's .cm-content), or 'other:<tag>'
+	// (another element of the page, or of the editor's frame).
 	private async focusOwner(): Promise<string> {
-		return this.titleField().evaluate(title => {
-			const active = (title as unknown as { ownerDocument: { activeElement: { localName?: string } | null } }).ownerDocument.activeElement;
-			return (active as unknown) === title ? 'title' : String(active?.localName ?? 'none');
-		});
+		const frame = await this.editorFrame();
+		const iframe = await frame.frameElement();
+		const title = await this.titleField().elementHandle();
+		try {
+			const top = await this.page.evaluate(([t, f]) => {
+				const active = (globalThis as unknown as { document: { activeElement: { localName?: string } | null } }).document.activeElement;
+				if ((active as unknown) === t) return 'title';
+				if ((active as unknown) === f) return 'iframe';
+				return `other:${String(active?.localName ?? 'none')}`;
+			}, [title, iframe] as const);
+			if (top !== 'iframe') return top;
+			return await frame.evaluate(() => {
+				const active = (globalThis as unknown as { document: { activeElement: { closest?: (s: string) => unknown } | null } }).document.activeElement;
+				return active?.closest?.('.cm-content') ? 'editor' : 'other:iframe';
+			});
+		} finally {
+			await title?.dispose();
+			await iframe.dispose();
+		}
 	}
 
 	// replace: select all and Backspace first (clearLikeUser), then type; the text goes in through typeLikeUser.
@@ -430,18 +454,21 @@ export class NoteScreen {
 
 	// Upstream's Markdown editor is CodeMirror in an iframe (ExtendedWebView on web, MarkdownEditor.tsx): found as the one
 	// frame that has a .cm-content.
-	public async editor(): Promise<Locator> {
+	public async editorFrame(): Promise<Frame> {
 		return waitFor('the Markdown editor (a frame with a .cm-content)', async () => {
 			for (const frame of this.page.frames()) {
 				try {
-					const content = frame.locator('.cm-content');
-					if ((await content.count()) === 1) return content;
+					if ((await frame.locator('.cm-content').count()) === 1) return frame;
 				} catch {
 					// a frame that detached while it was read
 				}
 			}
 			return undefined;
 		}, { timeoutMs: 60_000, intervalMs: 250 });
+	}
+
+	public async editor(): Promise<Locator> {
+		return (await this.editorFrame()).locator('.cm-content');
 	}
 
 	public async startEditing(): Promise<Locator> {
