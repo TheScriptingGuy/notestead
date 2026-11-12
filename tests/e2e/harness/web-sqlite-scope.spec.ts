@@ -11,13 +11,26 @@ import type { WebApp } from '../support/fixtures.ts';
 import { openUnlockedWebApp } from '../support/flows.ts';
 import { expectNotStoredLocally, expectStoredLocally } from '../support/localProfile.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
-import { armFault, fullTitleSeen, installSettingsFault, readFault, releaseFault, releaseReady } from '../support/sqliteFault.ts';
+import { armFault, batchRolledBack, fullTitleSeen, installSettingsFault, readFault, releaseFault, releaseReady, replyShape } from '../support/sqliteFault.ts';
 import type { FaultEvent } from '../support/sqliteFault.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 
 const allowReason = 'WSQ: a failing settings statement is injected on purpose (L20 characterisation)';
 
 const eventsOf = async (webApp: WebApp, kind: FaultEvent['kind']): Promise<FaultEvent[]> => (await readFault(webApp.page)).filter(e => e.kind === kind);
+
+// Which caller upstream's logger blamed for the injected failure after the release: it varies with how the connection's overlapping
+// batches interleave, so it is recorded (the `sqlite-logger` annotation), not asserted (WO-29b).
+const loggerAnnotation = (webApp: WebApp): void => {
+	const lines = webApp.console;
+	const who = lines.some(l => l.includes('Could not save settings')) ? 'Setting' : lines.some(l => l.includes('ResourceService::indexNoteResources: {type: error')) ? 'ResourceService' : 'none';
+	test.info().annotations.push({ type: 'sqlite-logger', description: who });
+};
+
+// The feasibility check of the reply listener (WO-29b): replies with a messageId are seen within 60 s of the app's start.
+const repliesVisible = async (webApp: WebApp): Promise<void> => {
+	await expect.poll(async () => (await replyShape(webApp.page)).replies, { message: 'the fault script saw the SQLite worker\'s replies (a reply with a messageId)', timeout: 60_000, intervals: [500] }).toBeGreaterThan(0);
+};
 
 test.describe('L20 web SQLite transaction scope', () => {
 	test.describe.configure({ timeout: longSpecTimeoutMs });
@@ -45,6 +58,7 @@ test.describe('L20 web SQLite transaction scope', () => {
 		await test.step('1. open the web app and unlock it; the worker messages are visible to the fault script', async () => {
 			await openUnlockedWebApp(app, webApp.baseURL, joplinServer.proxiedUrl, e2eeAccount);
 			await expect.poll(async () => (await readFault(webApp.page)).length, { message: 'the fault script saw the app\'s SQLite worker messages (a BEGIN)', timeout: 60_000, intervals: [500] }).toBeGreaterThan(0);
+			await repliesVisible(webApp);
 		});
 
 		await test.step('2. hold a settings batch open', async () => {
@@ -64,9 +78,8 @@ test.describe('L20 web SQLite transaction scope', () => {
 		});
 
 		await test.step('4. (a) the batch failed and was rolled back; (b) the screen shows the new title; (c) the database does not hold it', async () => {
-			await expect.poll(() => webApp.console.some(l => l.includes('Could not save settings')), { message: 'the console has "Could not save settings"', timeout: 10_000, intervals: [250] }).toBe(true);
-			const held = (await eventsOf(webApp, 'held'))[0].t;
-			await expect.poll(async () => (await eventsOf(webApp, 'rollback')).some(e => e.t > held), { message: 'a ROLLBACK after the held BEGIN', timeout: 10_000, intervals: [250] }).toBe(true);
+			await expect.poll(async () => batchRolledBack(await readFault(webApp.page)), { message: 'the injected statement failed and a ROLLBACK followed the release (from the worker\'s replies)', timeout: 10_000, intervals: [250] }).toBe('yes');
+			loggerAnnotation(webApp);
 			// the guard (WO-29a): a title sent again after the release lands outside the rolled-back batch, so the run tests nothing
 			const releasedAt = (await eventsOf(webApp, 'released'))[0].t;
 			expect((await eventsOf(webApp, 'update-seen')).filter(e => e.t > releasedAt).length, 'WSQ-01 invalid run: the title was sent again after the release; this run does not test L20').toBe(0);
@@ -89,15 +102,15 @@ test.describe('L20 web SQLite transaction scope', () => {
 
 		await test.step('1. open the web app and unlock it', async () => {
 			await openUnlockedWebApp(app, webApp.baseURL, joplinServer.proxiedUrl, e2eeAccount);
+			await repliesVisible(webApp);
 			await app.openFolder(seedFolder);
 		});
 
 		await test.step('2. hold a settings batch, release it, and wait for its rollback', async () => {
 			await holdASettingsBatch(webApp, app, 'Trash');
 			await releaseFault(webApp.page);
-			const held = (await eventsOf(webApp, 'held'))[0].t;
-			await expect.poll(async () => (await eventsOf(webApp, 'rollback')).some(e => e.t > held), { message: 'a ROLLBACK after the held BEGIN', timeout: 10_000, intervals: [250] }).toBe(true);
-			await expect.poll(() => webApp.console.some(l => l.includes('Could not save settings')), { message: 'the console has "Could not save settings"', timeout: 10_000, intervals: [250] }).toBe(true);
+			await expect.poll(async () => batchRolledBack(await readFault(webApp.page)), { message: 'the injected statement failed and a ROLLBACK followed the release (from the worker\'s replies)', timeout: 10_000, intervals: [250] }).toBe('yes');
+			loggerAnnotation(webApp);
 		});
 
 		await test.step('3. the edit made after the rollback is stored', async () => {
