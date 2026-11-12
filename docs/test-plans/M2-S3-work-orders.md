@@ -1728,3 +1728,38 @@ The HARD STOP definition above applies.
 - WO-26 to WO-28.
 - **WO-24:** the full run under `C.UTF-8`, the local L20 rule (at most 1), the 20-minute stop for M2-AC7a, and M2-AC7a's `phase` annotations recorded.
 - **WO-25**, then stop.
+
+## Planner addendum after the arm64 results (2026-11-12): WO-31 to WO-33
+The HARD STOP definition above applies. Logs go under `test-results/verify/m2-s3/sens2/`. Make temporary edits, revert each with `git checkout --`, and check `git status` afterwards. Use `$IMG` under `LANG=C.UTF-8 LC_ALL=C.UTF-8`, and run one job at a time.
+
+### WO-31: S-WSQ-c (no commit)
+In `web-sqlite-scope.spec.ts` WSQ-01, replace (c)'s needle with the seeded note's own title (`e2eeAccount.notes[0].title`), which is stored. Run `-g "WSQ-01"` into `sens2/s-wsq-c.log`.
+- It must fail at (c) with the **flip** text.
+- **HARD STOP** if it passes, or fails anywhere else.
+
+### WO-32: The `sync-repress` annotation on failure too (one commit), and S1c″'s count
+- **`flows.ts` `syncWebOnce`:**
+  - push the `sync-repress` annotation (when `presses > 1`) in a `finally` around the poll, so a failing sync records it;
+  - on failure, the description says "`… presses; the sync did not complete`".
+  - No other change.
+- Run the whole harness Jest set.
+- **Commit:** `test(harness): syncWebOnce records its re-presses when the sync fails too (M2-S3 S1c″)`.
+- **S1c″'s count:**
+  - from the existing S1c″ evidence (`trace.zip`, `network.log`), count the `Synchronise` clicks between the `cycle('edit')` start and the failure;
+  - record it in the plan;
+  - **HARD STOP** if it is over 3.
+  - No re-run.
+
+### WO-33: S-AC6a′ and S-AC7a′ (no commit)
+- **S-AC6a′:**
+  - in `search.spec.ts`, step 5's positive search uses `nstnoword${run}`, a word in no note, instead of the note's unique word;
+  - run `-g "M2-AC6"` into `sens2/s-ac6a-prime.log`;
+  - it must fail at step 5: `timed out … waiting for the search to list the note titled …`.
+- **S-AC7a′:**
+  - in `attachments-upload.spec.ts`, put `await webApp.context.setOffline(true);` right after the attach step (after the probe page's use) and before step 3's cycle, then replace that cycle with `await syncHeadlessOnce(stack, headlessService);`;
+  - run `-g "M2-AC7a"` into `sens2/s-ac7a-prime.log` with `T=60m`;
+  - it must fail at step 4, at the `notesTitled(TA)` poll (length 0) or the resource listing (empty). Record which.
+- **HARD STOP** if either passes, or fails at a step before its target.
+
+### Then
+Append the results of WO-31 to WO-33, and S1c″'s count, to the plan's §Harness validation. **Commit:** `docs(test-plans): M2-S3 sensitivity follow-ups WO-31 to WO-33`. Stop and report.
