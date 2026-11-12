@@ -3,6 +3,7 @@
 // note content. The lines are browser-console.log lines: `<ISO> [<level>] <message>`.
 import { describe, expect, test } from '@jest/globals';
 import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
+import { classifyWorkerMessage } from '../../e2e/support/sqliteFault.ts';
 
 const at = '2026-10-25T08:00:00.000Z';
 const line = (level: string, message: string): string => `${at} [${level}] ${message}`;
@@ -69,5 +70,28 @@ describe('web sqlite failures', () => {
 		for (const url of ['about:blank', undefined, 'http://127.0.0.1:41235/', 'data:text/html,x']) {
 			expect(`${String(url)} -> ${estimatePageChoice(url, 'http://127.0.0.1:41234')}`).toBe(`${String(url)} -> probe`);
 		}
+	});
+
+	// The message classifier of the L20 characterisation's fault script: sqlite-wasm's worker-1 message shape is
+	// { type: 'exec', args: { sql } } (docs/test-plans/M2-S3-work-orders.md WO-29).
+	const exec = (sql: string): unknown => ({ type: 'exec', messageId: 'exec#1', dbId: 'db#1', args: { sql, bind: null } });
+
+	test('wsq-01 a settings DELETE is classified, whatever its case', () => {
+		expect(classifyWorkerMessage(exec('DELETE FROM settings WHERE key IN (?)'))).toBe('settings-delete');
+		expect(classifyWorkerMessage(exec('  delete from SETTINGS where key in (?, ?)'))).toBe('settings-delete');
+	});
+
+	test('wsq-02 a note title UPDATE is classified', () => {
+		expect(classifyWorkerMessage(exec('UPDATE notes SET title = ?, updated_time = ? WHERE id = ?'))).toBe('notes-title-update');
+		expect(classifyWorkerMessage(exec('update Notes set Title = ? where id = ?'))).toBe('notes-title-update');
+		expect(classifyWorkerMessage(exec('UPDATE notes SET body = ? WHERE id = ?'))).toBe('other');
+	});
+
+	test('wsq-03 BEGIN is classified; anything else and a non-object are other', () => {
+		expect(classifyWorkerMessage(exec('BEGIN TRANSACTION'))).toBe('begin');
+		expect(classifyWorkerMessage(exec('COMMIT'))).toBe('other');
+		expect(classifyWorkerMessage(exec('SELECT 1'))).toBe('other');
+		expect(classifyWorkerMessage({ type: 'open', args: { filename: 'x' } })).toBe('other');
+		for (const bad of [null, undefined, 'BEGIN', 5, { type: 'exec' }, { type: 'exec', args: { sql: 7 } }]) expect(classifyWorkerMessage(bad)).toBe('other');
 	});
 });
