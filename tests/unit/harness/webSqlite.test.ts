@@ -3,7 +3,7 @@
 // note content. The lines are browser-console.log lines: `<ISO> [<level>] <message>`.
 import { describe, expect, test } from '@jest/globals';
 import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
-import { classifyWorkerMessage, releaseReady } from '../../e2e/support/sqliteFault.ts';
+import { batchRolledBack, classifyWorkerMessage, releaseReady } from '../../e2e/support/sqliteFault.ts';
 
 const at = '2026-10-25T08:00:00.000Z';
 const line = (level: string, message: string): string => `${at} [${level}] ${message}`;
@@ -122,5 +122,24 @@ describe('web sqlite failures', () => {
 			expect(`${full} ${releaseReady(events, 3_000 + 1_500)}`).toBe(`${full} release`);
 		}
 		expect(releaseReady([held, update(2_000, true)], 2_100, 100)).toBe('release');
+	});
+
+	// Assertion (a) of WSQ-01/02 from the worker's replies, not from upstream's log line (WO-29b): the injected statement's reply is
+	// an error, and a ROLLBACK went to the worker after the release.
+	type RollbackEvent = { kind: 'begin' | 'held' | 'released' | 'injected-reply' | 'rollback'; t: number; error?: boolean };
+	const ev = (kind: RollbackEvent['kind'], t: number, error?: boolean): RollbackEvent => ({ kind, t, ...(error === undefined ? {} : { error }) });
+
+	test('wsq-07 held, released, an error reply and a rollback is a rolled-back batch', () => {
+		expect(batchRolledBack([ev('begin', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, true), ev('rollback', 5)])).toBe('yes');
+	});
+
+	test('wsq-08 an injected statement that did not fail is named', () => {
+		expect(batchRolledBack([ev('begin', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, false), ev('rollback', 5)])).toMatch(/the injected statement did not fail/);
+	});
+
+	test('wsq-09 no ROLLBACK after the release is named, and one before the hold does not count', () => {
+		expect(batchRolledBack([ev('begin', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
+		expect(batchRolledBack([ev('rollback', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
+		expect(batchRolledBack([ev('held', 2), ev('rollback', 2.5), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
 	});
 });
