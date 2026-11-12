@@ -1,7 +1,8 @@
 // When a restarted headless service counts as ready (docs/test-plans/CI-M2-S2-x64-arm64.md, finding F). Ready is the
 // supervisor's own /healthz: 200 with a lastSync strictly after the restart. Podman's health status is not part of it: on the
-// CI runners it stayed "starting" for minutes after `podman restart` although /healthz was ready (its health timer was lost),
-// so it is used only to fail fast. No Playwright import; shared by Jest and Playwright like tests/stack/*.
+// CI runners it stayed "starting" for minutes after `podman restart` although /healthz was ready. That a health timer was lost
+// is a hypothesis, not a proven mechanism (CI-M2-S2 r2 C2); the `health-lag` annotation fires on every cycle on the Pi too
+// (podman checks every 2 s), so the lag is not specific to the runners. Podman's status is used only to fail fast. No Playwright import; shared by Jest and Playwright like tests/stack/*.
 export interface RestartObservation {
 	running: boolean;
 	// podman's health status: healthy, starting, unhealthy, exited, ...
