@@ -3,7 +3,7 @@
 // note content. The lines are browser-console.log lines: `<ISO> [<level>] <message>`.
 import { describe, expect, test } from '@jest/globals';
 import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
-import { classifyWorkerMessage } from '../../e2e/support/sqliteFault.ts';
+import { classifyWorkerMessage, releaseReady } from '../../e2e/support/sqliteFault.ts';
 
 const at = '2026-10-25T08:00:00.000Z';
 const line = (level: string, message: string): string => `${at} [${level}] ${message}`;
@@ -96,5 +96,31 @@ describe('web sqlite failures', () => {
 		expect(classifyWorkerMessage(exec('SELECT 1'))).toBe('other');
 		expect(classifyWorkerMessage({ type: 'open', args: { filename: 'x' } })).toBe('other');
 		for (const bad of [null, undefined, 'BEGIN', 5, { type: 'exec' }, { type: 'exec', args: { sql: 7 } }]) expect(classifyWorkerMessage(bad)).toBe('other');
+	});
+
+	// When WSQ-01 releases the held settings batch (WO-29a): the full title is inside the transaction and the save queue has been
+	// quiet for 1.5 s (3 x upstream's 500 ms AsyncActionQueue).
+	const held = { kind: 'held' as const, t: 1_000, fullTitle: false };
+	const update = (t: number, fullTitle: boolean): { kind: 'update-seen'; t: number; fullTitle: boolean } => ({ kind: 'update-seen', t, fullTitle });
+
+	test('wsq-04 a partial title is never enough, whatever the time', () => {
+		for (const now of [1_001, 3_000, 60_000, 1_000_000]) expect(`${now} ${releaseReady([held, update(2_000, false)], now)}`).toBe(`${now} wait`);
+		expect(releaseReady([held], 100_000)).toBe('wait');
+	});
+
+	test('wsq-05 the full title releases after the quiet window', () => {
+		expect(releaseReady([held, update(2_000, true)], 2_000 + 1_499)).toBe('wait');
+		expect(releaseReady([held, update(2_000, true)], 2_000 + 1_500)).toBe('release');
+		// an update before the hold is not inside the held batch
+		expect(releaseReady([update(500, true), held], 100_000)).toBe('wait');
+	});
+
+	test('wsq-06 a later update, full or not, restarts the quiet window', () => {
+		for (const full of [true, false]) {
+			const events = [held, update(2_000, true), update(3_000, full)];
+			expect(`${full} ${releaseReady(events, 3_000 + 1_499)}`).toBe(`${full} wait`);
+			expect(`${full} ${releaseReady(events, 3_000 + 1_500)}`).toBe(`${full} release`);
+		}
+		expect(releaseReady([held, update(2_000, true)], 2_100, 100)).toBe('release');
 	});
 });
