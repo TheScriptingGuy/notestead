@@ -89,7 +89,7 @@ Mocks belong only in unit tests. Contract and E2E never mock a Joplin component.
 - **REST data checks see conflicts and the trash (from M2-S2 F1).** List queries go through `tests/e2e/support/restQueries.ts`, which asks for `include_conflicts=1` (CLI 3.7.1 hides conflict copies from `GET /notes` by default) and asks for `include_deleted=1` only when a test means the trash. A check of "exactly one note per title" is therefore able to see a conflict copy.
 - **Everything is bounded (from CI 39663284028).**
   - Actions 60 s, navigations 120 s.
-  - Each long spec 15 min.
+  - Each long spec 25 min (M2-AC7a's 100 MiB attachment, M2-S3 D7; a CI run of it over 12.5 min orders a split into its own job).
   - The CI run 55 min, inside the 60-minute E2E step, which ends Playwright at least 4 minutes before the E2E step limit, so reports and traces survive (`CI-T-01…04`, `tests/e2e/support/timeouts.ts`).
 
   The redacting reporter prints each failure as it happens (`[notestead] FAILED …`), redacted, so a killed run keeps its errors.
