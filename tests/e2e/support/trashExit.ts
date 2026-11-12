@@ -19,3 +19,13 @@ export const trashExit = (s: TrashScreen): 'left' | 'stayed' | undefined => {
 	if (s.onNote && s.backVisible && s.msSinceDelete >= stayedAfterMs) return 'stayed';
 	return undefined;
 };
+
+// After `stayed`, the Back press can race with upstream leaving the trashed note by itself a moment later (CI-M2-S2 r2 C1): the
+// click then times out or finds its element detached. `left`: the screen is the list, or the click went through. `fail`: the click
+// timed out and the note screen is still showing. `retry`: nothing decides yet, observe again.
+export const afterStayed = (click: 'done' | 'detached' | 'timeout', s: TrashScreen): 'left' | 'retry' | 'fail' => {
+	if (click === 'done') return 'left';
+	if (s.onList && !s.onNote) return 'left';
+	if (click === 'timeout' && s.onNote) return 'fail';
+	return 'retry';
+};

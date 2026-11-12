@@ -12,7 +12,7 @@ import { datetimeLocalValue } from '../dueDate.ts';
 import type { LocalParts } from '../dueDate.ts';
 import { SecretInVisibleFieldError, clearLikeUser, knownSecretsNow, secretIn, typeLikeUser } from '../typeLikeUser.ts';
 import { focusTargetFor, settleTracker } from '../settle.ts';
-import { trashExit } from '../trashExit.ts';
+import { afterStayed, trashExit } from '../trashExit.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
 export const appStartTimeoutMs = 3 * 60_000;
@@ -221,7 +221,30 @@ export class JoplinWebApp {
 			backVisible: await this.page.getByRole('button', { name: 'Back', exact: true }).isVisible(),
 			msSinceDelete: Date.now() - deletedAt,
 		}), { timeoutMs: 30_000, intervalMs: 100 });
-		if (outcome === 'stayed') await this.backToList();
+		if (outcome === 'stayed') {
+			// Back, with its own bound: upstream may still leave by itself after the press began (CI-M2-S2 r2 C1, afterStayed).
+			let click: 'done' | 'detached' | 'timeout' = 'done';
+			try {
+				await this.page.getByRole('button', { name: 'Back', exact: true }).click({ timeout: 10_000 });
+			} catch (error) {
+				click = (error as Error).name === 'TimeoutError' ? 'timeout' : 'detached';
+			}
+			if (click !== 'done') {
+				const observe = async () => afterStayed(click, {
+					onList: (await this.sidebarButton().isVisible()) && (await note.titleField().count()) === 0,
+					onNote: await note.titleField().isVisible(),
+					backVisible: await this.page.getByRole('button', { name: 'Back', exact: true }).isVisible(),
+					msSinceDelete: Date.now() - deletedAt,
+				});
+				if ((await observe()) === 'fail') throw new Error('the trashed note stayed and its Back button could not be pressed within 10 s');
+				let failed: string | undefined;
+				await waitFor('the trashed note to be left after the Back press began', async () => {
+					const verdict = await observe();
+					if (verdict === 'fail') failed = 'the trashed note stayed and its Back button could not be pressed within 10 s';
+					return verdict === 'left' ? true : undefined;
+				}, { timeoutMs: 10_000, intervalMs: 100, failFast: () => failed });
+			}
+		}
 		await this.sidebarButton().waitFor();
 		return outcome;
 	}
