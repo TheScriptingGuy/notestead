@@ -1691,3 +1691,40 @@ The HARD STOP definition above applies.
 
 ### Then
 WO-26 to WO-28, then WO-24 (the full run under `C.UTF-8`, the local L20 rule, the 20-minute stop for M2-AC7a), then WO-25, and stop.
+
+## Planner addendum after the WO-29a HARD STOP (2026-11-12): WO-29b
+The HARD STOP definition above applies.
+
+### WO-29b: Assertion (a) on the worker's replies (RED commit, then GREEN)
+- **Feasibility:**
+  - The init script must see the SQLite worker's replies. On the first `postMessage` of a worker, it adds `this.addEventListener('message', …)` to that worker, once per worker.
+  - It records, for every reply `{ type, messageId }`, whether `type === 'error'`, keyed by `messageId`. Values only stay in page memory.
+  - If no reply carrying a `messageId` is seen within 60 s of startup: **HARD STOP**. Report the reply shapes (keys only).
+- **RED:** add `wsq-07…09` to `tests/unit/harness/webSqlite.test.ts`, for a pure `batchRolledBack(events: { kind: 'begin' | 'held' | 'released' | 'injected-reply' | 'rollback'; t: number; error?: boolean }[]): 'yes' | string`:
+  - `wsq-07`: `held` → `released` → `injected-reply {error: true}` → `rollback` gives `'yes'`;
+  - `wsq-08`: an `injected-reply` that is not an error gives a message naming "the injected statement did not fail";
+  - `wsq-09`: no `rollback` after `released` gives a message naming "no ROLLBACK after the release". A `rollback` before `held` doesn't count.
+
+  **Commit 1:** `test(harness): failing unit tests for proving the held batch failed and rolled back from the worker's replies (WO-29b)`.
+- **GREEN:**
+  - `sqliteFault.ts`: the reply listener; `injected-reply` and `rollback` events; `batchRolledBack`.
+  - **WSQ-01 (a):** `expect.poll(() => batchRolledBack(events), { timeout: 10_000 }).toBe('yes')`.
+  - **WSQ-02:** the same check.
+  - Both specs drop the `Could not save settings` assertion, and add the `sqlite-logger` annotation: `Setting`, `ResourceService` or `none`, from the console after the release.
+  - (b), (c), the flip text, the invalid-run guard and `releaseReady` are unchanged.
+  - Run the whole harness Jest set.
+  - **Commit 2:** `test(e2e): WSQ-01/02 prove the rollback from the worker's replies, not upstream's log line (WO-29b)`.
+
+### Runs (no commit), each alone, under `LANG=C.UTF-8 LC_ALL=C.UTF-8` with `$IMG`
+1. **3 × 3:** `T=90m run verify/wo29b-wsq-x3.log … corepack yarn playwright test tests/e2e/harness/web-sqlite-scope.spec.ts --repeat-each 3`. **All 9 must pass.**
+   - Any WSQ failure: **HARD STOP**. Report the event timelines (kinds, times and booleans only) and the `sqlite-logger` annotations.
+   - An L20 occurrence outside the injection follows the local rule, at most 1.
+   - Record the `sqlite-logger` counts.
+2. **S-WSQ (a temporary edit):** remove the hold. WSQ-01 must fail with the **flip** text. Revert it.
+3. **S-WSQ-guard (a temporary edit):** release straight after `held`. WSQ-01 must fail with the invalid-run text or the flip text, never pass. Record which. Revert it.
+4. **S-WSQ-a (a temporary edit):** make the injected statement valid (`DELETE FROM settings WHERE 0`). WSQ-01 must fail at (a) with "the injected statement did not fail". Revert it.
+
+### Then
+- WO-26 to WO-28.
+- **WO-24:** the full run under `C.UTF-8`, the local L20 rule (at most 1), the 20-minute stop for M2-AC7a, and M2-AC7a's `phase` annotations recorded.
+- **WO-25**, then stop.
