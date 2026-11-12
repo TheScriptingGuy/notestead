@@ -40,6 +40,7 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
+import { cleanupAll } from './cleanup.ts';
 import { userTimeZone } from './dueDate.ts';
 import { writeBinary, writePng } from './testFiles.ts';
 import type { GeneratedFile } from './testFiles.ts';
@@ -271,9 +272,14 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 				service = await upHeadless(stack, e2eeAccount, shortId(testInfo), headlessUpTimeoutMs);
 			} catch (error) {
 				const project = `${stack.project}-hl-${shortId(testInfo)}`;
-				await keepStartLogs(stack, project, error, testInfo);
-				downHeadless(stack, stack.headless.find(h => h.project === project));
-				throw error;
+				// The half-started container's Data API token is registered for redaction before its logs are read (CI-M2-S2 r3 C2),
+				// then the cleanup steps all run and the original error is rethrown (C1).
+				const container = projectContainers(project).headless;
+				if (container) registerToken({ container, label: `${shortId(testInfo)}-start` } as HeadlessService);
+				return await cleanupAll([
+					() => keepStartLogs(stack, project, error, testInfo),
+					async () => { downHeadless(stack, stack.headless.find(h => h.project === project)); },
+				], error);
 			}
 			await use(service);
 		} finally {
