@@ -80,8 +80,14 @@ export const syncWebOnce = async (app: JoplinWebApp, network: NetworkRecorder, t
 		report: () => app.syncReport(),
 		now: () => Date.now(),
 	};
-	await expect.poll(() => syncProbe(state, deps), { timeout: timeoutMs, intervals: [1_000] }).toBe('completed');
-	if (state.presses > 1) test.info().annotations.push({ type: 'sync-repress', description: `the web sync needed ${state.presses} presses of Synchronise: the earlier ones started no sync` });
+	let completed = false;
+	try {
+		await expect.poll(() => syncProbe(state, deps), { timeout: timeoutMs, intervals: [1_000] }).toBe('completed');
+		completed = true;
+	} finally {
+		// recorded on failure too (M2-S3 S1c″): how many presses a failing sync made
+		if (state.presses > 1) test.info().annotations.push({ type: 'sync-repress', description: `the web sync needed ${state.presses} presses of Synchronise: the earlier ones started no sync${completed ? '' : '; the sync did not complete'}` });
+	}
 	await app.closeSidebar();
 	return { report: state.report, durationMs: Date.now() - started, presses: state.presses };
 };
