@@ -1631,3 +1631,27 @@ is **RECORDED** as an L20 occurrence: the test, the line number, the console sha
    - Record the run in the plan, with M2-AC2's earlier occurrence as L20 occurrence 4.
 3. **WO-12** (the F-H1 proof and the contract self-tests), unchanged.
 4. **WO-14:** commit the uncommitted RED spec `tests/e2e/harness/test-files.spec.ts` as WO-14's RED commit, after re-running its RED as ordered. Then continue WO-14 onward (WO-15 to WO-21, WO-29, WO-22 to WO-28) under the local L20 rule.
+
+## Planner addendum after the WO-21 HARD STOP (2026-11-12)
+The HARD STOP definition above applies. The order of work:
+1. **WO-21 (finish):**
+   - `attachments-upload.spec.ts` uses `longSpecTimeoutMs`;
+   - its phase bounds are exactly: attach 2 min each, web sync **21 min**, headless sync 10 min, digest 2 min each, viewer 3 min;
+   - each wait passes its own `timeout`;
+   - the spec records a `phase` annotation per phase, with its measured ms;
+   - record the WO-21 measurement in the plan (it is already appended).
+   - **Commit:** `test(e2e): M2-AC7a 5 MiB image and 100 MiB binary uploaded through the proxy, checked by sha256 through the headless API (M2-AC7a)`.
+2. **WO-22 now applies (no longer conditional):**
+   - `longSpecTimeoutMs = 25 * 60_000`, with the comment "M2-S3 WO-21: M2-AC7a measured 15.25 min on the Pi; CI must stay ≤ 12.5 min (CI gate), Pi local HARD STOP above 20 min; 2 × 25 < 55 ≤ 56";
+   - the strategy says "Each long spec 25 min";
+   - run `CI-T-01…05`.
+   - **Commit:** `chore(harness): CC-1(b): the longest spec 25 min for M2-AC7a's 100 MiB attachment (M2-S3 WO-21)`.
+3. **One validation run of `tests/e2e/m2-s3/trash.spec.ts` (M2-AC8),** alone, in the background, with nothing alongside. Log `verify/wo18-validation.log`.
+   - It must pass.
+   - An L20 occurrence: **HARD STOP**. A second occurrence on the same spec overrides the local rule here.
+   - Any other failure: **HARD STOP**.
+   - L20 occurrence 5 stays recorded either way.
+4. **Continue:** WO-29, WO-23, WO-26 to WO-28, then **WO-24** (the full run under `C.UTF-8`, with the local L20 rule, at most 1 per run).
+   - In WO-24, M2-AC7a over **20 min** on the Pi is a **HARD STOP**.
+   - Record M2-AC7a's `phase` annotations.
+5. **Then WO-25,** and stop. After WO-24 the orchestrator may dispatch the SE's L20 rate measurement (plan, option A) before the push.
