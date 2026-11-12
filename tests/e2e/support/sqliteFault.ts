@@ -15,13 +15,14 @@ export const classifyWorkerMessage = (msg: unknown): WorkerMessageKind => {
 	const m = msg as { type?: unknown; args?: { sql?: unknown } };
 	if (m.type !== 'exec' || typeof m.args?.sql !== 'string') return 'other';
 	const sql = m.args.sql.trim().replace(/\s+/g, ' ');
-	if (/^delete from settings\b/i.test(sql)) return 'settings-delete';
-	if (/^update notes set title\b/i.test(sql)) return 'notes-title-update';
+	// the app quotes its identifiers with backticks (`notes`, `title`)
+	if (/^delete from [`"]?settings[`"]?(\s|$)/i.test(sql)) return 'settings-delete';
+	if (/^update [`"]?notes[`"]? set [`"]?title[`"]?\b/i.test(sql)) return 'notes-title-update';
 	if (/^begin\b/i.test(sql)) return 'begin';
 	return 'other';
 };
 
-export interface FaultEvent { kind: 'begin' | 'held' | 'update-seen' | 'released'; t: number }
+export interface FaultEvent { kind: 'begin' | 'held' | 'update-seen' | 'released' | 'rollback'; t: number }
 
 // Runs inside the page: no closure over anything in this file; the classifier is passed in as an argument.
 const script = (classify: (msg: unknown) => string): void => {
@@ -42,6 +43,7 @@ const script = (classify: (msg: unknown) => string): void => {
 			const message = args[0] as { args?: { sql?: string } };
 			const kind = classify(message);
 			if (kind === 'begin') fault.events.push({ kind: 'begin', t: g.performance.now() });
+			if (/^rollback\b/i.test(String(message.args?.sql ?? '').trim())) fault.events.push({ kind: 'rollback', t: g.performance.now() });
 			if (kind === 'notes-title-update') fault.events.push({ kind: 'update-seen', t: g.performance.now() });
 			if (kind === 'settings-delete' && fault.armed && !fault.release && message.args) {
 				fault.armed = false;

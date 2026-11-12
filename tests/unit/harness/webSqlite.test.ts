@@ -84,6 +84,9 @@ describe('web sqlite failures', () => {
 	test('wsq-02 a note title UPDATE is classified', () => {
 		expect(classifyWorkerMessage(exec('UPDATE notes SET title = ?, updated_time = ? WHERE id = ?'))).toBe('notes-title-update');
 		expect(classifyWorkerMessage(exec('update Notes set Title = ? where id = ?'))).toBe('notes-title-update');
+		// the app's real statement quotes its identifiers with backticks
+		expect(classifyWorkerMessage(exec('UPDATE `notes` SET `title`=?, `updated_time`=?, `user_updated_time`=? WHERE `id` = ?'))).toBe('notes-title-update');
+		expect(classifyWorkerMessage(exec('DELETE FROM `settings` WHERE key IN (\'a\')'))).toBe('settings-delete');
 		expect(classifyWorkerMessage(exec('UPDATE notes SET body = ? WHERE id = ?'))).toBe('other');
 	});
 
