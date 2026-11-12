@@ -26,10 +26,10 @@ export interface FaultEvent { kind: 'begin' | 'held' | 'update-seen' | 'released
 
 // Runs inside the page: no closure over anything in this file; the classifier is passed in as an argument.
 const script = (classify: (msg: unknown) => string): void => {
-	interface Fault { events: FaultEvent[]; armed: boolean; release?: () => void }
+	interface Fault { events: FaultEvent[]; titles: { t: number; title: string }[]; armed: boolean; release?: () => void }
 	const g = globalThis as unknown as { __nstFault?: Fault; __nstArmFault?: () => void; __nstReleaseFault?: () => void; Worker: { prototype: { postMessage: (...args: unknown[]) => unknown } }; performance: { now: () => number } };
 	if (g.__nstFault) return;
-	const fault: Fault = { events: [], armed: false };
+	const fault: Fault = { events: [], titles: [], armed: false };
 	g.__nstFault = fault;
 	g.__nstArmFault = () => { fault.armed = true; };
 	g.__nstReleaseFault = () => {
@@ -44,7 +44,13 @@ const script = (classify: (msg: unknown) => string): void => {
 			const kind = classify(message);
 			if (kind === 'begin') fault.events.push({ kind: 'begin', t: g.performance.now() });
 			if (/^rollback\b/i.test(String(message.args?.sql ?? '').trim())) fault.events.push({ kind: 'rollback', t: g.performance.now() });
-			if (kind === 'notes-title-update') fault.events.push({ kind: 'update-seen', t: g.performance.now() });
+			if (kind === 'notes-title-update') {
+				// the bound title stays in page memory (never logged): fullTitleSeen compares it in the page (WO-29a)
+				const t = g.performance.now();
+				const bind = (message.args as { bind?: unknown } | undefined)?.bind;
+				fault.events.push({ kind: 'update-seen', t });
+				fault.titles.push({ t, title: Array.isArray(bind) ? String(bind[0]) : '' });
+			}
 			if (kind === 'settings-delete' && fault.armed && !fault.release && message.args) {
 				fault.armed = false;
 				message.args.sql = 'DELETE FROM settings_nst_missing_table';
@@ -76,4 +82,28 @@ export const armFault = async (page: Page): Promise<void> => {
 };
 export const releaseFault = async (page: Page): Promise<void> => {
 	await page.evaluate(() => (globalThis as unknown as { __nstReleaseFault?: () => void }).__nstReleaseFault?.());
+};
+
+export interface ReleaseEvent { kind: 'held' | 'update-seen'; t: number; fullTitle: boolean }
+
+// The held and update events, each update marked by an in-page comparison of its bound title with `expected`: the title never
+// leaves the page, only a boolean does (WO-29a).
+export const fullTitleSeen = async (page: Page, expected: string): Promise<ReleaseEvent[]> =>
+	page.evaluate(title => {
+		const fault = (globalThis as unknown as { __nstFault?: { events: { kind: string; t: number }[]; titles: { t: number; title: string }[] } }).__nstFault;
+		if (!fault) return [];
+		return fault.events.filter(e => e.kind === 'held' || e.kind === 'update-seen').map(e => ({
+			kind: e.kind as 'held' | 'update-seen', t: e.t, fullTitle: e.kind === 'update-seen' && fault.titles.some(x => x.t === e.t && x.title === title),
+		}));
+	}, expected);
+
+// When WSQ-01 releases the held settings batch (WO-29a): a full-title UPDATE went to the worker after the hold, and no later UPDATE
+// (full or not) has been seen for `quietMs` (3 x upstream's 500 ms save queue), so no save of the title is still pending.
+export const releaseReady = (events: ReleaseEvent[], now: number, quietMs = 1_500): 'wait' | 'release' => {
+	const held = events.find(e => e.kind === 'held');
+	if (!held) return 'wait';
+	const updates = events.filter(e => e.kind === 'update-seen' && e.t > held.t);
+	if (!updates.some(e => e.fullTitle)) return 'wait';
+	const last = Math.max(...updates.map(e => e.t));
+	return now - last >= quietMs ? 'release' : 'wait';
 };
