@@ -1655,3 +1655,39 @@ The HARD STOP definition above applies. The order of work:
    - In WO-24, M2-AC7a over **20 min** on the Pi is a **HARD STOP**.
    - Record M2-AC7a's `phase` annotations.
 5. **Then WO-25,** and stop. After WO-24 the orchestrator may dispatch the SE's L20 rate measurement (plan, option A) before the push.
+
+## Planner addendum after the WO-29 determinism HARD STOP (2026-11-12)
+The HARD STOP definition above applies.
+
+### WO-29a: The release condition (RED commit, then the spec)
+- **RED:** add `wsq-04…06` to `tests/unit/harness/webSqlite.test.ts`, for a pure `releaseReady(events: { kind: 'held' | 'update-seen'; t: number; fullTitle: boolean }[], now: number, quietMs = 1_500): 'wait' | 'release'`:
+  - `wsq-04`: `held`, then an `update-seen` with `fullTitle: false`, gives `wait`, whatever `now` is;
+  - `wsq-05`: `held`, then a full-title `update-seen` at t, gives `wait` at `t + 1_499` and `release` at `t + 1_500`;
+  - `wsq-06`: a later `update-seen` (full or not) at t2 > t restarts the quiet window: `wait` at `t2 + 1_499`.
+
+  **Commit 1:** `test(harness): failing unit tests for releasing the held settings batch only after the full title is in and the save queue is quiet (WO-29a)`.
+- **GREEN:**
+  - `sqliteFault.ts`:
+    - the init script records each title `UPDATE`'s bound title in page memory (`__nstFault.titles`, never logged), plus `t` from `performance.now()`;
+    - `fullTitleSeen(page, expected)` marks the events in the page, by an in-page comparison, and returns the events with `fullTitle` booleans only;
+    - `releaseReady` goes in that file, or in `webSqlite.ts`.
+  - **`web-sqlite-scope.spec.ts` WSQ-01:**
+    - poll `releaseReady` (100 ms, bounded 60 s) after typing, then release;
+    - after the release, wait for the `ROLLBACK` (10 s), then assert no `update-seen` after the release time. Otherwise fail with the **invalid-run** text of plan §ruling, which is not the flip text;
+    - then (a), (b) and (c), unchanged.
+  - **WSQ-02:** unchanged, apart from shared helpers. **WSQ-03:** unchanged.
+  - `localProfile.ts`: `expectNotStoredLocally`, and the refactor of `expectStoredLocally` onto shared helpers. The refactor must keep `stored-01…03` and the WS-3 messages identical.
+  - Run the whole harness Jest set.
+  - **Commit 2:** `test(e2e): WSQ-01 to WSQ-03 characterise L20, a rolled-back settings batch takes a concurrent title edit with it (WEB-SQLITE-1)`.
+    - It includes the uncommitted spec and the `localProfile.ts` changes.
+    - Its body names WO-29a's release condition.
+
+### Runs (no commit)
+1. **A fresh 3 × 3:** `T=90m run verify/wo29a-wsq-x3.log env LANG=C.UTF-8 LC_ALL=C.UTF-8 $IMG corepack yarn playwright test tests/e2e/harness/web-sqlite-scope.spec.ts --repeat-each 3`, alone. **All 9 must pass.**
+   - Any WSQ-01 failure: **HARD STOP**. That includes an invalid-run failure; report its event timeline (kinds and times only).
+   - An L20 occurrence other than the injected one (a qualifying line in **WSQ-03**, or in WSQ-01/02 outside the injected statement's window) is recorded under the local rule, at most 1.
+2. **S-WSQ, as ordered:** remove the hold, which fails the batch at once. WSQ-01 must fail with the **flip** text. Then revert it.
+3. **S-WSQ-guard:** a temporary edit that releases immediately after `held`, skipping `releaseReady`. WSQ-01 must fail with either the invalid-run text or the flip text, and never pass. Record which. Then revert it.
+
+### Then
+WO-26 to WO-28, then WO-24 (the full run under `C.UTF-8`, the local L20 rule, the 20-minute stop for M2-AC7a), then WO-25, and stop.
