@@ -39,3 +39,10 @@ Plan: `docs/test-plans/CI-e2e-browser-gate.md`. Failing tests: a2e89af. Only `.g
 - Approach: in `.github/workflows/e2e.yml`, step `id: e2e`, `timeout-minutes` 45 -> 60, with a comment citing CC-1 and proof run 1 (arm64 E2E 1645 s, 69% of the 40-minute run budget). Nothing else changed. The job-level `timeout-minutes: 150` already covers setup + contract step (75) + E2E step (60), so it stays.
 - Order: lands before WO-13 (run budget to 55 minutes; 55 <= 60 - 4 holds).
 - Evidence (all pass): `node --test tests/acceptance/ci-m2-s2/timeouts.test.mts` (CI-T-01..04, 4/4, run budget still 40 min); `node --test tests/acceptance/ci-e2e-browser-gate/*.test.mts` and m1-s9 acceptance; m1-s8 ac22, ac30-ac32, ac33; `corepack yarn check:workflows` OK; `corepack yarn lint` exit 0. E2E and contract suites not run.
+
+## CC-L20 (2026-11-13): L20 occurrences in the job summary
+
+- `e2e.yml`, `test` job: new step "L20 occurrences" after the upload gate and before the summary and upload, `if: always()`, `continue-on-error: true` (the tool exits 1 only on an unreadable input; a reporting step must not turn the job red). It appends `scan-l20.ts` output to `$GITHUB_STEP_SUMMARY`.
+- Runner naming: the tool takes the runner from a `test-results-e2e-<runner>` path segment, but the job's folder is `test-results` (it would report `local`). The step scans through a symlink `$RUNNER_TEMP/test-results-e2e-<matrix.runner>` -> `test-results`, outside the workspace so the upload ignores it. No QA file changed.
+- `test-results/l20-scan.json` falls under the upload's existing `test-results/` glob. Node 22.x (setup action) strips `.ts` types unflagged, as the other `.ts` steps already rely on.
+- Checked: `corepack yarn check:workflows`, `corepack yarn lint`, and the scan against `test-results/verify/m2-s3` via a symlink named like the CI one (4 qualifying, rc 0).

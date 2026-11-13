@@ -248,6 +248,21 @@ jobs:
         if: always()
         run: node tests/harness/upload-gate.ts
 
+      # L20 tie (2026-11-13): count and report the qualifying WEB-SQLITE-1 occurrences per runner; it never blocks.
+      # continue-on-error: the tool exits 1 only when an input directory cannot be read, and a reporting step must not turn
+      # an otherwise green job red. scan-l20.ts takes the runner from a `test-results-e2e-<runner>` path segment, but the job's
+      # results folder is `test-results`, so the scan reads it through a symlink with that name (outside the workspace, so
+      # the upload does not see it). Its l20-scan.json lands in test-results/ and rides along in the upload below.
+      - name: L20 occurrences (count and report, never blocking)
+        id: l20
+        if: always()
+        continue-on-error: true
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          ln -sfn "$PWD/test-results" "$RUNNER_TEMP/test-results-e2e-$RUNNER_LABEL"
+          node tests/harness/tools/scan-l20.ts "$RUNNER_TEMP/test-results-e2e-$RUNNER_LABEL" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Job summary
         if: always() && steps.gate.outcome == 'success'
         run: |
