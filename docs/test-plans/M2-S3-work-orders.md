@@ -1604,7 +1604,7 @@ Record the gate results, the 3 × 3 runs and S-WSQ in the plan.
 - with nothing else failing in that test (shape A, B or WS-1-only);
 - on the Pi (arm64)
 
-is **RECORDED** as an L20 occurrence: the test, the line number, the console sha256 and the `web-sqlite.json` path. It is not a HARD STOP, and the test is **never re-run for green**. A **second** L20 occurrence in the same run **is** a HARD STOP. Any other failure is a HARD STOP as before. Proof runs follow the user's tie (option 1) as recorded in STATUS.
+is **RECORDED** as an L20 occurrence: the test, the line number, the console sha256 and the `web-sqlite.json` path. It is not a HARD STOP, and the test is **never re-run for green**. A **second** L20 occurrence in the same run **is** a HARD STOP. *(Superseded 2026-11-13: a HARD STOP only at the **third**; see the addendum at the end.)* Any other failure is a HARD STOP as before. Proof runs follow the user's tie (option 1) as recorded in STATUS.
 
 ### WO-30: The seed lands on the server completely (RED commit)
 - **RED:** `tests/unit/harness/seedCheck.test.ts` (extend, or create beside `seedCheck.ts`) holds `seed-items-01…03` for a pure `missingSeedItems(expected: { kind: 'folder' | 'note' | 'todo' | 'attachment-note'; id: string }[], serverNames: string[]): string[]`:
@@ -1763,3 +1763,28 @@ In `web-sqlite-scope.spec.ts` WSQ-01, replace (c)'s needle with the seeded note'
 
 ### Then
 Append the results of WO-31 to WO-33, and S1c″'s count, to the plan's §Harness validation. **Commit:** `docs(test-plans): M2-S3 sensitivity follow-ups WO-31 to WO-33`. Stop and report.
+
+
+## Planner addendum after the user's L20 decision (2026-11-13): the local rule, and WO-34
+- **The local L20 rule from now on:** qualifying occurrences are **recorded** and never re-run for green. A HARD STOP comes only at the **third** occurrence in one Playwright invocation. Everything else about the rule is unchanged (plan §L20 tie as decided). In the earlier addenda, read "at most 1 per run" and "a second … is a HARD STOP" as "a third is a HARD STOP".
+
+### WO-34: The occurrence record fields and the count tool (RED commit)
+- **RED:** add `sql-10…13` to `tests/unit/harness/webSqlite.test.ts`, for pure `occurrenceRecord(failures, consoleLines): { rc, statement, db: 'main' | 'log' | 'unknown', startupFailed: boolean, qualifies: boolean }[]`:
+  - `sql-10`: `SELECT folders` at rc -1 gives `db: 'main', startupFailed: false, qualifies: true`;
+  - `sql-11`: `COMMIT` at rc -1, then `Startup failure during task: buildStartupTasks/openDatabase` within 2 s, gives `db: 'main', startupFailed: true`;
+  - `sql-12`: `INSERT INTO logs` at rc -1 gives `db: 'log'`. A bare `COMMIT` with no startup line within 2 s gives `db: 'unknown'`;
+  - `sql-13`: rc 1, or the spellfix line, gives `qualifies: false`. A `Could not save` with no rc -1/10 line gives `qualifies: false`.
+
+  Also add `l20scan-01…02` (`tests/unit/harness/scanL20.test.ts`) for the tool's pure core `scanL20(files): { occurrences, qualifying, nonQualifying }`, over a fixture tree of two `web-sqlite.json` files in a temp dir. **Commit 1:** `test(harness): failing unit tests for L20 occurrence records (database, startup) and a run-wide count (L20 tie 2026-11-13)`.
+- **GREEN:**
+  - `webSqlite.ts` gets `occurrenceRecord`. `keepWebSqlite` writes `records` into `web-sqlite.json`.
+  - `tests/harness/tools/scan-l20.ts` (Node, read-only, no Playwright):
+    - finds every `web-sqlite.json` under the given dir;
+    - prints the Markdown table and the count line of plan §Brief CC-L20;
+    - writes `test-results/l20-scan.json`;
+    - exits 0 unless its input is unreadable.
+  - **Strategy §5**, the WEB-SQLITE-1 bullet, gets one sentence: "Qualifying occurrences (L20) are recorded with their database and whether startup failed, never re-run for green, and stop a run only at the third (per local run, per arm64 CI runner); on x64, CI counts them without blocking (`scan-l20.ts`)."
+  - Run the whole harness Jest set.
+  - **Commit 2:** `test(harness): record each L20 occurrence's database and startup failure, and count them per run (L20 tie 2026-11-13)`.
+- **Check:** run `node tests/harness/tools/scan-l20.ts test-results/verify/m2-s3` over the existing evidence. It must list occurrences 4, 5 and 6 as `main`/no, `main`/yes and `main`/no, all qualifying. **HARD STOP** if it differs. Record the output in the plan.
+- **Then** the orchestrator dispatches CC-L20 (plan §Brief CC-L20) to the ci-cd-specialist, before the proof run's push.
