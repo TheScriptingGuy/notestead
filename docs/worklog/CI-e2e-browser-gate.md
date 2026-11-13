@@ -43,6 +43,7 @@ Plan: `docs/test-plans/CI-e2e-browser-gate.md`. Failing tests: a2e89af. Only `.g
 ## CC-L20 (2026-11-13): L20 occurrences in the job summary
 
 - `e2e.yml`, `test` job: new step "L20 occurrences" after the upload gate and before the summary and upload, `if: always()`, `continue-on-error: true` (the tool exits 1 only on an unreadable input; a reporting step must not turn the job red). It appends `scan-l20.ts` output to `$GITHUB_STEP_SUMMARY`.
-- Runner naming: the tool takes the runner from a `test-results-e2e-<runner>` path segment, but the job's folder is `test-results` (it would report `local`). The step scans through a symlink `$RUNNER_TEMP/test-results-e2e-<matrix.runner>` -> `test-results`, outside the workspace so the upload ignores it. No QA file changed.
+- Runner naming (M2-S3 r1 F3): the step sets `NOTESTEAD_RUNNER: ${{ matrix.runner }}` and scans `test-results` directly; the earlier symlink is gone.
+- F4: a comment at the step says `l20-scan.json` is written after the upload gate, is value-free by construction and is uploaded uninspected.
 - `test-results/l20-scan.json` falls under the upload's existing `test-results/` glob. Node 22.x (setup action) strips `.ts` types unflagged, as the other `.ts` steps already rely on.
 - Checked: `corepack yarn check:workflows`, `corepack yarn lint`, and the scan against `test-results/verify/m2-s3` via a symlink named like the CI one (4 qualifying, rc 0).
