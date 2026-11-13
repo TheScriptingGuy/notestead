@@ -44,7 +44,8 @@ import { cleanupAll } from './cleanup.ts';
 import { userTimeZone } from './dueDate.ts';
 import { writeBinary, writePng } from './testFiles.ts';
 import type { GeneratedFile } from './testFiles.ts';
-import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
+import type { SqliteFailure } from './webSqlite.ts';
+import { estimatePageChoice, occurrenceRecord, sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
 import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
@@ -151,7 +152,7 @@ const maxSqliteArgs = 20;
 // WEB-SQLITE-1 (WS-2): the evidence of a failing browser SQLite, written to web-sqlite.json (attached, and kept in the stack's
 // logs dir): the value-free failures, the argument objects of the console messages, and the origin's storage estimate (is the
 // quota or persistence the cause?). Nothing here throws: the failure itself is asserted by the caller.
-const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: unknown[], args: unknown[][]): Promise<void> => {
+const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: SqliteFailure[], args: unknown[][], consoleLines: string[]): Promise<void> => {
 	const readStorage = async (page: Page): Promise<{ estimate: unknown; persisted: boolean }> => {
 		return await page.evaluate(async () => {
 			const g = globalThis as unknown as { navigator: { storage: { estimate: () => Promise<unknown>; persisted: () => Promise<boolean> } } };
@@ -174,7 +175,7 @@ const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { conte
 	} catch (error) {
 		storage = `(storage estimate failed: ${(error as Error).name})`;
 	}
-	const text = redactText(JSON.stringify({ failures, args, storage }, null, 2), workerSecrets(stack));
+	const text = redactText(JSON.stringify({ failures, args, storage, records: occurrenceRecord(failures, consoleLines) }, null, 2), workerSecrets(stack));
 	mkdirSync(stack.logsDir, { recursive: true });
 	writeFileSync(join(stack.logsDir, `${stack.project}-${shortId(testInfo)}-web-sqlite.json`), text);
 	const path = testInfo.outputPath('web-sqlite.json');
@@ -414,7 +415,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			} else {
 				await context.tracing.stop();
 			}
-			if (sqliteFailing) await keepWebSqlite(stack, testInfo, { context, page, baseURL: stack.webUrl }, sqlite, await Promise.all(sqliteArgs));
+			if (sqliteFailing) await keepWebSqlite(stack, testInfo, { context, page, baseURL: stack.webUrl }, sqlite, await Promise.all(sqliteArgs), lines);
 			await context.close();
 			if (allowed === undefined) expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
 		}

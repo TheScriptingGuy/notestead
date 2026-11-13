@@ -62,3 +62,43 @@ export const estimatePageChoice = (appPageUrl: string | undefined, webOrigin: st
 		return 'probe';
 	}
 };
+
+// An L20 occurrence record (L20 tie 2026-11-13; docs/test-plans/M2-S3.md §L20 tie): what a run's SQLite failures say about the
+// database they ran on, whether startup failed, and whether they qualify for the tie (only rc -1 or 10, never the spellfix line,
+// never a lone "Could not save"). `db` is never guessed: a bare BEGIN/COMMIT/ROLLBACK with no startup failure within 2 s is
+// 'unknown'. Value-free like the failures it comes from.
+export interface OccurrenceRecord { rc: number | null; statement: string; db: 'main' | 'log' | 'unknown'; startupFailed: boolean; qualifies: boolean }
+
+const startupTaskPattern = /Startup failure during task: buildStartupTasks\/(\S+)/;
+const qualifyingRcs = new Set([-1, 10]);
+const bareTransaction = /^(BEGIN|COMMIT|ROLLBACK)\b/;
+
+const dbOfTask = (task: string): 'main' | 'log' => (/log/i.test(task) ? 'log' : 'main');
+
+export const occurrenceRecord = (failures: SqliteFailure[], consoleLines: string[]): OccurrenceRecord[] => {
+	const stamped = consoleLines.map((text, index) => ({ index, time: Date.parse(text.split(' ')[0]), task: startupTaskPattern.exec(text)?.[1] }));
+	const startups = stamped.filter(l => l.task !== undefined);
+	const startupFailed = startups.length > 0 || failures.some(f => f.kind === 'startup');
+	const records: OccurrenceRecord[] = [];
+	for (const f of failures.filter(x => x.kind === 'step')) {
+		const qualifies = f.rc !== null && qualifyingRcs.has(f.rc) && !/spellfix/i.test(f.statement);
+		let db: OccurrenceRecord['db'] = 'main';
+		if (/\blogs$/.test(f.statement)) {
+			db = 'log';
+		} else if (bareTransaction.test(f.statement)) {
+			db = 'unknown';
+			const own = stamped[f.line - 1];
+			const near = startups.find(s => (Number.isNaN(own?.time ?? Number.NaN) || Number.isNaN(s.time))
+				? Math.abs(s.index - (f.line - 1)) <= 3
+				: s.time - own.time >= 0 && s.time - own.time <= 2_000)
+				?? failures.filter(x => x.kind === 'startup').map(x => ({ task: x.statement, index: x.line - 1, time: Number.NaN })).find(s => Number.isNaN(own?.time ?? Number.NaN) && Math.abs(s.index - (f.line - 1)) <= 3);
+			if (near?.task !== undefined) db = dbOfTask(near.task);
+		}
+		records.push({ rc: f.rc, statement: f.statement, db, startupFailed, qualifies });
+	}
+	if (records.length === 0) {
+		for (const f of failures.filter(x => x.kind === 'save')) records.push({ rc: null, statement: f.statement, db: 'unknown', startupFailed, qualifies: false });
+	}
+	if (records.length === 0 && startupFailed) records.push({ rc: null, statement: 'buildStartupTasks', db: 'unknown', startupFailed, qualifies: false });
+	return records;
+};
