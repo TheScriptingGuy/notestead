@@ -32,4 +32,29 @@ describe('L20 scan', () => {
 		expect(r2.qualifying).toBe(1);
 		expect(r2.nonQualifying).toBe(0);
 	});
+
+	test('l20scan-03 equal content in two different tests counts twice, and a stack-logs copy of an output file counts once, named by its stem', () => {
+		const record = withRecords([{ rc: -1, statement: 'SELECT folders', db: 'main', startupFailed: false, qualifies: true }]);
+		const two = scanL20([file('r/output/t1-chromium/web-sqlite.json', record), file('r/output/t2-chromium/web-sqlite.json', record)]);
+		expect(two.occurrences.map(o => o.test)).toEqual(['t1-chromium', 't2-chromium']);
+		expect(two.qualifying).toBe(2);
+		const copy = scanL20([file('r/output/t1-chromium/web-sqlite.json', record), file('r/stack/nst-e2e-abc-1a2b3c4d-web-sqlite.json', record)]);
+		expect(copy.occurrences).toHaveLength(1);
+		const lone = scanL20([file('r/stack/nst-e2e-abc-1a2b3c4d-web-sqlite.json', record)]);
+		expect(lone.occurrences[0].test).toBe('nst-e2e-abc-1a2b3c4d (stack log)');
+	});
+
+	test('l20scan-04 a file that is not JSON is skipped and named, the others are still counted', () => {
+		const good = file('r/output/t1-chromium/web-sqlite.json', withRecords([{ rc: 10, statement: 'COMMIT', db: 'main', startupFailed: true, qualifies: true }]));
+		const r = scanL20([{ path: 'r/output/t0-chromium/web-sqlite.json', text: '{"failures": [' }, good]);
+		expect(r.skipped).toEqual(['r/output/t0-chromium/web-sqlite.json']);
+		expect(r.occurrences).toHaveLength(1);
+	});
+
+	test('l20scan-05 a runner given by the caller wins over the folder name, which stays the fallback', () => {
+		const a = file('r/test-results-e2e-arm64/output/a-chromium/web-sqlite.json', withRecords([{ rc: -1, statement: 'SELECT notes', db: 'main', startupFailed: false, qualifies: true }]));
+		expect(scanL20([a], { runner: 'ubuntu-24.04-arm' }).occurrences[0].runner).toBe('ubuntu-24.04-arm');
+		expect(scanL20([a]).occurrences[0].runner).toBe('arm64');
+		expect(scanL20([file('x/a/web-sqlite.json', withRecords([{ rc: -1, statement: 'SELECT notes', db: 'main', startupFailed: false, qualifies: true }]))]).occurrences[0].runner).toBe('local');
+	});
 });
