@@ -2,7 +2,7 @@
 // M2-S3.md R1/WS-1). A failure is named by its kind, rc and the statement's verb and table, never by the SQL, which can hold
 // note content. The lines are browser-console.log lines: `<ISO> [<level>] <message>`.
 import { describe, expect, test } from '@jest/globals';
-import { estimatePageChoice, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
+import { estimatePageChoice, occurrenceRecord, sqliteFailureLines, sqliteFailures } from '../../e2e/support/webSqlite.ts';
 import { batchRolledBack, classifyWorkerMessage, releaseReady } from '../../e2e/support/sqliteFault.ts';
 
 const at = '2026-10-25T08:00:00.000Z';
@@ -141,5 +141,44 @@ describe('web sqlite failures', () => {
 		expect(batchRolledBack([ev('begin', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
 		expect(batchRolledBack([ev('rollback', 1), ev('held', 2), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
 		expect(batchRolledBack([ev('held', 2), ev('rollback', 2.5), ev('released', 3), ev('injected-reply', 4, true)])).toMatch(/no ROLLBACK after the release/);
+	});
+
+	// L20 occurrence records (L20 tie 2026-11-13): the database the failing statement ran on, whether startup failed, and whether
+	// the failure qualifies for the tie (only rc -1 or 10, never the spellfix line, never a lone "Could not save").
+	const lineAt = (sec: number, level: string, message: string): string => `2026-11-13T10:00:${String(sec).padStart(2, '0')}.000Z [${level}] ${message}`;
+	const records = (lines: string[]): ReturnType<typeof occurrenceRecord> => occurrenceRecord(sqliteFailures(lines), lines);
+
+	test('sql-10 a read at rc -1 is a qualifying occurrence on the main database, with no startup failure', () => {
+		const r = records([lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = SELECT child.id FROM folders AS child')]);
+		expect(r).toHaveLength(1);
+		expect(r[0]).toMatchObject({ rc: -1, statement: 'SELECT folders', db: 'main', startupFailed: false, qualifies: true });
+	});
+
+	test('sql-11 a COMMIT at rc -1 followed within 2 s by the openDatabase startup failure is main, startup failed', () => {
+		const r = records([
+			lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = COMMIT'),
+			lineAt(2, 'error', 'root: Startup failure during task: buildStartupTasks/openDatabase'),
+		]);
+		expect(r).toHaveLength(1);
+		expect(r[0]).toMatchObject({ rc: -1, statement: 'COMMIT', db: 'main', startupFailed: true, qualifies: true });
+	});
+
+	test('sql-12 the logs table is the log database, and a bare COMMIT with no startup line is unknown, never guessed', () => {
+		expect(records([lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = INSERT INTO logs (`source`, `level`) VALUES (?, ?)')])[0]).toMatchObject({ db: 'log', startupFailed: false, qualifies: true });
+		expect(records([lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = COMMIT')])[0]).toMatchObject({ db: 'unknown', startupFailed: false, qualifies: true });
+		// a startup line more than 2 s later does not attribute the COMMIT
+		expect(records([lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = COMMIT'), lineAt(5, 'error', 'root: Startup failure during task: buildStartupTasks/openDatabase')])[0]).toMatchObject({ db: 'unknown', startupFailed: true });
+	});
+
+	test('sql-13 rc 1, the spellfix line, and a Could not save with no rc -1 or 10 line do not qualify', () => {
+		const rc1 = [{ rc: 1, kind: 'step' as const, statement: 'SELECT notes', line: 1 }];
+		expect(occurrenceRecord(rc1, [lineAt(1, 'warning', 'sqlite3_step() rc= 1 SQLITE_ERROR SQL = SELECT 1 FROM notes')])[0]).toMatchObject({ qualifies: false });
+		const spell = [{ rc: -1, kind: 'step' as const, statement: 'CREATE VIRTUAL TABLE notes_spellfix', line: 1 }];
+		expect(occurrenceRecord(spell, [lineAt(1, 'warning', 'x')])[0]).toMatchObject({ qualifies: false });
+		const save = records([lineAt(1, 'error', 'models/Setting: Could not save settings {type: error}')]);
+		expect(save).toHaveLength(1);
+		expect(save[0]).toMatchObject({ rc: null, qualifies: false });
+		// with an rc -1 line, the save is part of the same occurrence (shape A): one record
+		expect(records([lineAt(1, 'warning', 'sqlite3_step() rc= -1 undefined SQL = DELETE FROM settings WHERE key IN (?)'), lineAt(1, 'error', 'models/Setting: Could not save settings {}')])).toHaveLength(1);
 	});
 });
