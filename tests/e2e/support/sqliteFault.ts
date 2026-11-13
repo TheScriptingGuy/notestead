@@ -113,6 +113,7 @@ export const fullTitleSeen = async (page: Page, expected: string): Promise<Relea
 
 // When WSQ-01 releases the held settings batch (WO-29a): a full-title UPDATE went to the worker after the hold, and no later UPDATE
 // (full or not) has been seen for `quietMs` (3 x upstream's 500 ms save queue), so no save of the title is still pending.
+// quietMs 1_500 = 3 x upstream's 500 ms AsyncActionQueue save interval (Note.tsx saveActionQueue): it depends on that upstream value (M2-S3 r1 F6).
 export const releaseReady = (events: ReleaseEvent[], now: number, quietMs = 1_500): 'wait' | 'release' => {
 	const held = events.find(e => e.kind === 'held');
 	if (!held) return 'wait';
