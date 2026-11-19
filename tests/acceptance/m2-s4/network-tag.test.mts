@@ -1,9 +1,12 @@
 // M2-S4 D8 (docs/test-plans/M2-S4.md): E2E tests that need the internet carry `{ tag: '@network' }`, and playwright.config.ts
 // leaves them out unless NOTESTEAD_NETWORK_TESTS=1. NT-01 and NT-02 prove both directions of that exclusion; NT-03 (CC-NET) is
-// the CI half (added with WO-6): e2e.yml runs them nightly and on pin bumps.
+// the CI half e2e.yml runs them nightly and on pin bumps.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { parse } from 'yaml';
 import { repoRoot } from '../support/repo.mts';
 
 const listTests = (networkTests: string): { status: number | null; stdout: string; stderr: string } => {
@@ -28,4 +31,30 @@ describe('M2-S4 D8: @network tests stay out of the default run', () => {
 		assert.ok(r.stdout.includes('M2-AC10'), 'M2-AC10 is listed when NOTESTEAD_NETWORK_TESTS=1');
 	});
 
+	// CC-NET (docs/test-plans/M2-S4.md, Brief CC-NET): red until e2e.yml carries the schedule, the dispatch input and the step output.
+	it('NT-03 e2e.yml runs @network tests nightly, on demand and on pin bumps, on both runners', () => {
+		const path = join(repoRoot, '.github', 'workflows', 'e2e.yml');
+		assert.ok(existsSync(path), '.github/workflows/e2e.yml does not exist');
+		const doc = parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+		const on = (doc.on ?? doc['true']) as Record<string, unknown> | undefined;
+		const schedule = on?.schedule;
+		assert.ok(Array.isArray(schedule) && schedule.length > 0 && (schedule as { cron?: unknown }[]).every(e => typeof e?.cron === 'string'), 'on.schedule is a non-empty list with a cron');
+		const dispatch = on?.workflow_dispatch as { inputs?: { network?: { type?: unknown } } } | null | undefined;
+		assert.equal(dispatch?.inputs?.network?.type, 'boolean', 'on.workflow_dispatch.inputs.network.type is boolean');
+
+		interface Step { id?: string; run?: string; env?: Record<string, unknown> }
+		const jobs = Object.entries((doc.jobs ?? {}) as Record<string, { 'runs-on'?: unknown; strategy?: unknown; steps?: Step[] }>);
+		const playwrightJobs = jobs.filter(([, job]) => (job.steps ?? []).some(s => /\bplaywright\s+test\b/.test(s.run ?? '')));
+		assert.ok(playwrightJobs.length > 0, 'a job runs `playwright test`');
+		for (const [id, job] of playwrightJobs) {
+			const steps = job.steps ?? [];
+			const network = steps.find(s => s.id === 'network');
+			assert.ok(network, `job "${id}" has a step with id: network`);
+			assert.ok((network.run ?? '').includes('upstream/joplin-version.json') && (network.run ?? '').includes('schedule'), `job "${id}": the network step reads upstream/joplin-version.json and the schedule event`);
+			for (const s of steps.filter(x => /\bplaywright\s+test\b/.test(x.run ?? ''))) {
+				const value = String(s.env?.NOTESTEAD_NETWORK_TESTS ?? '');
+				assert.ok(/\$\{\{.*steps\.network\.outputs.*\}\}/.test(value), `job "${id}": the Playwright step sets NOTESTEAD_NETWORK_TESTS from steps.network.outputs (got "${value}")`);
+			}
+		}
+	});
 });
