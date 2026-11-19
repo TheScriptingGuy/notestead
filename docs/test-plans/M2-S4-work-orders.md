@@ -35,6 +35,9 @@ These orders implement `docs/test-plans/M2-S4.md`. Read that plan first. Its Fin
   - Every spec uses `test.describe.configure({ timeout: longSpecTimeoutMs })`. No spec writes its own timeout number (`CI-T-03`).
   - Any wait that can take longer than 60 s passes its own `timeout`, with the values of plan D11.
   - Locators are role- or label-based, or upstream's own test ids (`plugin-card`, `menu-content-open`, `screen-header-menu-trigger`, `prompt-dialog`). Never CSS classes.
+- **Working tree during a run (R3, R4 rulings):**
+  - Never keep another order's uncommitted files in the tree while running a command; Playwright loads every spec file.
+  - A sensitivity edit starts only after its order's GREEN is committed, and is reverted with `git checkout -- <file>` against that commit.
 - **Run environment (every heavy command):**
   - `NOTESTEAD_WEB_ARTIFACT=$HOME/joplin-web-app-work/ci-evidence/37285783648/extracted/web-bundle-v3.7.21`. It is current for the pin; **no newer artifact is needed.**
   - `NOTESTEAD_KEEP_IMAGE=1`.
@@ -59,7 +62,7 @@ These orders implement `docs/test-plans/M2-S4.md`. Read that plan first. Its Fin
   # later heavy runs:                               T=60m run test-results/verify/m2-s4/green/x.log env $IMG corepack yarn playwright test <spec>
   ```
   - After every E2E run, copy `test-results/e2e/junit.xml` next to its log, as `<name>-junit.xml`.
-  - After every E2E run, also run `node tests/harness/tools/scan-l20.ts test-results > test-results/verify/m2-s4/<phase>/<name>-l20.txt`.
+  - After every E2E run, also run `node tests/harness/tools/scan-l20.ts test-results/e2e > test-results/verify/m2-s4/<phase>/<name>-l20.txt` (only this run's output; R5 ruling).
 - **L20 (plan D12):**
   - A qualifying failure is an **L20 occurrence**. Record it under `## Findings (executor)` with: the test, the `rc`, the statement kind, the db (`main`/`log`), whether startup failed, and the evidence path.
   - **Never re-run to get green.**
@@ -276,12 +279,12 @@ Three files under `tests/e2e/m2-s4/`. They import the page objects and flows tha
   - **Step 4:**
     - `webApp.page.reload()`, then `app.sidebarButton().waitFor({ timeout: appStartTimeoutMs })`;
     - the same checks as steps 2 and 3 (`enabledSwitch` too), reaching the plugin list through `app.openConfiguration()` → `openSection('Plugins')`. Support is already enabled, so there is no enable page.
-  - **Step `NEG1`,** with R open and the plugin running:
-    - `names = await note.menuItemNames()` includes `pluginNoteToolbarLabel` (the positive control) and none of `pluginMenuLabels`;
-    - with the action menu **open**, `app.frameHtml()` contains none of `pluginMenuLabels`; close the menu;
-    - back to the list; `app.openSidebar()`; `app.frameHtml()` contains none of them; `app.closeSidebar()`.
+  - **Step `NEG1`** (**amended 2026-11-19 by the H5 ruling**; the plan section "Planner ruling on HARD STOP H5" is normative). With R open, the plugin running, and the action menu open:
+    1. `note.menuItemNames()` includes `pluginNoteToolbarLabel` and none of `pluginMenuLabels`.
+    2. `app.renderedTopFrame()` (new: top-frame `body` `innerText()` and `ariaSnapshot()`, no child frames). Both `text` and `aria` contain `pluginNoteToolbarLabel` (positive control), and neither contains any of `pluginMenuLabels`. Message: `"<label>" rendered in <text|aria> (action menu open)`.
+    3. Close the menu, back to the list, `app.openSidebar()`, `app.renderedTopFrame()`: `text` contains `Configuration` (positive control); neither field contains any of `pluginMenuLabels` (`… (side menu open)`); `app.closeSidebar()`.
 
-    A failure message names the label and where it was found (`note action menu`, `menu html`, `side menu html`).
+    Keep each check's forbidden list a separate local constant (each initialised from `pluginMenuLabels`), so the sensitivity runs S-NEG1a/b/c can edit one list at a time. `frameHtml()` is not used in NEG1. **RECORD** whether the `ariaSnapshot()` showed any child-frame content.
   - **Step 5:** `doneAt = Date.now()`. Click `app.todoCheckbox(R)`, then `app.todoCheckbox(T)`. Both read `aria-checked="true"` (the default 5 s).
   - **Step 6:**
     - `expect.poll(() => app.todoCheckbox(R).getAttribute('aria-checked'), { timeout: 120_000, intervals: [1_000] }).toBe('false')`;
@@ -396,7 +399,7 @@ Three files under `tests/e2e/m2-s4/`. They import the page objects and flows tha
 - **H2:** the plugin installs but is not running: "Open Recurrence Dialog" never appears within 120 s, after the install or after the reload. Collect the console lines with `PluginRunner`, `PluginService`, `Could not load plugin` or `Repeating Todos`, plus the response headers of the app page (COOP/COEP). This is plan P3 and "Requirements on the implementation", the contingency.
 - **H3:** the step 0 seed check fails: `user_data` does not round-trip through the headless REST API (P6), or the `recurring` tag already exists.
 - **H4:** R is not unchecked within 120 s after the tick (step 6) while the plugin was shown running. **This is the core behaviour failing.** Collect the console lines, and R's REST state after one cycle (record it, and do not change the test).
-- **H5:** NEG1 finds a plugin menu label anywhere (upstream behaviour differs from L2 and plan P5).
+- **H5:** NEG1 (as ruled 2026-11-19, plan "Planner ruling on HARD STOP H5") finds a plugin menu label by role or in the top frame's rendered text or accessibility tree, or one of its in-test positive controls is missing.
 - **H6:** NEG 2: the desktop-only upload is **refused** (an error box, no card), instead of marked "Incompatible". The AC allows it, but the plan asserts P4, so the planner amends the plan. Also: the incompatibility text differs from `This plugin doesn't support Joplin Mobile.`, or the desktop marker appears in REST.
 - **H7:** a cross-origin request outside the allowed prefixes (step 9).
 - **H8:** step 7's `todo_due` differs from `expectedDue`. Report both epochs and their `partsIn`.
@@ -452,7 +455,9 @@ Each is a temporary edit. Run each one alone, with `env $IMG`, log it under `sen
 | S-AC9a | `plugin-jpl.spec.ts` step 0: comment out R's `PUT user_data`, and the seed-check line for it | `M2-AC9-01` | step 6 (R unchecked, 120 s) |
 | S-AC9b | step 7: `expectedDue` uses `+3` | `M2-AC9-01` | step 7 `todo_due` (expected vs received) |
 | S-AC9c | after step 3: `openInfo(fx.name)`, then press "Delete", confirming if asked | `M2-AC9-01` | step 4 `Installed (1):` |
-| S-NEG1 | append `pluginNoteToolbarLabel` to the NEG1 forbidden list (local copy in the spec) | `M2-AC9-01` | step NEG1, naming "Open Recurrence Dialog" and `note action menu` |
+| S-NEG1a | add `pluginNoteToolbarLabel` to check 1's forbidden list only | `M2-AC9-01` | NEG1 check 1 (role-based names) |
+| S-NEG1b | add `pluginNoteToolbarLabel` to check 2's forbidden list only | `M2-AC9-01` | NEG1 check 2, `"Open Recurrence Dialog" rendered in text (action menu open)` |
+| S-NEG1c | add `Configuration` to check 3's forbidden list only | `M2-AC9-01` | NEG1 check 3, `(side menu open)` |
 | S-NEG2 | `plugin-platforms.spec.ts`: build `desktop` with `platforms` forced to `['desktop', 'mobile']` (a temporary option on `buildProbeJpl`, reverted afterwards) | `M2-AC9-03` | the `Incompatible` chip expectation |
 | S-AC10 | `plugin-repository.spec.ts`: change the last hex digit of `hash` | `M2-AC10`, with `NOTESTEAD_NETWORK_TESTS=1` | the OPFS sha256 assertion |
 
@@ -471,7 +476,7 @@ Run in this order, one at a time:
 5. **Lint and checks:**
    - `T=30m run verify/lint.log corepack yarn lint`;
    - `T=60m run verify/no-upstream-copy.log corepack yarn check:no-upstream-copy`. This covers the committed `.jpl` and the probe source. A hit on `tests/fixtures/plugins/**`: **HARD STOP**.
-6. **L20:** `node tests/harness/tools/scan-l20.ts test-results` after each E2E run (wrapper rule). List every occurrence with its record fields.
+6. **L20:** `node tests/harness/tools/scan-l20.ts test-results/e2e` after each E2E run (wrapper rule). List every occurrence with its record fields.
 7. **Tests untouched by others:** `git log --format='%h %an %s%n%b' main..HEAD -- tests/ playwright.config.ts`. Every commit must carry `Agent: qa-specialist`; **RECORD** any that does not.
 
 **A failure in steps 2 to 4:** the WO-4 HARD STOP list applies (H1 to H9). Any other failure is a **HARD STOP**, except a qualifying L20 occurrence (D12).
