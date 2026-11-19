@@ -14,12 +14,12 @@ import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { endOfTestViolations } from '../support/network.ts';
 import type { NetworkRecorder } from '../support/network.ts';
 import { localFilesNamed } from '../support/localProfile.ts';
-import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
+import { JoplinWebApp, NoteScreen, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import type { PluginsScreen } from '../support/pages/joplinWebApp.ts';
 import { attachPluginConsole, enablePluginSupport, installPluginFromFile, pluginRepositoryPrefixes, pluginRepoActivity, pluginRunning } from '../support/plugins.ts';
 import { pluginMenuLabels, pluginNoteToolbarLabel, recurrenceOf, recurringTagTitle, repeatingTodoUserData, repeatingTodosFixture } from '../support/repeatingTodos.ts';
 import { allItems, noteTagTitles, tagsTitled } from '../support/restQueries.ts';
-import { longSpecTimeoutMs, navigationTimeoutMs } from '../support/timeouts.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { holdsFor } from '../../support/poll.ts';
 import { syncHeadlessOnce } from '../../stack/stack.ts';
 
@@ -69,7 +69,8 @@ const expectInstalledAndEnabled = async (plugins: PluginsScreen, count: number):
 	const chips = await plugins.chips(fx.name);
 	for (const bad of ['Incompatible', 'Error', 'Disabled']) expect(chips, `the "${fx.name}" card shows no "${bad}" chip`).not.toContain(bad);
 	await plugins.openInfo(fx.name);
-	await expect(plugins.enabledSwitch(), 'the Enabled switch is on').toHaveAttribute('aria-checked', 'true');
+	// react-native-web's Switch is <input type=checkbox role=switch checked> and carries no aria-checked attribute
+	await expect(plugins.enabledSwitch(), 'the Enabled switch is on').toBeChecked();
 	await plugins.closeInfo();
 };
 
@@ -131,7 +132,7 @@ test.describe('M2-S4 plugins from a .jpl file', () => {
 
 		await test.step('4. reload: the plugin is still installed, enabled and running', async () => {
 			await webApp.page.reload();
-			await app.sidebarButton().waitFor({ timeout: navigationTimeoutMs });
+			await app.sidebarButton().waitFor({ timeout: appStartTimeoutMs });
 			plugins = await (await app.openConfiguration()).openSection('Plugins');
 			await expectInstalledAndEnabled(plugins, 1);
 			await app.backToList();
@@ -140,18 +141,37 @@ test.describe('M2-S4 plugins from a .jpl file', () => {
 			await pluginRunning(note, 120_000);
 		});
 
-		await test.step('NEG1. views.menus is absent on web (L2); the positive control is the note toolbar item', async () => {
+		await test.step('NEG1. views.menus is absent on web (L2): the rendered top frame shows the note toolbar item, never the plugin menu', async () => {
+			// Three checks, each with its own forbidden list (the sensitivity runs edit one list at a time).
+			const forbiddenInNames: string[] = [...pluginMenuLabels];
+			const forbiddenInActionMenu: string[] = [...pluginMenuLabels];
+			const forbiddenInSideMenu: string[] = [...pluginMenuLabels];
+
 			const names = await note.menuItemNames();
 			expect(names, 'positive control: the plugin\'s note toolbar command is in the note action menu').toContain(pluginNoteToolbarLabel);
-			for (const label of pluginMenuLabels) expect(names, `"${label}" found in the note action menu`).not.toContain(label);
+			for (const label of forbiddenInNames) expect(names, `"${label}" found in the note action menu`).not.toContain(label);
+
 			await note.actionsButton().click();
-			const menuHtml = await app.frameHtml();
-			for (const label of pluginMenuLabels) expect(menuHtml.includes(label), `"${label}" found in the menu html (action menu open)`).toBe(false);
+			await webApp.page.getByTestId('menu-content-open').waitFor();
+			const menu = await app.renderedTopFrame();
+			expect(menu.text, 'positive control: the open menu is in the rendered text').toContain(pluginNoteToolbarLabel);
+			expect(menu.aria, 'positive control: the open menu is in the accessibility tree').toContain(pluginNoteToolbarLabel);
+			for (const label of forbiddenInActionMenu) {
+				expect(menu.text.includes(label), `"${label}" rendered in text (action menu open)`).toBe(false);
+				expect(menu.aria.includes(label), `"${label}" rendered in aria (action menu open)`).toBe(false);
+			}
+			test.info().annotations.push({ type: 'aria-child-frames', description: /\biframe\b/.test(menu.aria) ? `ariaSnapshot lists an iframe: ${(menu.aria.match(/.*\biframe\b.*/g) ?? []).length} line(s)` : 'ariaSnapshot lists no iframe' });
 			await webApp.page.keyboard.press('Escape');
+			await webApp.page.getByTestId('menu-content-open').waitFor({ state: 'hidden' });
+
 			await app.backToList();
 			await app.openSidebar();
-			const sideHtml = await app.frameHtml();
-			for (const label of pluginMenuLabels) expect(sideHtml.includes(label), `"${label}" found in the side menu html`).toBe(false);
+			const side = await app.renderedTopFrame();
+			expect(side.text, 'positive control: the open side menu is in the rendered text').toContain('Configuration');
+			for (const label of forbiddenInSideMenu) {
+				expect(side.text.includes(label), `"${label}" rendered in text (side menu open)`).toBe(false);
+				expect(side.aria.includes(label), `"${label}" rendered in aria (side menu open)`).toBe(false);
+			}
 			await app.closeSidebar();
 		});
 

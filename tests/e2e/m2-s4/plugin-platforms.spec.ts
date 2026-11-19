@@ -13,10 +13,10 @@ import { expect, test } from '../support/fixtures.ts';
 import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
 import { endOfTestViolations } from '../support/network.ts';
 import { localFilesNamed } from '../support/localProfile.ts';
-import { JoplinWebApp } from '../support/pages/joplinWebApp.ts';
+import { JoplinWebApp, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import { buildProbeJpl } from '../support/pluginProbe.ts';
 import { attachPluginConsole, enablePluginSupport, installPluginFromFile, pluginRepositoryPrefixes, pluginRepoActivity } from '../support/plugins.ts';
-import { longSpecTimeoutMs, navigationTimeoutMs } from '../support/timeouts.ts';
+import { longSpecTimeoutMs } from '../support/timeouts.ts';
 
 const incompatibleText = 'This plugin doesn\'t support Joplin Mobile.';
 
@@ -78,7 +78,7 @@ test.describe('M2-S4 plugin platforms', () => {
 
 			await test.step('4. reload: the desktop-only card still shows Incompatible', async () => {
 				await webApp.page.reload();
-				await app.sidebarButton().waitFor({ timeout: navigationTimeoutMs });
+				await app.sidebarButton().waitFor({ timeout: appStartTimeoutMs });
 				plugins = await (await app.openConfiguration()).openSection('Plugins');
 				await expect(plugins.installedHeading(2)).toBeVisible();
 				expect(await plugins.chips(desktop.name)).toContain('Incompatible');
