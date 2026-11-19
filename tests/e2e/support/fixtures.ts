@@ -7,12 +7,14 @@
 //           plainAccount  a fresh server user with no E2EE and no data (M2-S1)
 //           headlessService  a fresh headless service (own compose project, own profile volume) for that account,
 //                         healthy (ADR-0007's `headless`; Playwright reserves the name `headless` for its own option)
-//           dataApi       GET on that headless service's Data API, from inside its network namespace (never published)
+//           dataApi       GET, any method, fileDigest and createResource on that headless service's Data API, from inside its network
+//                         namespace (never published; no token and no file body leaves the container)
 //           webApp        a fresh BrowserContext (fresh OPFS and service worker) on the web container, 127.0.0.1 origin,
 //                         en-GB, in the time zone of the option `webTimezone` (default Europe/Amsterdam)
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
 //                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
 //                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
+//           testFiles     files generated from a per-test seed in a temp dir outside test-results/, removed at teardown (M2-S3 D4)
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
 //                         (the `list` reporter prints those chunks live; M1-S6a C1)
@@ -20,7 +22,9 @@
 // is redacted before it is written (tests/support/redact.ts); the redacting reporter then redacts the Playwright trace,
 // every other attachment, errors, stdout/stderr and step titles once more (tests/e2e/support/redactingReporter.ts).
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test as base } from '@playwright/test';
 import type { BrowserContext, Page, TestInfo } from '@playwright/test';
@@ -36,7 +40,12 @@ import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
 import { findRepoRoot } from '../../support/repoRoot.ts';
 import { browserLocale } from './chromium.ts';
+import { cleanupAll } from './cleanup.ts';
 import { userTimeZone } from './dueDate.ts';
+import { writeBinary, writePng } from './testFiles.ts';
+import type { GeneratedFile } from './testFiles.ts';
+import type { SqliteFailure } from './webSqlite.ts';
+import { estimatePageChoice, occurrenceRecord, sqliteFailureLines, sqliteFailures } from './webSqlite.ts';
 import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
@@ -57,10 +66,23 @@ export interface DataApiResult {
 	error?: string;
 }
 
+export interface FileDigest { status?: number; sha256?: string; size?: number; contentType?: string; error?: string }
+
 export interface DataApi {
 	get: (path: string) => DataApiResult;
 	// Any method, with a JSON body made by the test (M1-S7: POST /notes); tests/fixtures/m1-s7/in-container
 	request: (method: string, path: string, body?: unknown) => DataApiResult;
+	// GET /resources/:id/file streamed into a sha256 inside the container (M2-S3 D4); no file body leaves it
+	fileDigest: (resourceId: string, opts?: { timeoutMs?: number }) => FileDigest;
+	// POST /resources (multipart) of a small file (at most 64 KiB), from inside the container
+	createResource: (file: { title: string; fileName: string; mime: string; bytes: Buffer }) => DataApiResult;
+}
+
+export interface TestFiles {
+	dir: string;
+	png: (name: string, opts: { width: number; height: number; totalBytes?: number }) => GeneratedFile;
+	binary: (name: string, size: number) => GeneratedFile;
+	made: () => GeneratedFile[];
 }
 
 export interface WebApp {
@@ -68,6 +90,9 @@ export interface WebApp {
 	page: Page;
 	baseURL: string;
 	console: string[];
+	// Opts this test out of the browser SQLite failure check (WEB-SQLITE-1), with the reason recorded as an annotation. No
+	// spec uses it; it exists for a future story that injects faults on purpose.
+	allowSqliteFailures: (reason: string) => void;
 }
 
 interface WorkerFixtures {
@@ -84,6 +109,7 @@ interface TestFixtures {
 	headlessService: HeadlessService;
 	dataApi: DataApi;
 	webApp: WebApp;
+	testFiles: TestFiles;
 	webTimezone: string;
 	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
@@ -121,16 +147,54 @@ const keepStartLogs = async (stack: StackState, project: string, error: unknown,
 	}
 };
 
+const maxSqliteArgs = 20;
+
+// WEB-SQLITE-1 (WS-2): the evidence of a failing browser SQLite, written to web-sqlite.json (attached, and kept in the stack's
+// logs dir): the value-free failures, the argument objects of the console messages, and the origin's storage estimate (is the
+// quota or persistence the cause?). Nothing here throws: the failure itself is asserted by the caller.
+const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: SqliteFailure[], args: unknown[][], consoleLines: string[]): Promise<void> => {
+	const readStorage = async (page: Page): Promise<{ estimate: unknown; persisted: boolean }> => {
+		return await page.evaluate(async () => {
+			const g = globalThis as unknown as { navigator: { storage: { estimate: () => Promise<unknown>; persisted: () => Promise<boolean> } } };
+			return { estimate: await g.navigator.storage.estimate(), persisted: await g.navigator.storage.persisted() };
+		});
+	};
+	let storage: unknown;
+	try {
+		if (!app.page.isClosed() && estimatePageChoice(app.page.url(), app.baseURL) === 'app') {
+			storage = { from: 'app', ...await readStorage(app.page) };
+		} else {
+			const probe = await app.context.newPage();
+			try {
+				await probe.goto(new URL('/manifest.json', app.baseURL).href);
+				storage = { from: 'probe', ...await readStorage(probe) };
+			} finally {
+				await probe.close();
+			}
+		}
+	} catch (error) {
+		storage = `(storage estimate failed: ${(error as Error).name})`;
+	}
+	const text = redactText(JSON.stringify({ failures, args, storage, records: occurrenceRecord(failures, consoleLines) }, null, 2), workerSecrets(stack));
+	mkdirSync(stack.logsDir, { recursive: true });
+	writeFileSync(join(stack.logsDir, `${stack.project}-${shortId(testInfo)}-web-sqlite.json`), text);
+	const path = testInfo.outputPath('web-sqlite.json');
+	writeFileSync(path, text);
+	await testInfo.attach('web-sqlite.json', { path, contentType: 'application/json' });
+};
+
 const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}${testInfo.retry ? `r${testInfo.retry}` : ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // The M1-S5 in-container Data API probe, piped to `node -` on stdin: no test files are mounted into the headless
 // container, and the token never leaves it.
 const dataApiProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s5', 'in-container', 'data-api.mjs'), 'utf8');
 // The M1-S7 probe: any method, the JSON body base64-encoded in argv (a test-made note, never a secret).
+// The M2-S3 probe: a resource's file digested inside the container, or a small resource created (docs/test-plans/M2-S3.md D4, D5).
+const dataApiResourceProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm2-s3', 'in-container', 'data-api-resource.mjs'), 'utf8');
 const dataApiRequestProbe = (): string => readFileSync(join(findRepoRoot(), 'tests', 'fixtures', 'm1-s7', 'in-container', 'data-api-request.mjs'), 'utf8');
 
-const runProbe = (container: string, probe: string, args: string[]): DataApiResult => {
-	const r = spawnSync('podman', ['exec', '-i', container, 'node', '-', ...args], { input: probe, encoding: 'utf8', timeout: 120_000 });
+const runProbe = (container: string, probe: string, args: string[], timeoutMs = 120_000): DataApiResult => {
+	const r = spawnSync('podman', ['exec', '-i', container, 'node', '-', ...args], { input: probe, encoding: 'utf8', timeout: timeoutMs });
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (!line) return { error: `data-api probe printed no result (exit ${r.status}): ${redactText(`${r.stdout}\n${r.stderr}`).slice(-1000)}` };
 	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
@@ -209,9 +273,14 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 				service = await upHeadless(stack, e2eeAccount, shortId(testInfo), headlessUpTimeoutMs);
 			} catch (error) {
 				const project = `${stack.project}-hl-${shortId(testInfo)}`;
-				await keepStartLogs(stack, project, error, testInfo);
-				downHeadless(stack, stack.headless.find(h => h.project === project));
-				throw error;
+				// The half-started container's Data API token is registered for redaction before its logs are read (CI-M2-S2 r3 C2),
+				// then the cleanup steps all run and the original error is rethrown (C1).
+				const container = projectContainers(project).headless;
+				if (container) registerToken({ container, label: `${shortId(testInfo)}-start` } as HeadlessService);
+				return await cleanupAll([
+					() => keepStartLogs(stack, project, error, testInfo),
+					async () => { downHeadless(stack, stack.headless.find(h => h.project === project)); },
+				], error);
 			}
 			await use(service);
 		} finally {
@@ -225,11 +294,44 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	dataApi: async ({ headlessService }, use) => {
 		const probe = dataApiProbe();
 		const requestProbe = dataApiRequestProbe();
+		const resourceProbe = dataApiResourceProbe();
 		await use({
 			get: (path: string): DataApiResult => runProbe(headlessService.container, probe, [path]),
 			request: (method: string, path: string, body?: unknown): DataApiResult => runProbe(headlessService.container, requestProbe,
 				[method, path, ...(body === undefined ? [] : [Buffer.from(JSON.stringify(body), 'utf8').toString('base64')])]),
+			fileDigest: (resourceId, opts = {}) => {
+				if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('fileDigest: a resource id is 32 hex characters');
+				const timeoutMs = opts.timeoutMs ?? 120_000;
+				return runProbe(headlessService.container, resourceProbe, ['digest', resourceId, String(timeoutMs)], timeoutMs + 30_000) as FileDigest;
+			},
+			createResource: file => {
+				// The bytes travel base64 in argv (the probe itself comes on stdin): 64 KiB keeps them under Linux's 128 KiB argument limit.
+				if (file.bytes.length > 64 * 1024) throw new Error(`createResource: ${file.bytes.length} bytes is over the probe's 64 KiB limit`);
+				if (!/^[a-z0-9][a-z0-9.-]*$/.test(file.fileName)) throw new Error('createResource: unsafe file name');
+				const meta = Buffer.from(JSON.stringify({ title: file.title, fileName: file.fileName, mime: file.mime }), 'utf8').toString('base64');
+				return runProbe(headlessService.container, resourceProbe, ['create', '60000', meta, file.bytes.toString('base64')]);
+			},
 		});
+	},
+
+	// Files generated at test time from a per-test seed, outside test-results/ (never uploaded), removed at teardown; on failure
+	// only their names, seeds, sizes and hashes are attached (docs/test-plans/M2-S3.md D4).
+	// eslint-disable-next-line no-empty-pattern -- Playwright fixtures take their dependencies as a destructured object
+	testFiles: async ({}, use, testInfo) => {
+		const dir = mkdtempSync(join(tmpdir(), 'nst-files-'));
+		const run = randomBytes(4).toString('hex');
+		const made: GeneratedFile[] = [];
+		try {
+			await use({
+				dir,
+				png: (name, opts) => { const f = writePng(dir, name, `${run}/${name}`, opts); made.push(f); return f; },
+				binary: (name, size) => { const f = writeBinary(dir, name, `${run}/${name}`, size); made.push(f); return f; },
+				made: () => made.map(f => ({ ...f })),
+			});
+		} finally {
+			if (failed(testInfo)) await attachText(testInfo, 'test-files.json', `${JSON.stringify(made.map(({ name, seed, size, sha256, width, height }) => ({ name, seed, size, sha256, width, height })), null, 2)}\n`);
+			rmSync(dir, { recursive: true, force: true });
+		}
 	},
 
 	// A second web container whose proxy does not rewrite Host (M1-AC21 NEG; tests/stack/stack.ts upWebWithoutHostRewrite).
@@ -265,8 +367,23 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
 		const context = await browser.newContext({ baseURL: stack.webUrl, locale: browserLocale, timezoneId: webTimezone });
 		const lines: string[] = [];
+		// WEB-SQLITE-1 evidence: the argument objects of the first 20 console messages that are a SQLite failure (they hold the
+		// worker's error object: type, dbId, messageId, the result code). Each is read in a `try`: a page can be closing.
+		const sqliteArgs: Promise<unknown[]>[] = [];
 		const watch = (page: Page): void => {
-			page.on('console', m => lines.push(`${new Date().toISOString()} [${m.type()}] ${m.text()}`));
+			page.on('console', m => {
+				const text = `${new Date().toISOString()} [${m.type()}] ${m.text()}`;
+				lines.push(text);
+				if (sqliteArgs.length < maxSqliteArgs && sqliteFailures([text]).length > 0) {
+					sqliteArgs.push(Promise.all(m.args().map(async a => {
+						try {
+							return await a.jsonValue() as unknown;
+						} catch {
+							return '(unserialisable)';
+						}
+					})));
+				}
+			});
 			page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
 		};
 		context.on('page', watch);
@@ -278,10 +395,19 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		// snapshots and network bodies are text, which the redacting reporter redacts.
 		await context.tracing.start({ screenshots: false, snapshots: true, sources: true, title: testInfo.titlePath.join(' > ') });
 		const page = await context.newPage();
+		let allowed: string | undefined;
+		const allowSqliteFailures = (reason: string): void => {
+			allowed = reason;
+			testInfo.annotations.push({ type: 'allow-sqlite', description: reason });
+		};
 		try {
-			await use({ context, page, baseURL: stack.webUrl, console: lines });
+			await use({ context, page, baseURL: stack.webUrl, console: lines, allowSqliteFailures });
 		} finally {
-			if (failed(testInfo)) {
+			// A real SQLite failure in the browser (a lost write, a failed start) fails the test here, at once, instead of
+			// 60 s later as a data mismatch, or never (WEB-SQLITE-1). The evidence is kept as for any failure.
+			const sqlite = sqliteFailures(lines);
+			const sqliteFailing = sqlite.length > 0 && allowed === undefined;
+			if (failed(testInfo) || sqliteFailing) {
 				await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
 				const path = testInfo.outputPath('trace.zip');
 				await context.tracing.stop({ path });
@@ -289,7 +415,9 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			} else {
 				await context.tracing.stop();
 			}
+			if (sqliteFailing) await keepWebSqlite(stack, testInfo, { context, page, baseURL: stack.webUrl }, sqlite, await Promise.all(sqliteArgs), lines);
 			await context.close();
+			if (allowed === undefined) expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
 		}
 	},
 });

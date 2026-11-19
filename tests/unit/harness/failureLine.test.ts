@@ -4,6 +4,7 @@
 // like every other output of the harness: CI logs are public.
 import { describe, expect, jest, test } from '@jest/globals';
 import { join } from 'node:path';
+import { secretsFileEnv, createSecretsFile, registerSecrets, removeSecretsFile } from '../../support/secrets.ts';
 import type { TestCase, TestResult } from '@playwright/test/reporter';
 import { failureLine } from '../../e2e/support/failureLine.ts';
 import type { FailureInput } from '../../e2e/support/failureLine.ts';
@@ -38,6 +39,41 @@ describe('failure line', () => {
 		expect(coloured.endsWith(': Error: red')).toBe(true);
 	});
 
+	test('ci-fail-06 a matcher failure appends its first Expected and Received lines', () => {
+		const error = [
+			'Error: expect(received).toBe(expected) // Object.is equality',
+			'',
+			'Expected: "completed"',
+			'Received: "no delta request since the press"',
+			'',
+			'Call Log:',
+			'- Timeout 180000ms exceeded while waiting on the predicate',
+		].join('\n');
+		expect(failureLine(input(error), []).endsWith(': Error: expect(received).toBe(expected) // Object.is equality | Expected: "completed" | Received: "no delta request since the press"')).toBe(true);
+	});
+
+	test('ci-fail-07 a timeout appends its first waiting-for line', () => {
+		const timeout = ['TimeoutError: locator.click: Timeout 60000ms exceeded.', 'Call log:', '  - waiting for getByRole(\'button\', { name: \'nst-never-there\' })'].join('\n');
+		expect(failureLine(input(timeout), []).endsWith(': TimeoutError: locator.click: Timeout 60000ms exceeded. | waiting for getByRole(\'button\', { name: \'nst-never-there\' })')).toBe(true);
+		const visible = ['Error: expect(locator).toBeVisible() failed', '', 'Locator: getByRole(\'button\')', 'Expected: visible', 'Timeout: 5000ms', 'Error: element(s) not found', '', 'Call log:', '  - Expect "toBeVisible" with timeout 5000ms', '  - waiting for getByRole(\'button\')'].join('\n');
+		expect(failureLine(input(visible), []).endsWith(': Error: expect(locator).toBeVisible() failed | Expected: visible | waiting for getByRole(\'button\')')).toBe(true);
+	});
+
+	test('ci-fail-08 the detail is redacted before the cut', () => {
+		const secrets: KnownSecret[] = [{ label: 'failline_secret', value: 'nstfailline0123456789abcdef' }];
+		const withSecret = failureLine(input('Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: "ok"\nReceived: "nstfailline0123456789abcdef"'), secrets);
+		expect(withSecret).toContain('Received: "[failline_secret]"');
+		expect(withSecret).not.toContain('nstfailline0123456789abcdef');
+		// the cut falls inside the redacted label: no part of the secret can be left
+		const first = `Error: expect(received).toBe(expected) // ${'x'.repeat(208)}`;
+		expect(first).toHaveLength(250);
+		const cut = failureLine(input(`${first}\n\nExpected: "completed"\nReceived: "nstfailline0123456789abcdef"`), secrets);
+		const message = cut.slice(cut.indexOf(' s: ') + 4);
+		expect(message).toHaveLength(301);
+		expect(message.endsWith('…')).toBe(true);
+		expect(message).not.toContain('nstfaill');
+	});
+
 	// The reporter prints the line as the test ends (CI 39663284028 C, D); the unit tests of the redaction call onTestEnd with
 	// partial objects, and a line that cannot be built must never break the redaction.
 	describe('in the redacting reporter', () => {
@@ -58,6 +94,23 @@ describe('failure line', () => {
 			expect(written(() => reporter.onTestEnd(fullTest, failed))).toBe('[notestead] FAILED T (tests/e2e/x.spec.ts:7) attempt 1, 2 s: Error: boom\n');
 			expect(written(() => reporter.onTestEnd(fullTest, { ...failed, status: 'passed' } as unknown as TestResult))).toBe('');
 			expect(written(() => reporter.onTestEnd(fullTest, { ...failed, status: 'skipped' } as unknown as TestResult))).toBe('');
+		});
+
+		test('ci-fail-09 the reporter path redacts a registered secret in the detail', () => {
+			const saved = process.env[secretsFileEnv];
+			const file = createSecretsFile();
+			try {
+				registerSecrets([{ label: 'failline_secret', value: 'nstfailline0123456789abcdef' }]);
+				const reporter = new RedactingReporter();
+				const leaking = { ...failed, error: { message: 'Error: expect(received).toBe(expected) // Object.is equality\n\nReceived: "nstfailline0123456789abcdef"' } } as unknown as TestResult;
+				const line = written(() => reporter.onTestEnd(fullTest, leaking));
+				expect(line).toContain('[failline_secret]');
+				expect(line).not.toContain('nstfailline0123456789abcdef');
+			} finally {
+				if (saved === undefined) delete process.env[secretsFileEnv];
+				else process.env[secretsFileEnv] = saved;
+				removeSecretsFile(file);
+			}
 		});
 
 		test('ci-fail-05 a partial test object prints nothing and does not break onTestEnd', () => {

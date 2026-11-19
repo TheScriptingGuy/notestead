@@ -5,12 +5,14 @@
 // accessibilityLabel and accessibilityLabelledBy to ARIA); the strings are upstream's en_GB UI texts at the pinned ref.
 // Every text goes in through typeLikeUser (real key events; secrets only into password fields, C1-R1).
 // M2-S2 adds the note, notebook, tag and alarm screens (docs/test-plans/M2-S2.md §Page objects, F3 to F7).
-import type { Locator, Page } from '@playwright/test';
+import { test } from '@playwright/test';
+import type { Frame, Locator, Page } from '@playwright/test';
 import { waitFor } from '../../../support/poll.ts';
 import { datetimeLocalValue } from '../dueDate.ts';
 import type { LocalParts } from '../dueDate.ts';
 import { SecretInVisibleFieldError, clearLikeUser, knownSecretsNow, secretIn, typeLikeUser } from '../typeLikeUser.ts';
-import { trashExit } from '../trashExit.ts';
+import { focusTargetFor, settleTracker } from '../settle.ts';
+import { afterStayed, trashExit } from '../trashExit.ts';
 
 // The first start on the Pi takes ~15 s ("Application is ready" in the console) before the first screen is usable.
 export const appStartTimeoutMs = 3 * 60_000;
@@ -122,6 +124,23 @@ export class JoplinWebApp {
 		await this.notesHeading(title).waitFor();
 	}
 
+	// The note list's header search button (ScreenHeader/index.tsx searchButton: an IconButton described "Search").
+	public searchButton(): Locator {
+		return this.page.getByRole('button', { name: 'Search', exact: true });
+	}
+
+	public async openSearch(): Promise<SearchScreen> {
+		await this.searchButton().click();
+		const search = new SearchScreen(this.page);
+		await search.waitOpen();
+		return search;
+	}
+
+	// The side menu's "Trash" notebook, which upstream always lists (folders-screen-utils.ts includeTrash).
+	public async openTrash(): Promise<void> {
+		await this.openFolder('Trash');
+	}
+
 	// The side menu's "New Notebook" opens upstream's notebook screen (the same one that edits a notebook).
 	public async createNotebook(title: string): Promise<void> {
 		await this.openSidebar();
@@ -172,7 +191,8 @@ export class JoplinWebApp {
 		await this.page.getByRole('button', { name: item, exact: true }).click();
 		const screen = new NoteScreen(this.page);
 		await screen.waitOpen();
-		await screen.waitSettled();
+		const timing = await screen.waitSettled(item === 'New to-do' ? 'todo' : 'note');
+		test.info().annotations.push({ type: 'settle', description: `${timing.kind}: editor ${timing.editorMs} ms, focus on the ${focusTargetFor(timing.kind)} at ${timing.landedMs} ms, settled ${timing.settledMs} ms` });
 		return screen;
 	}
 
@@ -201,7 +221,30 @@ export class JoplinWebApp {
 			backVisible: await this.page.getByRole('button', { name: 'Back', exact: true }).isVisible(),
 			msSinceDelete: Date.now() - deletedAt,
 		}), { timeoutMs: 30_000, intervalMs: 100 });
-		if (outcome === 'stayed') await this.backToList();
+		if (outcome === 'stayed') {
+			// Back, with its own bound: upstream may still leave by itself after the press began (CI-M2-S2 r2 C1, afterStayed).
+			let click: 'done' | 'detached' | 'timeout' = 'done';
+			try {
+				await this.page.getByRole('button', { name: 'Back', exact: true }).click({ timeout: 10_000 });
+			} catch (error) {
+				click = (error as Error).name === 'TimeoutError' ? 'timeout' : 'detached';
+			}
+			if (click !== 'done') {
+				const observe = async () => afterStayed(click, {
+					onList: (await this.sidebarButton().isVisible()) && (await note.titleField().count()) === 0,
+					onNote: await note.titleField().isVisible(),
+					backVisible: await this.page.getByRole('button', { name: 'Back', exact: true }).isVisible(),
+					msSinceDelete: Date.now() - deletedAt,
+				});
+				if ((await observe()) === 'fail') throw new Error('the trashed note stayed and its Back button could not be pressed within 10 s');
+				let failed: string | undefined;
+				await waitFor('the trashed note to be left after the Back press began', async () => {
+					const verdict = await observe();
+					if (verdict === 'fail') failed = 'the trashed note stayed and its Back button could not be pressed within 10 s';
+					return verdict === 'left' ? true : undefined;
+				}, { timeoutMs: 10_000, intervalMs: 100, failFast: () => failed });
+			}
+		}
 		await this.sidebarButton().waitFor();
 		return outcome;
 	}
@@ -393,29 +436,50 @@ export class NoteScreen {
 		await this.titleField().waitFor({ timeout: 60_000 });
 	}
 
-	// A new note opens in edit mode, and the focus moves when the Markdown editor's frame has loaded (a few seconds after
-	// the title field on the Pi): in the first full M2-S2 run the first characters of a title went into the title field and
-	// the rest into the body. So a test waits for the editor frame, then for the focus to stay with the same element for
-	// a second of polls (a stabilisation anchored to the editor's load, not a sleep), before it types.
-	public async waitSettled(): Promise<void> {
-		await this.editor();
-		let last = '';
-		let steady = 0;
-		await waitFor('the focus to settle after the editor loaded', async () => {
+	// A new note opens in edit mode, and upstream then moves the focus: to a to-do's title, to a note's body, which is the
+	// Markdown editor, by a command queued to the editor's frame, so it lands when that frame has loaded (Note.tsx
+	// scheduleFocusUpdate; docs/test-plans/M2-S3.md D8 C1, F5). In the first full M2-S2 run the first characters of a title
+	// went into the title field and the rest into the body. So a test waits for the editor frame (the positive event), then for
+	// the focus to land on upstream's target and stay there for 10 polls (a stabilisation anchored to an observed event, not a
+	// sleep), before it types. The lag is returned and recorded as the `settle` annotation.
+	public async waitSettled(kind: 'note' | 'todo'): Promise<{ kind: 'note' | 'todo'; editorMs: number; landedMs: number; settledMs: number }> {
+		const started = Date.now();
+		await this.editorFrame();
+		const editorMs = Date.now() - started;
+		const target = focusTargetFor(kind);
+		const settled = settleTracker(target, 10);
+		let landedMs: number | undefined;
+		const settledMs = await waitFor(`the focus to land on the ${target} (upstream's focus for a new ${kind}) and stay for 10 polls`, async () => {
 			const owner = await this.focusOwner();
-			steady = owner === last ? steady + 1 : 0;
-			last = owner;
-			return steady >= 10 ? true : undefined;
+			if (owner === target) landedMs ??= Date.now() - started;
+			else landedMs = undefined;
+			return settled(owner) ? Date.now() - started : undefined;
 		}, { timeoutMs: 60_000, intervalMs: 100 });
+		return { kind, editorMs, landedMs: landedMs ?? settledMs, settledMs };
 	}
 
-	// Who holds the focus in the page's own document: the title field, or another element (an iframe holds it while the
-	// editor's frame is focused).
+	// Who holds the focus: 'title' (the title field), 'editor' (inside the Markdown editor's .cm-content), or 'other:<tag>'
+	// (another element of the page, or of the editor's frame).
 	private async focusOwner(): Promise<string> {
-		return this.titleField().evaluate(title => {
-			const active = (title as unknown as { ownerDocument: { activeElement: { localName?: string } | null } }).ownerDocument.activeElement;
-			return (active as unknown) === title ? 'title' : String(active?.localName ?? 'none');
-		});
+		const frame = await this.editorFrame();
+		const iframe = await frame.frameElement();
+		const title = await this.titleField().elementHandle();
+		try {
+			const top = await this.page.evaluate(([t, f]) => {
+				const active = (globalThis as unknown as { document: { activeElement: { localName?: string } | null } }).document.activeElement;
+				if ((active as unknown) === t) return 'title';
+				if ((active as unknown) === f) return 'iframe';
+				return `other:${String(active?.localName ?? 'none')}`;
+			}, [title, iframe] as const);
+			if (top !== 'iframe') return top;
+			return await frame.evaluate(() => {
+				const active = (globalThis as unknown as { document: { activeElement: { closest?: (s: string) => unknown } | null } }).document.activeElement;
+				return active?.closest?.('.cm-content') ? 'editor' : 'other:iframe';
+			});
+		} finally {
+			await title?.dispose();
+			await iframe.dispose();
+		}
 	}
 
 	// replace: select all and Backspace first (clearLikeUser), then type; the text goes in through typeLikeUser.
@@ -430,18 +494,21 @@ export class NoteScreen {
 
 	// Upstream's Markdown editor is CodeMirror in an iframe (ExtendedWebView on web, MarkdownEditor.tsx): found as the one
 	// frame that has a .cm-content.
-	public async editor(): Promise<Locator> {
+	public async editorFrame(): Promise<Frame> {
 		return waitFor('the Markdown editor (a frame with a .cm-content)', async () => {
 			for (const frame of this.page.frames()) {
 				try {
-					const content = frame.locator('.cm-content');
-					if ((await content.count()) === 1) return content;
+					if ((await frame.locator('.cm-content').count()) === 1) return frame;
 				} catch {
 					// a frame that detached while it was read
 				}
 			}
 			return undefined;
 		}, { timeoutMs: 60_000, intervalMs: 250 });
+	}
+
+	public async editor(): Promise<Locator> {
+		return (await this.editorFrame()).locator('.cm-content');
 	}
 
 	public async startEditing(): Promise<Locator> {
@@ -497,6 +564,81 @@ export class NoteScreen {
 		await this.folderPicker(current).click();
 		await this.page.getByRole('menuitem', { name: target, exact: true }).click();
 		await this.folderPicker(target).waitFor();
+	}
+
+	// Upstream's Attach... (Note.tsx menuOptions) → "Choose an option" (DialogManager showMenu, test id prompt-dialog) → "Attach file"
+	// → pickDocument creates a hidden <input type="file" multiple> and clicks it, so Playwright sees a file chooser. The file goes
+	// in by path (a local browser reads it itself: no buffer limit), never as a buffer.
+	public async attachFile(path: string, timeoutMs: number): Promise<void> {
+		await this.menuAction('Attach...');
+		const chooserEvent = this.page.waitForEvent('filechooser', { timeout: 30_000 });
+		await this.page.getByTestId('prompt-dialog').getByRole('button', { name: 'Attach file', exact: true }).click();
+		const chooser = await chooserEvent;
+		if (!chooser.isMultiple()) throw new Error('the file chooser is not upstream\'s attach input (pickDocument: multiple)');
+		await chooser.setFiles(path, { timeout: timeoutMs });
+	}
+
+	// The link upstream inserts into the Markdown editor for an attachment (Resource.markupTag): ![name](:/<id>) or [name](:/<id>).
+	// Returns the resource id.
+	public async waitForAttachmentLink(fileName: string, timeoutMs: number): Promise<string> {
+		const link = new RegExp(`\\[${escapeRegExp(fileName)}\\]\\(:/([0-9a-f]{32})\\)`);
+		return waitFor(`the editor to hold the link to ${fileName}`, async () => link.exec(await this.editorText())?.[1], { timeoutMs, intervalMs: 500 });
+	}
+
+	// A trashed note's Actions offer "Restore" (Note.tsx: restoreItems, then back to the list).
+	public async restore(): Promise<void> {
+		await this.menuAction('Restore');
+	}
+
+	// The note viewer (a sandboxed srcdoc iframe) shows an image attachment as <img data-resource-id> with a blob: URL it made from
+	// the File the app passed it, or upstream's placeholder .not-loaded-resource[data-resource-id] (docs/test-plans/M2-S3.md D5, F4).
+	public async viewerImage(resourceId: string): Promise<{ found: boolean; complete?: boolean; naturalWidth?: number; naturalHeight?: number; scheme?: string; placeholder: boolean }> {
+		if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('viewerImage: a resource id is 32 hex characters');
+		type Reading = { found: boolean; complete?: boolean; naturalWidth?: number; naturalHeight?: number; scheme?: string; placeholder: boolean };
+		const readings = await Promise.all(this.page.frames().map(async (frame): Promise<Reading> => {
+			try {
+				return await frame.evaluate((id): Reading => {
+					interface Img { complete: boolean; naturalWidth: number; naturalHeight: number; src: string }
+					const doc = (globalThis as unknown as { document: { querySelector: (s: string) => unknown } }).document;
+					const img = doc.querySelector(`img[data-resource-id="${id}"]`) as Img | null;
+					const placeholder = !!doc.querySelector(`.not-loaded-resource[data-resource-id="${id}"]`);
+					if (!img) return { found: false, placeholder };
+					return { found: true, complete: img.complete, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, scheme: new URL(img.src).protocol, placeholder };
+				}, resourceId);
+			} catch {
+				return { found: false, placeholder: false };
+			}
+		}));
+		return readings.find(r => r.found) ?? readings.find(r => r.placeholder) ?? { found: false, placeholder: false };
+	}
+
+	// The bytes the viewer shows: fetched inside that frame from its own blob: URL (the page's CSP allows connect-src blob:).
+	public async viewerImageBytes(resourceId: string): Promise<Buffer> {
+		if (!/^[0-9a-f]{32}$/.test(resourceId)) throw new Error('viewerImageBytes: a resource id is 32 hex characters');
+		for (const frame of this.page.frames()) {
+			let read: { b64?: string; error?: string } | undefined;
+			try {
+				read = await frame.evaluate(async id => {
+					const g = globalThis as unknown as { document: { querySelector: (s: string) => { src: string } | null }; fetch: (u: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> }>; btoa: (s: string) => string };
+					const img = g.document.querySelector(`img[data-resource-id="${id}"]`);
+					if (!img) return undefined;
+					try {
+						const bytes = new Uint8Array(await (await g.fetch(img.src)).arrayBuffer());
+						let binary = '';
+						for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+						return { b64: g.btoa(binary) };
+					} catch (e) {
+						return { error: `${(e as Error).name}: ${(e as Error).message}` };
+					}
+				}, resourceId);
+			} catch {
+				read = undefined; // a detached frame
+			}
+			if (!read) continue;
+			if (read.error) throw new Error(`the viewer frame could not read its image: ${read.error}`);
+			return Buffer.from(read.b64 ?? '', 'base64');
+		}
+		throw new Error(`no frame shows the image of resource ${resourceId}`);
 	}
 
 	public async openTags(): Promise<TagsDialog> {
@@ -646,5 +788,65 @@ export class FolderScreen {
 	public async save(): Promise<void> {
 		await this.page.getByRole('button', { name: 'Save changes', exact: true }).click();
 		await this.heading().waitFor({ state: 'detached' });
+	}
+}
+
+// Upstream's Search screen (SearchScreen/index.tsx, SearchResults.tsx, NoteItem.tsx; docs/test-plans/M2-S3.md D3).
+export class SearchScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public heading(): Locator {
+		return this.page.getByRole('heading', { name: 'Search', exact: true });
+	}
+
+	public field(): Locator {
+		return this.page.getByPlaceholder('Search notes, notebooks...', { exact: true });
+	}
+
+	// The search screen itself: the deepest element holding its header and its field (hidden screens are aria-hidden anyway).
+	public root(): Locator {
+		return this.page.locator('div').filter({ has: this.heading() }).filter({ has: this.field() }).last();
+	}
+
+	public result(title: string): Locator {
+		return this.root().getByRole('button', { name: title, exact: true });
+	}
+
+	public async waitOpen(): Promise<void> {
+		await this.field().waitFor();
+	}
+
+	// Upstream runs a query only when its text changes, and indexes a synced note about 10 s after it changes
+	// (docs/test-plans/M2-S3.md D3): clear and retype the word, as a user would, until the result shows.
+	public async searchUntilFound(word: string, title: string, opts: { timeoutMs?: number; attemptMs?: number } = {}): Promise<{ attempts: number; ms: number }> {
+		const started = Date.now();
+		let attempts = 0;
+		await waitFor(`the search to list the note titled "${title}"`, async () => {
+			attempts++;
+			await clearLikeUser(this.field());
+			await typeLikeUser(this.field(), word);
+			try {
+				await this.result(title).waitFor({ timeout: opts.attemptMs ?? 5_000 });
+				return true;
+			} catch {
+				return undefined;
+			}
+		}, { timeoutMs: opts.timeoutMs ?? 180_000, intervalMs: 250 });
+		return { attempts, ms: Date.now() - started };
+	}
+
+	// From a note opened from the results, "Back" returns here (the search screen has no Sidebar button).
+	public async backFromNote(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+		await this.field().waitFor();
+	}
+
+	public async close(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+		await this.page.getByRole('button', { name: 'Sidebar', exact: true }).waitFor();
 	}
 }

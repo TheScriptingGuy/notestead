@@ -16,3 +16,10 @@ export const datetimeLocalValue = (p: LocalParts): string => `${p.year}-${p.mont
 
 // The first whole minute at or after now + aheadMs (datetime-local has minute precision).
 export const nextWholeMinute = (nowMs: number, aheadMs: number): number => Math.ceil((nowMs + aheadMs) / 60_000) * 60_000;
+
+// False when the zone's wall clock of `epochMs` also names another instant 30 or 60 minutes away: the repeated hour when
+// summer time ends. A datetime-local value cannot tell the two apart, and the browser takes the first (M2-S2 r1 C2).
+export const wallClockIsUnique = (epochMs: number, timeZone: string): boolean => {
+	const own = datetimeLocalValue(partsIn(epochMs, timeZone));
+	return [-60, -30, 30, 60].every(m => datetimeLocalValue(partsIn(epochMs + m * 60_000, timeZone)) !== own);
+};

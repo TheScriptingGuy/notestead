@@ -10,6 +10,7 @@ import { requireUpstreamBundle } from '../support/bundle.ts';
 import { notesTitled, ok, pick, restGet } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
+import { expectStoredLocally } from '../support/localProfile.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
 import { foldersTitled } from '../support/restQueries.ts';
@@ -71,6 +72,9 @@ test.describe('M2-S2 notes in the web app', () => {
 			await note.typeBody(B1);
 			await app.backToList();
 			await expect(app.noteInList(T1)).toBeVisible();
+			// WEB-SQLITE-1: the web app's own database holds the typed title and body before any sync.
+			await expectStoredLocally(webApp, T1, 'the new note\'s title');
+			await expectStoredLocally(webApp, B1, 'the new note\'s body');
 		});
 
 		await test.step('4. one web sync and one headless sync: the note as created', async () => {
@@ -97,6 +101,8 @@ test.describe('M2-S2 notes in the web app', () => {
 			await app.backToList();
 			await expect(app.noteInList(T2)).toBeVisible();
 			await expect(app.noteInList(T1)).toHaveCount(0);
+			await expectStoredLocally(webApp, T2, 'the edited title');
+			await expectStoredLocally(webApp, B2, 'the edited body');
 		});
 
 		await test.step('6. cycle: the same note, edited', async () => {
@@ -114,6 +120,9 @@ test.describe('M2-S2 notes in the web app', () => {
 			await app.backToList();
 			await app.openFolder(target);
 			await expect(app.noteInList(T2)).toBeVisible();
+			// A move is not byte-checkable: the target notebook's id is not known in the UI. The title is checked again, so a
+			// note lost by the move would show here (WEB-SQLITE-1).
+			await expectStoredLocally(webApp, T2, 'the moved note\'s title');
 		});
 
 		await test.step('8. cycle: the note in the target notebook, nothing else changed', async () => {

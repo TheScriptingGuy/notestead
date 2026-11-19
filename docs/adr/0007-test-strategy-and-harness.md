@@ -55,7 +55,7 @@
   - **Per test:** a fresh user is created through the admin API (`admin@localhost`, created by `createTestUsers`). This isolates tests without restarting the server.
   - `clearDatabase` runs only in worker teardown.
 - **`headless`** (per test that needs it): a fresh profile directory and a fresh supervisor process (integration) or container (contract/E2E). It is configured for the test's user.
-- **`e2eeAccount`:** a CLI "other device" profile that runs `e2ee enable --password` **inside `joplin batch` together with `sync`** and seeds notes. S3 found that a standalone `e2ee enable` doesn't persist the key in CLI 3.7.1. The fixture also seeds a to-do with `todo_due`, a tag and an attachment, then syncs. It is rebuilt per test (~9 s on the Pi, measured in S3), or once per worker for read-only tests.
+- **`e2eeAccount`:** a CLI "other device" profile that runs `e2ee enable --password` **inside `joplin batch` together with `sync`** and seeds notes. S3 found that a standalone `e2ee enable` doesn't persist the key in CLI 3.7.1. The fixture also seeds a to-do with `todo_due`, a tag and an attachment, then syncs *(opt-in through `e2eeSeed.extras` since M2-S2; see Amendments (2026-10-16) A2)*. It is rebuilt per test (~9 s on the Pi, measured in S3), or once per worker for read-only tests.
 - **`webApp`:** a fresh browser context per test (fresh OPFS/service worker), with a page object for the app. It is served on `127.0.0.1` (not `localhost`), because `environment.js` turns on dev mode for any origin containing "localhost" (`upstream:packages/app-mobile/web/public/environment.js:2`).
 - **`mcpClient`:** `@modelcontextprotocol/sdk` client over streamable HTTP with the test bearer token.
 
@@ -115,6 +115,11 @@ These record deviations that the M1 reviews accepted "pending architect" (`docs/
 Playwright reserves `headless` for its own browser option, so a fixture with that name breaks the fixture types. Read every `headless` fixture reference in this ADR and in `docs/backlog/M*.md` as `headlessService`. It depends on `e2eeAccount`, re-registers the Data API token in teardown (a CLI restart rotates it), and attaches `supervisor.log` on failure. `dataApi` is built on it.
 
 `e2eeAccount` currently seeds a folder and one note only, not the to-do with `todo_due`, tag and attachment that §Fixtures promises. QA adds those when the first story asserts on them (M2-S2/S3 or M4). Until then, tests must not assume them.
+
+*Amended 2026-11-13 (M2-S2 as built, plan D7; `docs/reviews/M2-S2-r1.md`):* the seed extras exist since M2-S2 and are **opt-in**. The `e2eeSeed` option is `{ notes: number; extras?: boolean }`, and the default stays `{ notes: 1 }` (`tests/e2e/support/fixtures.ts`, `tests/stack/stack.ts` `SeedOptions`).
+- **With `extras: true`,** the "other device" also seeds, in the same `batch` as the E2EE enable and sync: a to-do with `todo_due`, a tag on note 1 and a text attachment. They are validated by `M2-S2-SEED-01`.
+- **Why opt-in:** the default seed stays byte-identical, so M1-S7 and M2-S1 keep their exact seeds (M2-AC2 compares the seeded bodies byte for byte, and an attachment link would change a body). The default seed also stays fast.
+- **Rule:** a test that asserts on a to-do, tag or attachment from the seed sets `extras: true`. Tests on the default seed must not assume them. Read §Fixtures' "also seeds a to-do … then syncs" with this condition.
 
 ### A3. Serial rule for tests that disrupt shared services
 - A test that **stops, restarts or reconfigures a shared service** of the run's stack (`server`, `web`, or the default headless service) must do one of two things. Either it runs in a **serial Playwright project** (its own `projects` entry with `workers: 1`, or `fullyParallel: false` plus `test.describe.configure({ mode: 'serial' })`, and with no other project running at the same time), or it brings up **its own containers or its own stack**.

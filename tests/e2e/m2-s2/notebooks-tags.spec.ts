@@ -9,6 +9,7 @@ import { requireUpstreamBundle } from '../support/bundle.ts';
 import { ok, pick, restGet } from '../support/dataApi.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { openUnlockedWebApp, syncWebThenHeadless } from '../support/flows.ts';
+import { expectStoredLocally } from '../support/localProfile.ts';
 import { classifyRequests, violationLines } from '../support/network.ts';
 import { JoplinWebApp, NoteScreen } from '../support/pages/joplinWebApp.ts';
 import { allItems, foldersTitled, noteTagTitles, tagNoteIds, tagsTitled } from '../support/restQueries.ts';
@@ -75,6 +76,9 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 			await tags.addNew(B);
 			await tags.apply();
 			await app.backToList();
+			// WEB-SQLITE-1: the web app's own database holds both tags before any sync.
+			await expectStoredLocally(webApp, A, 'the first tag\'s title');
+			await expectStoredLocally(webApp, B, 'the second tag\'s title');
 		});
 
 		await test.step('4. cycle: the notebooks and the tags as created', async () => {
@@ -135,6 +139,9 @@ test.describe('M2-S2 notebooks and tags in the web app', () => {
 			const tagsScreen = await app.openTagsScreen();
 			await tagsScreen.rename(B, B2);
 			await app.backToList();
+			// WEB-SQLITE-1: the renamed parent notebook and tag are in the web app's own database before any sync.
+			await expectStoredLocally(webApp, P2, 'the renamed parent notebook\'s title');
+			await expectStoredLocally(webApp, B2, 'the renamed tag\'s title');
 		});
 
 		await test.step('6. cycle: the same ids renamed and nested; tag A off note 1; the device\'s tag untouched', async () => {
