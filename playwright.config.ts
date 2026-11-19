@@ -5,6 +5,7 @@
 // - Bounds: actions 60 s, navigations 120 s, the CI run 55 min inside the 60-minute E2E step (tests/e2e/support/timeouts.ts; CI-T-01…05).
 // - Workers: 1 locally (the Pi's one-heavy-job rule); CI decides. Retries: 0 locally, 1 in CI (flake policy,
 //   docs/testing/strategy.md §6).
+// - @network tests (internet access) run only with NOTESTEAD_NETWORK_TESTS=1: nightly and on pin bumps in CI (docs/test-plans/M2-S4.md D8).
 // - Reports: the redacting reporter first (it redacts every attachment, the trace included, before anything copies
 //   it), then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
 // - Traces: recorded by the `webApp` fixture (no screenshots) and kept on failure; see `use.trace` below.
@@ -25,6 +26,7 @@ export default defineConfig({
 	testMatch: '**/*.spec.ts',
 	outputDir: 'test-results/e2e/output',
 	forbidOnly: true,
+	grepInvert: process.env.NOTESTEAD_NETWORK_TESTS === '1' ? undefined : /@network/,
 	workers: ci ? undefined : 1,
 	retries: ci ? 1 : 0,
 	// A test may start its own headless service (an initial E2EE sync: ~1 min on the Pi).
