@@ -5,7 +5,7 @@
 // accessibilityLabel and accessibilityLabelledBy to ARIA); the strings are upstream's en_GB UI texts at the pinned ref.
 // Every text goes in through typeLikeUser (real key events; secrets only into password fields, C1-R1).
 // M2-S2 adds the note, notebook, tag and alarm screens (docs/test-plans/M2-S2.md §Page objects, F3 to F7).
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import type { Frame, Locator, Page } from '@playwright/test';
 import { waitFor } from '../../../support/poll.ts';
 import { datetimeLocalValue } from '../dueDate.ts';
@@ -165,6 +165,16 @@ export class JoplinWebApp {
 		return screen;
 	}
 
+	// Configuration from the side menu (side-menu-content.tsx: the button is named by _('Configuration')). The side menu closes
+	// on its own when the screen opens.
+	public async openConfiguration(): Promise<ConfigScreen> {
+		await this.openSidebar();
+		await this.page.getByRole('button', { name: 'Configuration', exact: true }).click();
+		const screen = new ConfigScreen(this.page);
+		await screen.waitOpen();
+		return screen;
+	}
+
 	public async openTagsScreen(): Promise<TagsScreen> {
 		await this.openSidebar();
 		await this.page.getByRole('button', { name: 'Tags', exact: true }).click();
@@ -253,6 +263,14 @@ export class JoplinWebApp {
 	// The note viewer is a sandboxed srcdoc iframe (ExtendedWebView/index.web.tsx), so the page's own DOM never holds a body.
 	public async frameHtml(): Promise<string> {
 		return (await this.perFrame('html')).join('\n');
+	}
+
+	// What the app renders in the TOP frame only (docs/test-plans/M2-S4.md, H5 ruling): `innerText` of the body (no script or style
+	// content, no hidden elements, no child frames) and the body's accessibility tree (adds aria-label names). A plugin's
+	// background frames hold only scripts, so a rendered plugin view would be in the top frame.
+	public async renderedTopFrame(): Promise<{ text: string; aria: string }> {
+		const body = this.page.locator('body');
+		return { text: await body.innerText(), aria: await body.ariaSnapshot() };
 	}
 
 	// The rendered text of the page and of every frame, for presence checks of a note body.
@@ -555,6 +573,30 @@ export class NoteScreen {
 		await this.page.getByTestId('menu-content-open').getByRole('button', { name: title, exact: true }).click();
 	}
 
+	// The accessible names of every item of the note's action menu (docs/test-plans/M2-S4.md NEG1, `pluginRunning`): opens the
+	// menu, reads its buttons, closes it with Escape. Plugin commands for the note toolbar are items of this menu (Note.tsx).
+	public async menuItemNames(): Promise<string[]> {
+		await this.actionsButton().click();
+		const menu = this.page.getByTestId('menu-content-open');
+		await menu.waitFor();
+		// A button's name is its aria-label, else the text of its descendants that are not aria-hidden (an item's icon is a hidden
+		// glyph in front of its label, and an item without an aria-label, such as a plugin's command, has only that text).
+		const names = await menu.getByRole('button').evaluateAll(buttons => buttons.map(b => {
+			interface El { getAttribute: (n: string) => string | null; childNodes: ArrayLike<El & { nodeType: number; textContent: string | null }> }
+			const label = (b as unknown as El).getAttribute('aria-label');
+			if (label !== null && label !== '') return label.trim();
+			const text = (node: El & { nodeType: number; textContent: string | null }): string => {
+				if (node.nodeType === 3) return node.textContent ?? '';
+				if (node.nodeType !== 1 || node.getAttribute('aria-hidden') === 'true') return '';
+				return Array.from(node.childNodes, text).join(' ');
+			};
+			return text(b as unknown as El & { nodeType: number; textContent: string | null }).replace(/\s+/g, ' ').trim();
+		}));
+		await this.page.keyboard.press('Escape');
+		await menu.waitFor({ state: 'hidden' });
+		return names;
+	}
+
 	// The header's notebook dropdown: a button named by the current notebook, with upstream's "▼".
 	public folderPicker(current: string): Locator {
 		return dropdownButton(this.page, current);
@@ -848,5 +890,136 @@ export class SearchScreen {
 	public async close(): Promise<void> {
 		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
 		await this.page.getByRole('button', { name: 'Sidebar', exact: true }).waitFor();
+	}
+}
+
+// Configuration (upstream ConfigScreen.tsx): a section selector (tabs, SectionSelector/SectionTab.tsx) and the open section.
+export class ConfigScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	// The screen's header carries the open section's name as its heading ("General" first), not "Configuration", so the screen is
+	// told by its "Save changes" button.
+	public async waitOpen(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Save changes', exact: true }).waitFor();
+	}
+
+	// A section's tab, named by Setting.sectionNameToLabel (plus its short description, so the name is matched by its start).
+	public async openSection(name: 'Plugins'): Promise<PluginsScreen> {
+		await this.page.getByRole('tab', { name: new RegExp(`^${escapeRegExp(name)}`) }).first().click();
+		return new PluginsScreen(this.page);
+	}
+
+	public async back(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Back', exact: true }).click();
+	}
+}
+
+const pluginChipLabels = ['Incompatible', 'Error', 'Disabled', 'Update available', 'Installed', 'Built-in', 'Dev'] as const;
+
+// Configuration, section Plugins (upstream ConfigScreen/plugins/*): "Enable plugin support" while the setting is off, then the
+// list of installed plugins, the repository search and, under "Advanced settings", "Install from file".
+export class PluginsScreen {
+	public readonly page: Page;
+
+	public constructor(page: Page) {
+		this.page = page;
+	}
+
+	public enableButton(): Locator {
+		return this.page.getByRole('button', { name: 'Enable plugin support', exact: true });
+	}
+
+	public noneInstalled(): Locator {
+		return this.page.getByText('No plugins are installed.', { exact: true });
+	}
+
+	public installedHeading(n: number): Locator {
+		return this.page.getByText(`Installed (${n}):`, { exact: true });
+	}
+
+	// PluginBox's own test id. While a plugin's info dialog is open it holds a card of its own with the same test id, so a
+	// caller that needs the list's card closes the dialog first.
+	public card(name: string): Locator {
+		return this.page.getByTestId('plugin-card').filter({ hasText: name });
+	}
+
+	// The chips of a card, by their visible text (PluginChips.tsx), in the order of `pluginChipLabels`.
+	public async chips(name: string): Promise<string[]> {
+		const card = this.card(name).first();
+		await card.waitFor();
+		const shown: string[] = [];
+		for (const label of pluginChipLabels) if (await card.getByText(label, { exact: true }).count() > 0) shown.push(label);
+		return shown;
+	}
+
+	// The card's info dialog (PluginInfoModal.tsx, a DismissibleDialog): its "Enabled" switch and its "Close" button.
+	public async openInfo(name: string): Promise<void> {
+		await this.card(name).first().click();
+		await this.enabledSwitch().waitFor();
+	}
+
+	// The dialog's own switch: react-native-web puts the "Enabled" label on a wrapper (accessibilityLabelledBy), so the switch has
+	// no accessible name of its own, and the dialog is told by that label. The page behind holds a switch of its own.
+	public infoDialog(): Locator {
+		return this.page.getByRole('dialog').filter({ has: this.page.getByText('Enabled', { exact: true }) });
+	}
+
+	public enabledSwitch(): Locator {
+		return this.infoDialog().getByRole('switch');
+	}
+
+	public async closeInfo(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Close', exact: true }).click();
+		await this.enabledSwitch().waitFor({ state: 'hidden' });
+	}
+
+	// Presses the card's "Incompatible" chip: upstream shows `describeIncompatibility` in its message box (shim.showMessageBox,
+	// DialogManager/PromptDialog.tsx, test id prompt-dialog), then closes it with "OK".
+	public async incompatibleMessage(name: string): Promise<string> {
+		await this.card(name).first().getByText('Incompatible', { exact: true }).click();
+		const dialog = this.page.getByTestId('prompt-dialog');
+		await dialog.waitFor();
+		const message = (await dialog.innerText()).replace(/\s*\bOK\b\s*$/, '').trim();
+		await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+		await dialog.waitFor({ state: 'hidden' });
+		return message;
+	}
+
+	public advancedSettings(): Locator {
+		return this.page.getByRole('button', { name: 'Advanced settings', exact: true });
+	}
+
+	public installFromFileButton(): Locator {
+		return this.page.getByRole('button', { name: 'Install from file', exact: true });
+	}
+
+	// The repository has loaded (PluginStates.renderRepoApiStatus): no progress bar, no failure text, no "Content provided by".
+	public async repositoryLoaded(timeoutMs: number): Promise<void> {
+		await this.page.getByRole('progressbar', { name: 'Loading...' }).waitFor({ state: 'hidden', timeout: timeoutMs });
+		await expect(this.page.getByText('Plugin repository failed to load')).toHaveCount(0);
+		await expect(this.page.getByText(/^Content provided by:/)).toHaveCount(0);
+	}
+
+	public searchField(): Locator {
+		return this.page.getByPlaceholder('Search for plugins...', { exact: true });
+	}
+
+	public async search(text: string): Promise<void> {
+		await typeLikeUser(this.searchField(), text);
+	}
+
+	public async clearSearch(): Promise<void> {
+		await this.page.getByRole('button', { name: 'Clear search', exact: true }).click();
+	}
+
+	// The result card's button (ActionButton.tsx: accessibilityLabel `${title}  ${name}`, two spaces): Install, then Installed.
+	public async installFromSearch(name: string, timeoutMs: number): Promise<void> {
+		const card = this.card(name).first();
+		await card.getByRole('button', { name: new RegExp(`^Install\\s+${escapeRegExp(name)}$`) }).click();
+		await expect(card.getByRole('button', { name: new RegExp(`^Installed\\s+${escapeRegExp(name)}$`) })).toBeVisible({ timeout: timeoutMs });
 	}
 }
