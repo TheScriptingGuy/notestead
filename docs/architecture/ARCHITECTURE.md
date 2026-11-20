@@ -321,11 +321,11 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | U12 | Web: a configurable or disable-able connectivity-check URL; skip welcome notes when the sync target already has data | L14, L15 |
 | U13 | lib (candidate issue, not yet filed; the user decides): "first sync on an E2EE target aborts in `update_remote` on welcome notes, so nothing is downloaded until the master key is loaded". Fix ideas: skip, rather than abort on, items that can't be encrypted yet (`masterKeyNotLoaded`) so that `delta` still runs, or create the welcome notes only after the first sync | L18 |
 | U14 | lib/app-mobile web (issues A and B, filed by the user; links to be added; drafts in `docs/worklog/WEB-SQLITE-1.md` §6): A, statements outside `transactionExecBatch`'s mutex run inside its open transaction on the single web connection, so a `ROLLBACK` discards unrelated writes; B, the web driver's errors have no `code`, so `tryCall` never retries. C (sqlite-wasm `opfs` VFS `rc= -1` or `rc= 10`, also with one browser: worklog §11) follows once there is a smaller reproduction | L20, and with it the L20 test-run tie (§9), which holds until upstream fixes L20 |
-| U15 | *(candidate, not filed; PLUGINS-WEB; the user deferred filing on 2026-11-20, D3)* app-mobile: `joplin.imaging` on mobile/web (canvas + `pdfjs-dist` in the plugin-runner webview) | part of L2 |
+| U15 | *(candidate, not filed; PLUGINS-WEB; the user deferred filing on 2026-11-19, D3)* app-mobile: `joplin.imaging` on mobile/web (canvas + `pdfjs-dist` in the plugin-runner webview) | part of L2 |
 | U16 | *(candidate, not filed)* lib/app-mobile: a permission-scoped async plugin file API and `dialogs.showOpenDialog` on mobile/web (upstream issue #10291), plus `zipExtract` on web | part of L2 |
 | U17 | *(candidate, not filed; forum UX thread first, #14456 precedent)* app-mobile: render plugin `menus`/`menuItems` (note action menu, note/notebook/tag long-press menus) | the menus part of L2, and ADR-0011's menu prelude |
 | U18 | *(candidate, not filed)* lib/app-mobile: an opt-in, per-plugin "run anyway (unsupported)" for incompatible plugins on Android/web | ADR-0011's re-tag step |
-| U19 | *(candidate, not filed; the user deferred author requests on 2026-11-20, D5)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
+| U19 | *(candidate, not filed; the user deferred author requests on 2026-11-19, D5)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
 
 ## 11. Spike results (M0)
 
@@ -352,7 +352,7 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | [0008](../adr/0008-security-model.md) | Security model: secrets, Data API token, file:// download guard, MCP exposure |
 | [0009](../adr/0009-repository-layout-and-tooling.md) | Repository layout and tooling |
 | [0010](../adr/0010-branding-overlay-and-source-offer.md) | Branding overlay (trademark) and AGPL source offer |
-| [0011](../adr/0011-plugins-on-web-compatibility-route.md) | Desktop-only plugins on web: an opt-in plugin compatibility repackager, no patches, upstream contributions deferred (accepted 2026-11-20) |
+| [0011](../adr/0011-plugins-on-web-compatibility-route.md) | Desktop-only plugins on web: an opt-in plugin compatibility repackager, no patches, upstream contributions deferred (accepted 2026-11-19) |
 
 ## 13. Delivery plan and ownership
 
@@ -408,4 +408,4 @@ Routed to the architect by channels.md §11 and recorded: the D7 rule (above), a
 
 | # | Question | The user's decision | Applied in |
 |---|---|---|---|
-| O5 | Desktop-only plugins on web (study [PLUGINS-WEB](../spikes/PLUGINS-WEB.md), decisions D1 to D6) | **2026-11-20.** D1 **yes**: build the plugin repackager, phase 1a (manifest change) first, then 1b (menu script), opt-in per plugin and off by default. D2 **not now**: no `patches/` exception. D3 and D5 **not now**: no upstream PRs or plugin-author requests (U15 to U19 stay unfiled). D4: a page in the `web` container. D6: the risk wording is accepted. | ADR-0011 (Accepted), L2, §2, §5, §6 row 12, M2-S12 |
+| O5 | Desktop-only plugins on web (study [PLUGINS-WEB](../spikes/PLUGINS-WEB.md), decisions D1 to D6) | **2026-11-19.** D1 **yes**: build the plugin repackager, phase 1a (manifest change) first, then 1b (menu script), opt-in per plugin and off by default. D2 **not now**: no `patches/` exception. D3 and D5 **not now**: no upstream PRs or plugin-author requests (U15 to U19 stay unfiled). D4: a page in the `web` container. D6: the risk wording is accepted. | ADR-0011 (Accepted), L2, §2, §5, §6 row 12, M2-S12 |

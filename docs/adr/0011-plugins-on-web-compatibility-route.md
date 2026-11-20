@@ -1,11 +1,11 @@
 # ADR-0011: Desktop-only plugins on web: an opt-in plugin compatibility repackager, no patches, upstream contributions deferred
 
 ## Status
-**Accepted** (user decisions D1 to D6, 2026-11-20). Proposed by the architect on 2026-11-19 with the study [`docs/spikes/PLUGINS-WEB.md`](../spikes/PLUGINS-WEB.md). ADR-0001 is unchanged: zero source patches.
+**Accepted** (user decisions D1 to D6, 2026-11-19). Proposed by the architect on 2026-11-19 with the study [`docs/spikes/PLUGINS-WEB.md`](../spikes/PLUGINS-WEB.md). ADR-0001 is unchanged: zero source patches.
 
 The user decided the six points of PLUGINS-WEB §6:
 
-| # | Question | The user's decision (2026-11-20) | Where it lands |
+| # | Question | The user's decision (2026-11-19) | Where it lands |
 |---|---|---|---|
 | D1 | Build Phase 1 (route D, the repackager)? | **Yes.** Phase 1a, the manifest change, first, so that desktop-only plugins can run on web where that is technically possible. Then phase 1b, the menu script (rendering `views.menus`/`views.menuItems`). **Opt-in per plugin, off by default.** | Decision 1; story M2-S12 |
 | D2 | Grant a `patches/` exception (route B)? | **Not now.** No `patches/` exception. | Decision 2 |
