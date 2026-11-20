@@ -511,7 +511,7 @@ Each is a temporary edit. Run each one alone, with `env $IMG`, log it under `sen
 | S-NEG1b | add `pluginNoteToolbarLabel` to check 2's forbidden list only | `M2-AC9-01` | NEG1 check 2, `"Open Recurrence Dialog" rendered in text (action menu open)` |
 | S-NEG1c | add `Configuration` to check 3's forbidden list only | `M2-AC9-01` | NEG1 check 3, `(side menu open)` |
 | S-NEG2 | `plugin-platforms.spec.ts`: build `desktop` with `platforms` forced to `['desktop', 'mobile']` (a temporary option on `buildProbeJpl`, reverted afterwards) | `M2-AC9-03` | the `Incompatible` chip expectation |
-| S-AC10 | `plugin-repository.spec.ts`: change the last hex digit of `hash` | `M2-AC10`, with `NOTESTEAD_NETWORK_TESTS=1` | the OPFS sha256 assertion |
+| S-AC10 | `plugin-repository.spec.ts`: change the last hex digit of `hash`. **Only after** the `installFromSearch` fix is committed and `M2-AC10` has passed unchanged (plan "Planner ruling on the S-AC10 HARD STOP") | `M2-AC10`, with `NOTESTEAD_NETWORK_TESTS=1` | the OPFS sha256 assertion |
 
 - **Run each sensitivity by hand, one at a time** (no queued driver), with `e2e_pre` first.
 - **A sensitivity run that passes, or fails elsewhere:** **HARD STOP** (the test cannot see what the plan says it sees).
