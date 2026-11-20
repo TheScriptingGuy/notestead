@@ -34,7 +34,7 @@ Upstream reference: laurent22/joplin `release-3.7` @ `e41516e66` (tag `v3.7.21`)
 - Re-implementing the Joplin UI or the Data API.
 - Alarm notifications in the browser (an upstream limitation, L1).
 - Background sync while no browser tab is open (L3). The headless service syncs independently.
-- Running desktop-only plugins.
+- Running desktop-only plugins as they are. The opt-in repackager (ADR-0011) makes the ones that only lack the `mobile` tag or use menus runnable; plugins that need Node, Electron or native modules never run on web (L2).
 
 ## 2. Components
 
@@ -45,6 +45,7 @@ flowchart LR
   end
   subgraph W["web container · Caddy"]
     ST["Static bundle + our overlay<br/>(branding, environment.js, source.html)"]
+    RP["/tools/plugin-repack/ (opt-in, off by default)<br/>plugin repackager, runs in the browser"]
     PX["/joplin-server/api/* → Joplin Server<br/>Host rewrite · strip Origin · X-Real-IP · streaming"]
     SH["/joplin-server/shares/:id → 302 to server"]
     IP[":8089 internal sync proxy (backend net only)"]
@@ -61,6 +62,7 @@ flowchart LR
   DEV["User's desktop / phone"]
   CF["Cloudflare edge → cloudflared<br/>(default HTTPS front, CF-Connecting-IP)"]
   UI -- HTTPS --> CF --> ST
+  CF -. "opt-in" .-> RP
   CF -- "same-origin /joplin-server/api/*" --> PX --> JS
   SH -.-> JS
   SUP -- "joplin sync (via)" --> IP --> JS
@@ -78,6 +80,7 @@ flowchart LR
 | `headless` container | Node supervisor running the pinned CLI through public commands | ours (supervisor) + upstream (CLI) | 0003 |
 | MCP server | `@modelcontextprotocol/sdk` server. Passes allow-listed upstream `/mcp` tools through, and adds REST gap tools. | ours + upstream tools | 0004 |
 | Data API client | typed client for the documented REST API, with guards | ours | 0004, 0008 |
+| Plugin repackager (opt-in, `PLUGIN_REPACKAGER=on`) | A static page in `web` that rewrites a user-supplied `.jpl` in the browser (manifest `platforms` += `mobile`; optional menu prelude) for upstream's "Install from file". Never uploads or redistributes plugins. | ours (`packages/plugin-repack`) | 0011 |
 | `cloudflared` (optional, compose profile `tunnel`) | Cloudflare's official tunnel connector, pinned by digest; the default HTTPS front | third party (not Joplin) | 0006, 0008 |
 
 ## 3. Deployment topology (x64 and arm64)
@@ -185,7 +188,8 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 | Proxy abuse / limiter bypass | Only `/joplin-server/api/*` is proxied. `X-Real-IP` is overwritten with the real client IP, taken from `CF-Connecting-IP` only when the peer is cloudflared, else from the TCP peer. Server UI is not re-published. | M1-AC10/11 (S2 R1–R4, S6 R5-neg) |
 | TLS terminated by Cloudflare (gate 1) | Stated plainly (L17): Cloudflare sees the web login, session ids, the MCP bearer token and decrypted MCP results; sync payloads stay E2EE. `MCP_PUBLIC=false` keeps MCP host-local for users who don't accept it. Tunnel token from a podman secret; optional Access service token on `/mcp`; bearer token stays mandatory. | M5-AC13, M5-AC11 |
 | Front caches or rewrites the app | `Cache-Control: no-cache, no-transform` on static files, `no-store, no-transform` on API/MCP; zone checklist (Rocket Loader, Bot Fight Mode, challenges off) | M1-AC10 C10, M1-AC12, M5-AC11 |
-| User content on the app origin (XSS → OPFS secrets) | Published notes redirect to the server origin. The upstream CSP stays intact. Nothing else is served on the origin. | M2-AC14 |
+| User content on the app origin (XSS → OPFS secrets) | Published notes redirect to the server origin. The upstream CSP stays intact. The only other page on the origin is the opt-in plugin repackager (ADR-0011): off by default, a strict CSP with `connect-src 'none'`, plugin data rendered as text and never evaluated. | M2-AC14, M2-AC24/25/26 |
+| A repacked plugin (untested on web) misuses or damages notes | Off by default; an acknowledgment per plugin with the risk statement; refusal of `child_process`/`electron`/native modules; the same sandboxed iframe and API as any plugin, with no new privilege; bug reports routed to us (ADR-0011) | M2-AC22/24/25 |
 | Supply chain | Pinned commit, lockfile, image digests, SBOM, provenance, signing (ci-cd), `check:no-upstream-copy`, licence allow-list | M1-AC4, M5-AC4/5 |
 
 ## 6. Upstream reuse map
@@ -203,6 +207,7 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 | 9 | Test server | `docker.io/joplin/server:3.7.2` | `node dist/index.js --env dev --env-file /dev/null`; `POST /api/debug` (`createTestUsers`, `clearDatabase`); `GET /api/ping`; `JOPLIN_IS_TESTING` | **Medium-low.** Test hooks, undocumented; the image CMD ignores `APP_ENV` (S2). | The harness can't seed | Harness self-tests M1-AC18–20 |
 | 10 | Plugins on web | Plugin API inside the bundle; plugin repo `github.com/joplin/plugins` | `.jpl` format and install from file; the platform gate (`platforms` must include `mobile`, else Incompatible and never run); `noteToolbar`/`editorToolbar` rendering; direct browser fetches of the repository (L2) | **Medium** | Web plugin API gaps change; the gate or the repository mirrors change | M2-AC9/10 (NEG 2: a desktop-only plugin installs, is Incompatible and never runs) |
 | 11 | HTTPS front (third party, not Joplin) | `docker.io/cloudflare/cloudflared` (2026.9.3 at S6), pinned by digest, plus Cloudflare's edge | `CF-Connecting-IP`; plan body limits (Free/Pro 100 MB); 524 after 125 s; zone defaults (caching by extension, Email Obfuscation) | **Medium.** Documented, but limits and defaults change on Cloudflare's schedule. | Limits/timeouts tighten; a new default transformation | M1-AC11/12 (our side of the contract); M5-AC11 zone checklist on the real tunnel |
+| 12 | Plugin repackager (ADR-0011, opt-in) | `.jpl` format; the plugin gate in `@joplin/lib` (pinned); app-mobile's plugin runner in the bundle | `manifest.json` fields `platforms`/`app_min_version`/`id` and the parser's tolerance of an extra field (`upstream:packages/lib/services/plugins/utils/manifestFromObject.ts:55-79`, `…/isCompatible/index.ts:10-13`); install from file replacing by id; **internals (phase 1b):** the plugin script runs after `window.joplin` is set, and the global is replaceable (`…/backgroundPage/startStopPlugin.ts:57-66`, `…/initializePluginBackgroundIframe.ts:12`); the service worker's cache fallback for non-OK responses (`upstream:packages/app-mobile/web/serviceWorker.ts:180-187`) | **Low** (the `.jpl` format and gate are stable but undocumented; the phase 1b assumptions are internals) | A new gate input (for example signatures) makes repacks Incompatible; the prelude's assumptions change (the prelude then switches itself off); the service worker changes how it caches | Repack contract with the pinned `@joplin/lib` (M2-AC23), canary prelude contract (M2-AC31), M2-S12 E2E, `@network` nightly (M2-AC32) |
 
 ## 7. Version skew, upgrade and rollback (summary of ADR-0005)
 
@@ -233,6 +238,7 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
 - **L1.** The web app never fires **alarm notifications**. `AlarmServiceDriver.web.ts` is a no-op. Due dates are stored and synced, and alarms fire on your desktop or phone after they sync.
 - **L2.** **Plugins on web** *(corrected 2026-11-19 from M2-S4's findings P2, P4, P5 and P7, and the PLUGINS-WEB study)*:
   - **Desktop-only plugins install but never run.** "Install from file" accepts any `.jpl`. A plugin whose manifest doesn't list `mobile` (or has no `platforms` field and isn't on upstream's short allow-list) shows **Incompatible** and is never started (`upstream:packages/lib/services/plugins/PluginService.ts:626-631`, `:678-713`). In the repository search, such plugins are listed but their Install button is disabled. That is 287 of the 411 plugins in the official repository (2026-11-19). There is no upstream switch to run them anyway; see [PLUGINS-WEB](../spikes/PLUGINS-WEB.md) for the options.
+  - **Opt-in workaround (ADR-0011, story M2-S12, not built yet):** the plugin repackager page in `web`, off by default, changes your copy of a desktop-only plugin so it runs on web, and (phase 1b) shows its menu commands in the note action menu. You acknowledge the risk per plugin: a repacked plugin was never tested by its author on this platform, it has the same access to your decrypted notes as any plugin, and bug reports go to Notestead, not to the plugin author or Joplin. A repacked plugin gets no in-app updates; repack the new version. Plugins that need Node, Electron or native modules (backup tools, folder watchers, desktop themes) are refused and can never run on web.
   - **Menus are never shown.** Commands that a plugin puts in `views.menus`/`views.menuItems` (Tools menu, context menus) appear nowhere on web. `noteToolbar` buttons appear in the note's action menu, and `editorToolbar` buttons in the editor toolbar. Your repeating-todos plugin runs, and its "Open Recurrence Dialog" is in the note action menu, but its "Repeating Todos" menu is missing.
   - **Missing APIs on web:** `views.noteList`, `joplin.fs`, Node modules through `joplin.require` or `require` (only `path` exists), `joplin.imaging`, `dialogs.showOpenDialog`, `joplin.ai`, chrome CSS and HTML/image clipboard. Panels and dialogs work, but panels open in a viewer instead of docked beside the editor.
   - **Opening Configuration → Plugins contacts GitHub straight from your browser** (raw.githubusercontent.com, api.github.com). If GitHub doesn't answer, it tries up to four third-party mirrors (cdn.staticaly.com, ghproxy.com, cdn.jsdelivr.net, raw.fastgit.org). These requests don't pass through our proxy (`upstream:packages/lib/services/plugins/RepositoryApi.ts`). It is like L15. Avoid that screen if this matters to you; installing from file needs no network.
@@ -315,11 +321,11 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | U12 | Web: a configurable or disable-able connectivity-check URL; skip welcome notes when the sync target already has data | L14, L15 |
 | U13 | lib (candidate issue, not yet filed; the user decides): "first sync on an E2EE target aborts in `update_remote` on welcome notes, so nothing is downloaded until the master key is loaded". Fix ideas: skip, rather than abort on, items that can't be encrypted yet (`masterKeyNotLoaded`) so that `delta` still runs, or create the welcome notes only after the first sync | L18 |
 | U14 | lib/app-mobile web (issues A and B, filed by the user; links to be added; drafts in `docs/worklog/WEB-SQLITE-1.md` §6): A, statements outside `transactionExecBatch`'s mutex run inside its open transaction on the single web connection, so a `ROLLBACK` discards unrelated writes; B, the web driver's errors have no `code`, so `tryCall` never retries. C (sqlite-wasm `opfs` VFS `rc= -1` or `rc= 10`, also with one browser: worklog §11) follows once there is a smaller reproduction | L20, and with it the L20 test-run tie (§9), which holds until upstream fixes L20 |
-| U15 | *(candidate, not filed; PLUGINS-WEB, needs the user's D3)* app-mobile: `joplin.imaging` on mobile/web (canvas + `pdfjs-dist` in the plugin-runner webview) | part of L2 |
+| U15 | *(candidate, not filed; PLUGINS-WEB; the user deferred filing on 2026-11-20, D3)* app-mobile: `joplin.imaging` on mobile/web (canvas + `pdfjs-dist` in the plugin-runner webview) | part of L2 |
 | U16 | *(candidate, not filed)* lib/app-mobile: a permission-scoped async plugin file API and `dialogs.showOpenDialog` on mobile/web (upstream issue #10291), plus `zipExtract` on web | part of L2 |
 | U17 | *(candidate, not filed; forum UX thread first, #14456 precedent)* app-mobile: render plugin `menus`/`menuItems` (note action menu, note/notebook/tag long-press menus) | the menus part of L2, and ADR-0011's menu prelude |
 | U18 | *(candidate, not filed)* lib/app-mobile: an opt-in, per-plugin "run anyway (unsupported)" for incompatible plugins on Android/web | ADR-0011's re-tag step |
-| U19 | *(candidate, not filed)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
+| U19 | *(candidate, not filed; the user deferred author requests on 2026-11-20, D5)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
 
 ## 11. Spike results (M0)
 
@@ -346,14 +352,14 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | [0008](../adr/0008-security-model.md) | Security model: secrets, Data API token, file:// download guard, MCP exposure |
 | [0009](../adr/0009-repository-layout-and-tooling.md) | Repository layout and tooling |
 | [0010](../adr/0010-branding-overlay-and-source-offer.md) | Branding overlay (trademark) and AGPL source offer |
-| [0011](../adr/0011-plugins-on-web-compatibility-route.md) | **Proposed:** Desktop-only plugins on web: a plugin-side compatibility repackager first, upstream PRs for app changes, no patches by default |
+| [0011](../adr/0011-plugins-on-web-compatibility-route.md) | Desktop-only plugins on web: an opt-in plugin compatibility repackager, no patches, upstream contributions deferred (accepted 2026-11-20) |
 
 ## 13. Delivery plan and ownership
 
 | Milestone | Theme | Main owners |
 |---|---|---|
 | [M1](../backlog/M1.md) | Walking skeleton and harness (REST note → web UI, on the Pi; CI workflows ready) | SE, QA, CI |
-| [M2](../backlog/M2.md) | Web app coverage, branding overlay, source offer | QA, SE |
+| [M2](../backlog/M2.md) | Web app coverage, branding overlay, source offer, opt-in plugin repackager (M2-S12) | QA, SE |
 | [M3](../backlog/M3.md) | Headless service: sync loop, E2EE, secrets, gateway, egress | SE, QA |
 | [M4](../backlog/M4.md) | MCP: passthrough, gap tools, guards, cross-surface E2E | SE, QA |
 | [M5](../backlog/M5.md) | Release: pre-publish gate, multi-arch images, release workflow, deploy docs, user smoke test | CI, SE, QA, user |
@@ -397,4 +403,9 @@ Routed to the architect by channels.md §11 and recorded: the D7 rule (above), a
 | **O2** | **Approve the repo rename** to `TheScriptingGuy/notestead` **and the first push** | when CI is needed: M1-AC9 and M1-AC22 (M1-S3/S8) | Approve both together once M1-S1…S7 are green on the Pi, so the first push already contains a working skeleton. |
 | **O3** | **Confirm the Docker Hub and npm accounts `thescriptingguy` are yours**, with 2FA on | npm before Phase 1b; Docker Hub before Phase 2 | Confirm before M5-S3 starts. |
 | **O4** | **How claude.ai connectors authenticate through Access.** Not verified yet: as far as we know, claude.ai custom connectors use OAuth and can't send static headers (`Authorization: Bearer …`, `CF-Access-Client-Id/-Secret`). Cloudflare Access can act as the OAuth server for a self-hosted MCP application (Cloudflare changelog 2025-08-26). The origin then receives a `Cf-Access-Jwt-Assertion` and not our bearer token. | M5-S4, before M5-AC14 is finalised | A short spike in M5-S4 with the user's Cloudflare account. If claude.ai can't send our bearer token, **keep the bearer mandatory for header-capable clients** (Claude Code, Claude Desktop) and add an opt-in second credential for the tunnel path only: an Access JWT that `web` validates (team JWKS, application AUD) and that maps to a separately revocable MCP identity. This relaxes ADR-0008's "bearer always mandatory" rule, so it needs your explicit OK. |
-| **O5** | **Desktop-only plugins on web** (your request of 2026-11-19; study [PLUGINS-WEB](../spikes/PLUGINS-WEB.md), draft [ADR-0011](../adr/0011-plugins-on-web-compatibility-route.md), status Proposed). Decisions D1 to D6 in the study's §6: build the repackager (D1); grant a `patches/` exception (D2); file upstream from your account (D3); where the repackager runs (D4); report verified plugins to their authors (D5); accept the risk wording (D6). | before any plugin work beyond M2-S4 | **D1 yes** (1a re-tag first, then 1b menus); **D2 not now** (zero patches until an upstream PR is open and agreed); **D3 yes**, imaging and #10291 first; **D4** a page in the `web` container; **D5 yes**; **D6 accept**, off by default. |
+
+### 14.3 Decided after gate 1
+
+| # | Question | The user's decision | Applied in |
+|---|---|---|---|
+| O5 | Desktop-only plugins on web (study [PLUGINS-WEB](../spikes/PLUGINS-WEB.md), decisions D1 to D6) | **2026-11-20.** D1 **yes**: build the plugin repackager, phase 1a (manifest change) first, then 1b (menu script), opt-in per plugin and off by default. D2 **not now**: no `patches/` exception. D3 and D5 **not now**: no upstream PRs or plugin-author requests (U15 to U19 stay unfiled). D4: a page in the `web` container. D6: the risk wording is accepted. | ADR-0011 (Accepted), L2, §2, §5, §6 row 12, M2-S12 |
