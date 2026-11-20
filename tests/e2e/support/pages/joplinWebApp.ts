@@ -1016,10 +1016,18 @@ export class PluginsScreen {
 		await this.page.getByRole('button', { name: 'Clear search', exact: true }).click();
 	}
 
-	// The result card's button (ActionButton.tsx: accessibilityLabel `${title}  ${name}`, two spaces): Install, then Installed.
+	// A search result (SearchPlugins.tsx) has three states: not installed (PluginBox with an Install button); installing, or installed
+	// and not loaded yet (the same box, its button reading Installing... then Installed); installed and loaded (an InstalledPluginBox:
+	// no install button of any state, and one "Installed" chip). The wait is for the third state (docs/test-plans/M2-S4.md, S-AC10 ruling).
+	// The install button's accessible name is `${title}  ${name}` (ActionButton.tsx, two spaces).
 	public async installFromSearch(name: string, timeoutMs: number): Promise<void> {
 		const card = this.card(name).first();
 		await card.getByRole('button', { name: new RegExp(`^Install\\s+${escapeRegExp(name)}$`) }).click();
-		await expect(card.getByRole('button', { name: new RegExp(`^Installed\\s+${escapeRegExp(name)}$`) })).toBeVisible({ timeout: timeoutMs });
+		await expect.poll(async () => {
+			const buttons = await card.getByRole('button', { name: /^(Install|Installing\.\.\.|Installed)\s+/ }).count();
+			if (buttons !== 0) return `button: ${(await card.getByRole('button', { name: /^(Install|Installing\.\.\.|Installed)\s+/ }).first().getAttribute('aria-label')) ?? '?'}`;
+			const chips = await card.getByText('Installed', { exact: true }).count();
+			return chips === 1 ? 'loaded' : `no chip (${chips})`;
+		}, { message: `the "${name}" search result shows its Installed chip and no install button`, timeout: timeoutMs, intervals: [500] }).toBe('loaded');
 	}
 }
