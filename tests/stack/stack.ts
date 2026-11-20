@@ -580,21 +580,36 @@ export interface ExtraWeb {
 	host: string;
 }
 
-// A second `web` container of the image under test, on the stack's `front` network, whose proxy sends the browser's
-// own Host (127.0.0.1:<its published port>) to the server: exactly what the server receives when the proxy's Host
-// rewrite (ADR-0002 rule 1, `header_up Host`) is disabled, because Caddy then passes the incoming Host through. It uses
-// the shipped image and its documented JOPLIN_SERVER_HOST override (no product switch; M1-S4 `ac10-c1-neg` proved the
-// override wins over the default). Hardened like compose.yaml's `web`; labelled with the run, so the sweep removes it.
-// M1-AC21 NEG (docs/test-plans/M1-S7.md).
-export const upWebWithoutHostRewrite = async (state: StackState, label: string): Promise<ExtraWeb> => {
-	const port = await freePort();
+export interface ExtraWebOptions {
+	// unique within the run: part of the container name
+	label: string;
+	// the stack-role label (the sweep and the tests find the container by it): `web-extra`, `web-unoverlaid`, ...
+	role: string;
+	// the host port on 127.0.0.1 (default: a free one)
+	port?: number;
+	// a directory mounted read-only over /srv/www: the bundle this container serves instead of the image's own (M2-S6 D2/D3)
+	mountDist?: string;
+	// make the proxy send the browser's own Host (127.0.0.1:<port>) to the server (see upWebWithoutHostRewrite)
+	ownHostAsServerHost?: boolean;
+	// the part of the container name after the project (default: the role)
+	namePart?: string;
+}
+
+// A further `web` container of the image under test (docs/test-plans/M2-S6.md D3), on the stack's `front` network, published on
+// 127.0.0.1:<port>, hardened like compose.yaml's `web`, labelled with the run and its role so the sweep removes it. Ready when
+// `GET /` is 200 (polled; it stops waiting when the container exits). With `mountDist` it serves that directory instead of the
+// image's bundle: same Caddyfile, headers and entrypoint, only the bytes differ.
+export const upExtraWeb = async (state: StackState, opts: ExtraWebOptions): Promise<ExtraWeb> => {
+	const port = opts.port ?? await freePort();
 	const host = `127.0.0.1:${port}`;
-	const container = `${state.project}-web-nohost-${label}`;
+	const container = `${state.project}-${opts.namePart ?? opts.role}-${opts.label}`;
 	podmanSync(['run', '-d', '--name', container, '--network', state.frontNetwork,
-		'--label', `${testLabel}=stack`, '--label', `${runLabel}=${state.run}`, '--label', `${roleLabel}=web-without-host-rewrite`,
+		'--label', `${testLabel}=stack`, '--label', `${runLabel}=${state.run}`, '--label', `${roleLabel}=${opts.role}`,
 		'--read-only', '--tmpfs', '/tmp', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--memory', '128m',
 		'-p', `${host}:8080`,
-		'-e', 'JOPLIN_SERVER_URL=http://server:22300', '-e', `JOPLIN_SERVER_PUBLIC_URL=${publicUrl}`, '-e', `JOPLIN_SERVER_HOST=${host}`,
+		...(opts.mountDist ? ['-v', `${opts.mountDist}:/srv/www:ro`] : []),
+		'-e', 'JOPLIN_SERVER_URL=http://server:22300', '-e', `JOPLIN_SERVER_PUBLIC_URL=${publicUrl}`,
+		...(opts.ownHostAsServerHost ? ['-e', `JOPLIN_SERVER_HOST=${host}`] : []),
 		state.images.web]);
 	await waitFor(`${container} to serve the bundle`, async () => {
 		const res = await request({ port, path: '/' });
@@ -605,6 +620,14 @@ export const upWebWithoutHostRewrite = async (state: StackState, label: string):
 	});
 	return { container, url: `http://${host}`, host };
 };
+
+// A second `web` container of the image under test whose proxy sends the browser's own Host (127.0.0.1:<its published port>)
+// to the server: exactly what the server receives when the proxy's Host rewrite (ADR-0002 rule 1, `header_up Host`) is
+// disabled, because Caddy then passes the incoming Host through. It uses the shipped image and its documented
+// JOPLIN_SERVER_HOST override (no product switch; M1-S4 `ac10-c1-neg` proved the override wins over the default).
+// M1-AC21 NEG (docs/test-plans/M1-S7.md).
+export const upWebWithoutHostRewrite = async (state: StackState, label: string): Promise<ExtraWeb> =>
+	upExtraWeb(state, { label, role: 'web-without-host-rewrite', namePart: 'web-nohost', ownHostAsServerHost: true });
 
 export const removeContainer = (state: StackState, container: string): void => {
 	mkdirSync(state.logsDir, { recursive: true });
