@@ -6,6 +6,7 @@ import { describe, expect, test } from '@jest/globals';
 import type { BrowserContext } from '@playwright/test';
 import { classifyRequests, decodedPathOf, endOfTestViolations, itemContentRequests, recordNetwork, violationLines } from '../../e2e/support/network.ts';
 import type { NetEntry, NetVerdict } from '../../e2e/support/network.ts';
+import { pluginRepositoryPrefixes } from '../../e2e/support/plugins.ts';
 
 const app = 'http://127.0.0.1:41234';
 const server = 'http://127.0.0.1:41235';
@@ -117,6 +118,27 @@ describe('network policy classifier', () => {
 			expect(decodedPathOf(`${app}/a%3Ab%2Fc`)).toBe('/a:b/c');
 			expect(decodedPathOf(`${app}/a%E0%A4%A`)).toBe('/a%E0%A4%A');
 			expect(decodedPathOf('not a url')).toBeUndefined();
+		});
+	});
+
+	describe('plugin repository (M2-S4 P7a)', () => {
+		test('net-18 the repository prefixes are the six hosts upstream tries', () => {
+			expect([...pluginRepositoryPrefixes]).toEqual([
+				'https://raw.githubusercontent.com/joplin/plugins/master/',
+				'https://api.github.com/repos/joplin/plugins/',
+				'https://cdn.staticaly.com/gh/joplin/plugins/master/',
+				'https://ghproxy.com/https://raw.githubusercontent.com/joplin/plugins/master/',
+				'https://cdn.jsdelivr.net/gh/joplin/plugins@master/',
+				'https://raw.fastgit.org/joplin/plugins/master/',
+			]);
+			for (const p of pluginRepositoryPrefixes) expect(p.endsWith('/')).toBe(true);
+			const entries = [
+				entry('GET', 'https://raw.githubusercontent.com/joplin/plugins/master/manifests.json'),
+				entry('GET', 'https://raw.githubusercontent.com/other/repo/x'),
+			];
+			const lines = endOfTestViolations(entries, 'http://127.0.0.1:1', [...pluginRepositoryPrefixes]);
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toContain('raw.githubusercontent.com/other/repo/x');
 		});
 	});
 });

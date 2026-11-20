@@ -1,7 +1,7 @@
 // Due-date arithmetic for the to-do tests (tests/e2e/support/dueDate.ts; docs/test-plans/M2-S2.md D5): the wall clock of an
 // epoch in a given zone is computed with Intl and an explicit timeZone, so the host's own zone never matters.
 import { describe, expect, test } from '@jest/globals';
-import { datetimeLocalValue, nextWholeMinute, partsIn, wallClockIsUnique } from '../../e2e/support/dueDate.ts';
+import { datetimeLocalValue, localNoonEpoch, nextWholeMinute, partsIn, wallClockIsUnique } from '../../e2e/support/dueDate.ts';
 
 describe('due dates', () => {
 	test('due-01 the Amsterdam wall clock in summer time', () => {
@@ -37,5 +37,30 @@ describe('due dates', () => {
 		const others = [Date.UTC(2026, 9, 24, 23, 59), Date.UTC(2026, 9, 25, 2, 0), Date.UTC(2026, 9, 25, 2, 30), Date.UTC(2026, 2, 29, 1, 30), Date.UTC(2026, 2, 29, 0, 59), Date.UTC(2027, 6, 15, 12, 30)];
 		for (const epoch of others) expect(`${epoch} ${wallClockIsUnique(epoch, 'Europe/Amsterdam')}`).toBe(`${epoch} true`);
 		for (const epoch of repeated) expect(`${epoch} ${wallClockIsUnique(epoch, 'UTC')}`).toBe(`${epoch} true`);
+	});
+
+	describe('local noon (M2-S4 D10)', () => {
+		test('due-08 noon of the local day `days` after the local date', () => {
+			const t = localNoonEpoch(Date.UTC(2026, 10, 19, 18, 0), 1, 'Europe/Amsterdam');
+			expect(t).toBe(Date.UTC(2026, 10, 20, 11, 0));
+			expect(localNoonEpoch(Date.UTC(2026, 10, 19, 18, 0), 2, 'Europe/Amsterdam')).toBe(Date.UTC(2026, 10, 21, 11, 0));
+			expect(partsIn(t, 'Europe/Amsterdam')).toMatchObject({ hour: '12', minute: '00' });
+		});
+
+		test('due-09 across the spring change one local day is 23 hours', () => {
+			const now = Date.UTC(2027, 2, 26, 12);
+			const one = localNoonEpoch(now, 1, 'Europe/Amsterdam');
+			const two = localNoonEpoch(now, 2, 'Europe/Amsterdam');
+			expect(two - one).toBe(23 * 3_600_000);
+			for (const t of [one, two]) expect(partsIn(t, 'Europe/Amsterdam')).toMatchObject({ hour: '12', minute: '00' });
+		});
+
+		test('due-10 across the autumn change one local day is 25 hours', () => {
+			const now = Date.UTC(2026, 9, 23, 12);
+			const one = localNoonEpoch(now, 1, 'Europe/Amsterdam');
+			const two = localNoonEpoch(now, 2, 'Europe/Amsterdam');
+			expect(two - one).toBe(25 * 3_600_000);
+			for (const t of [one, two]) expect(partsIn(t, 'Europe/Amsterdam')).toMatchObject({ hour: '12', minute: '00' });
+		});
 	});
 });

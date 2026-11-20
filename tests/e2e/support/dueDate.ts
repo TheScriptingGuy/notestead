@@ -23,3 +23,20 @@ export const wallClockIsUnique = (epochMs: number, timeZone: string): boolean =>
 	const own = datetimeLocalValue(partsIn(epochMs, timeZone));
 	return [-60, -30, 30, 60].every(m => datetimeLocalValue(partsIn(epochMs + m * 60_000, timeZone)) !== own);
 };
+
+// The epoch of 12:00 local time on the local calendar day `days` after the local date of `nowMs` (docs/test-plans/M2-S4.md
+// D10). Noon is never in a skipped or repeated hour. Found by searching the hour offsets -14..+14; throws unless exactly one
+// instant matches.
+export const localNoonEpoch = (nowMs: number, days: number, timeZone: string): number => {
+	const today = partsIn(nowMs, timeZone);
+	const target = new Date(Date.UTC(Number(today.year), Number(today.month) - 1, Number(today.day) + days));
+	const wanted = `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, '0')}-${String(target.getUTCDate()).padStart(2, '0')}T12:00`;
+	const utcNoon = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate(), 12);
+	const matches: number[] = [];
+	for (let offset = -14; offset <= 14; offset++) {
+		const candidate = utcNoon + offset * 3_600_000;
+		if (datetimeLocalValue(partsIn(candidate, timeZone)) === wanted) matches.push(candidate);
+	}
+	if (matches.length !== 1) throw new Error(`${matches.length} instants are ${wanted} in ${timeZone}`);
+	return matches[0];
+};

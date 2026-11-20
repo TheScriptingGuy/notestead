@@ -153,3 +153,50 @@ export const expectNotStoredLocally = async (webApp: WebApp, needle: string, wha
 	}
 	if (reads < 3) throw new Error(`the database file could not be read (${reads} reads): the absence of ${what} is not proven`);
 };
+
+export interface LocalFile { path: string; size: number; sha256: string }
+
+// Every file of the origin's OPFS whose base name is `baseName`, with its size and sha256 (lowercase hex), and never its content
+// (docs/test-plans/M2-S4.md, harness items). Like `scanLocalProfile`, it closes the app page (the app's worker ends and its OPFS
+// sync access handles are released) and reads from a same-origin page that runs no app code. The caller must not use the app
+// page afterwards. A file that cannot be read yet is retried for 30 s.
+export const localFilesNamed = async (webApp: WebApp, baseName: string, opts?: { timeoutMs?: number }): Promise<LocalFile[]> => {
+	await webApp.page.close();
+	const probe = await webApp.context.newPage();
+	let last: string[] = [];
+	try {
+		await probe.goto(new URL('/manifest.json', webApp.baseURL).href);
+		return await waitFor(`the OPFS files named ${baseName} to be readable`, async () => {
+			const found = await probe.evaluate(async wanted => {
+				interface Handle { kind: string; entries?: () => AsyncIterable<[string, Handle]>; getFile?: () => Promise<{ size: number; arrayBuffer: () => Promise<ArrayBuffer> }> }
+				const g = globalThis as unknown as { navigator: { storage: { getDirectory: () => Promise<Handle> } }; crypto: { subtle: { digest: (a: string, d: ArrayBuffer) => Promise<ArrayBuffer> } } };
+				const files: { path: string; size: number; sha256: string }[] = [];
+				const errors: string[] = [];
+				const walk = async (dir: Handle, path: string): Promise<void> => {
+					for await (const [name, handle] of dir.entries?.() ?? []) {
+						const p = `${path}/${name}`;
+						if (handle.kind === 'directory') {
+							await walk(handle, p);
+						} else if (name === wanted) {
+							try {
+								const data = await (await handle.getFile?.())!.arrayBuffer();
+								const digest = new Uint8Array(await g.crypto.subtle.digest('SHA-256', data));
+								files.push({ path: p, size: data.byteLength, sha256: Array.from(digest, b => b.toString(16).padStart(2, '0')).join('') });
+							} catch (error) {
+								errors.push(`${p}: ${(error as { name?: string }).name ?? 'error'}`);
+							}
+						}
+					}
+				};
+				await walk(await g.navigator.storage.getDirectory(), '');
+				return { files, errors };
+			}, baseName);
+			last = found.errors;
+			return found.errors.length > 0 ? undefined : found.files;
+		}, { timeoutMs: opts?.timeoutMs ?? 30_000, intervalMs: 1_000 });
+	} catch (error) {
+		throw new Error(`${(error as Error).message} (last read errors: ${JSON.stringify(last)})`);
+	} finally {
+		await probe.close();
+	}
+};

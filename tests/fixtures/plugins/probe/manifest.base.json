@@ -1,0 +1,1 @@
+{ "manifest_version": 1, "version": "1.0.0", "app_min_version": "3.5", "author": "Notestead tests", "description": "Notestead test probe (M2-S4 NEG 2): creates one note titled with its marker on start." }

@@ -1,0 +1,40 @@
+{
+	"//": "Fixture for M2-AC9 (docs/test-plans/M2-S4.md, Fixture provenance). The user's repeating-todos plugin, pinned by version and sha256. Fetched read-only on 2026-11-19. No secrets, no note content.",
+	"id": "com.github.TheScriptingGuy.joplin-plugin-repeating-todos",
+	"name": "Repeating To-Dos",
+	"version": "2.1.2",
+	"file": "repeating-todos-2.1.2.jpl",
+	"sha256": "df95494a42e02b95dade2d653fc247380457ff1ff375105c16f66bf5bd7d42eb",
+	"size": 94208,
+	"platforms": ["desktop", "mobile"],
+	"entries": ["gui/dialog/dialog_addon.js", "gui/dialog/dialog.css", "gui/dialog/dialog.html", "index.js", "manifest.json"],
+	"license": {
+		"file": "LICENSE",
+		"spdx": "GPL-3.0-only",
+		"sha256": "d3b74b0a2d111a3f8bad5ffbee0ea2d19f28a5f5cb0d1991267c1f0f243f1e96",
+		"note": "The LICENSE file of the tag and of the npm package is the GPL v3 text; the package.json of the same release declares MIT. Both are compatible with AGPL-3.0-or-later. Corresponding source: sourceOffer."
+	},
+	"sourceOffer": "https://github.com/TheScriptingGuy/Joplin-Repeating-Todos-Plugin/tree/2.1.2",
+	"release": {
+		"url": "https://github.com/TheScriptingGuy/Joplin-Repeating-Todos-Plugin/releases/tag/2.1.2",
+		"tag": "2.1.2",
+		"commit": "7056a30dd67c014b6b63e961253560c1084c8a89",
+		"publishedAt": "2026-07-31T17:43:46Z",
+		"assets": "none: the release has only GitHub's source archives, so the .jpl comes from the release's npm publish below"
+	},
+	"artifact": {
+		"npm": "joplin-plugin-repeating-to-dos-v2@2.1.2",
+		"tarball": "https://registry.npmjs.org/joplin-plugin-repeating-to-dos-v2/-/joplin-plugin-repeating-to-dos-v2-2.1.2.tgz",
+		"shasum": "b30f4eb6e453a8b7007224eb2828a57fc8b4e1e6",
+		"integrity": "sha512-2xoYwlmMux+cCM4XAtqKQbpiplC0OLoaPJZIUgW1A6mP4oZL7AAprYq/he4rQfToxPdjzJEPk5mFIZFOsLVQhg==",
+		"path": "package/publish/com.github.TheScriptingGuy.joplin-plugin-repeating-todos.jpl",
+		"provenance": "SLSA v1 attestation: workflow .github/workflows/publish.yml of the plugin repo at refs/tags/2.1.2; subject sha512 equals the tarball's (the Sigstore signature itself was not verified)"
+	},
+	"crossCheck": {
+		"officialRepository": "https://raw.githubusercontent.com/joplin/plugins/master/plugins/com.github.TheScriptingGuy.joplin-plugin-repeating-todos/plugin.jpl",
+		"manifestsJson": "https://raw.githubusercontent.com/joplin/plugins/master/manifests.json",
+		"publishHash": "sha256:df95494a42e02b95dade2d653fc247380457ff1ff375105c16f66bf5bd7d42eb",
+		"publishCommit": "master:7056a30dd67c014b6b63e961253560c1084c8a89",
+		"result": "the npm .jpl, the official repository's plugin.jpl and _publish_hash are byte-identical (sha256 above)"
+	}
+}

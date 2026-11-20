@@ -10,6 +10,7 @@ RUN test -n "${JOPLIN_CLI_VERSION}" \
  && joplin --profile /tmp/version-probe version | grep -F "joplin ${JOPLIN_CLI_VERSION}" \
  && rm -rf /tmp/version-probe /root/.npm
 COPY device.mjs /fixture/device.mjs
+COPY batch.mjs /fixture/batch.mjs
 USER node
 ENV HOME=/tmp/home
 ENTRYPOINT ["node", "/fixture/device.mjs"]
