@@ -1,5 +1,12 @@
 /* Notestead overlay (ADR-0010): the AGPL-3.0 section 13 "Source" link added to every page. Small, fixed in the
-   bottom-left corner, keyboard reachable. Its placement is checked against upstream controls by the M2 E2E suite. */
+   bottom-left corner, keyboard reachable. Its placement is checked against upstream controls by the M2 E2E suite.
+   The app root stops 18px above the bottom edge, so the link sits in a strip no upstream control occupies (the editor
+   toolbar's "Attach file" and the side menu's bottom buttons are otherwise at the bottom-left). The 18px matches the
+   link's height (11px * 1.4 line + 2px padding, rounded up). */
+body > #root {
+	height: calc(100% - 18px);
+}
+
 .notestead-source-link {
 	position: fixed;
 	left: 0;
