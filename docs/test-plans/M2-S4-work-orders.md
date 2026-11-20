@@ -449,6 +449,56 @@ In each body, list which specs now pass, and the log paths.
 
 Then **stop and report to the orchestrator** that brief CC-NET (plan) can be dispatched. **Continue with WO-7 and WO-8 in the meantime.** NT-03 stays red until CC-NET lands. That is expected, and not a stop.
 
+## WO-7a: The E2EE device's second sync without the local lock (RED → GREEN; plan "Planner ruling on the S-NEG1c HARD STOP")
+Do this **before** continuing WO-7. The sensitivity runs already done stand.
+
+0. **The option exists in CLI 3.7.1** (light):
+   ```sh
+   podman run --rm --entrypoint joplin localhost/notestead-test-device:3.7.1 --profile /tmp/p help sync > test-results/verify/m2-s4/green/wo7a-help-sync.log 2>&1
+   ```
+   The output must list `--use-lock <value>`. Otherwise: **HARD STOP**.
+
+**RED: `tests/acceptance/m2-s4/device-batch.test.mts` (new, node:test).** It loads the builder with a dynamic import:
+
+```ts
+const { deviceBatch } = await import(pathToFileURL(join(repoRoot, 'tests/fixtures/m1-s5/device/batch.mjs')).href) as { deviceBatch: (plan: Plan, extras: unknown, attachmentPath: string) => string };
+```
+
+Declare `Plan` locally, with the fields `device.mjs` uses.
+- **`DEV-01 the batch syncs twice, the second time without the local lock`:**
+  - `lines = deviceBatch({ masterPassword: 'pw', folder: 'F', notes: [{ title: 'N', body: 'B' }] }, null, '/x').split('\n')`;
+  - the lines that start with `sync` are exactly `['sync', 'sync --use-lock 0']`, in that order;
+  - the first line starts with `e2ee enable --password`;
+  - the last line is `ls --format json`.
+- **`DEV-02 extras keep their place before the syncs`:** with extras like those `device.mjs` builds (to-do, tag, attachment), every `mktodo`, `tag add` and `attach` line comes before the first `sync`.
+
+**RED run:** `run test-results/verify/m2-s4/red/wo7a-dev.log node --test --test-concurrency=1 --test-reporter=spec tests/acceptance/m2-s4/device-batch.test.mts`.
+- **Expected:** `Cannot find module …/batch.mjs` (ERR_MODULE_NOT_FOUND).
+- **Otherwise: HARD STOP.**
+- Check `corepack yarn tsc -p tests/acceptance/tsconfig.json` too: only that import may fail, if at all.
+
+**Commit 1:** `test(acceptance): failing check that the E2EE device's second sync skips the local lock (M2-S4 HF-1)`.
+
+**GREEN:**
+- **`tests/fixtures/m1-s5/device/batch.mjs` (new):** `export const deviceBatch = (plan, extras, attachmentPath) => [...].join('\n')`. Move the batch array out of `device.mjs` unchanged, except that the second `'sync'` becomes `'sync --use-lock 0'`. Extend the comment with: `the second sync skips the local lock: the CLI releases the first sync's lock without awaiting it (command-sync.ts:163), so a second sync in the same batch can see it held (M2-S4 HF-1)`.
+- **`device.mjs`:** `import { deviceBatch } from './batch.mjs';` and use it. Nothing else changes: the value checks, the output checks and the item lookups stay as they are.
+- **`Containerfile`:** add `COPY batch.mjs /fixture/batch.mjs` beside the `device.mjs` line.
+
+**Runs:**
+- the RED command under `green/`, where it must pass;
+- `corepack yarn eslint --max-warnings 0 tests/fixtures/m1-s5/device tests/acceptance/m2-s4`;
+- the harness set (`corepack yarn jest tests/unit/harness tests/integration/harness`).
+
+**The device image must be rebuilt**, because the script is baked into it. The next heavy run (S-NEG1c, below) runs **without** `NOTESTEAD_DEVICE_IMAGE`, keeping the other two from `$IMG`:
+
+```sh
+IMG2="NOTESTEAD_WEB_IMAGE=localhost/notestead-web:stack-test NOTESTEAD_HEADLESS_IMAGE=localhost/notestead-headless:stack-test"
+```
+
+With `NOTESTEAD_KEEP_IMAGE=1`, the harness rebuilds and keeps `localhost/notestead-test-device:3.7.1`. **RECORD** the new image id, and the old one if it is left untagged. Never remove it. After that run, `$IMG` is valid again.
+
+**Commit 2:** `test(harness): the E2EE device's second sync skips the local lock, removing a batch race (M2-S4 HF-1)`. Commit it before the S-NEG1c run (sensitivity-after-GREEN rule).
+
 ## WO-7: Sensitivity runs (no commits)
 Each is a temporary edit. Run each one alone, with `env $IMG`, log it under `sens/<id>.log`, and copy its junit. Revert with `git checkout -- <files>`, and check `git status --short` is clean before the next one.
 
