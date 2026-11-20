@@ -21,7 +21,15 @@ on:
   pull_request:
     paths-ignore:
       - 'docs/**'
+  # M2-S4 D8 / CC-NET: the nightly run includes the @network E2E tests (they need the internet), at an off-peak time.
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      network:
+        description: 'Include the @network E2E tests (they download from GitHub)'
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -150,6 +158,47 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # CC-NET: the network step diffs against the previous push or the merge base, so it needs the history.
+          fetch-depth: 0
+
+      # CC-NET (M2-S4 D8): @network E2E tests run nightly, on request and when the event changes the upstream pin
+      # (a Joplin bump may change the plugin repository). Every other run leaves them out (playwright.config.ts).
+      # Event data comes in through env, never interpolated into the script.
+      - name: Decide whether the @network E2E tests run
+        id: network
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_NETWORK: ${{ github.event.inputs.network }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pin=upstream/joplin-version.json
+          reason=''
+          changed() { git diff --name-only "$@" -- 2>/dev/null | grep -qx "$pin"; }
+          if [ "$EVENT" = schedule ]; then
+            reason='nightly schedule'
+          elif [ "$EVENT" = workflow_dispatch ] && [ "$DISPATCH_NETWORK" = true ]; then
+            reason='requested by workflow_dispatch'
+          elif [ "$EVENT" = push ]; then
+            if [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != '' ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              range=("$BEFORE" "$GITHUB_SHA")
+            else
+              git fetch --no-tags origin main 2>/dev/null || true
+              base=$(git merge-base origin/main "$GITHUB_SHA" 2>/dev/null || true)
+              range=("${base:-$GITHUB_SHA~1}" "$GITHUB_SHA")
+            fi
+            if changed "${range[@]}"; then reason="push changes $pin"; fi
+          elif [ "$EVENT" = pull_request ]; then
+            if changed "$PR_BASE...$PR_HEAD"; then reason="pull request changes $pin"; fi
+          fi
+          if [ -n "$reason" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+            echo "network tests: included ($reason)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'network tests: excluded' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Node and install
         id: setup
@@ -240,6 +289,7 @@ jobs:
         timeout-minutes: 60
         env:
           NOTESTEAD_WEB_ARTIFACT: ${{ runner.temp }}/web-bundle
+          NOTESTEAD_NETWORK_TESTS: ${{ steps.network.outputs.enabled == 'true' && '1' || '0' }}
         run: corepack yarn playwright test
 
       # C1-R2: after every test step, whatever happened (failure, timeout, cancellation). Exit 0 = safe to upload.
