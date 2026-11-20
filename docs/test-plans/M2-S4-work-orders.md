@@ -456,7 +456,7 @@ Each is a temporary edit. Run each one alone, with `env $IMG`, log it under `sen
 |---|---|---|---|
 | S-AC9a | `plugin-jpl.spec.ts` step 0: comment out R's `PUT user_data`, and the seed-check line for it | `M2-AC9-01` | step 6 (R unchecked, 120 s) |
 | S-AC9b | step 7: `expectedDue` uses `+3` | `M2-AC9-01` | step 7 `todo_due` (expected vs received) |
-| S-AC9c | **exactly the five steps of the plan's "Planner ruling on the S-AC9c HARD STOP"** (Delete, confirm in `prompt-dialog`, poll for card gone or "Deleted", close, back) | `M2-AC9-01` | step 4 `Installed (1):` |
+| S-AC9c | **exactly steps 1 to 3 of the plan's "Planner ruling on the S-AC9c HARD STOP", then steps 4 to 7 of "Planner ruling on the second S-AC9c HARD STOP"** (Delete, confirm `OK` in `prompt-dialog`, the dialog with `Install Repeating To-Dos` and no switch, its `Close`, "No plugins are installed.", back). No `infoDialog()`, `enabledSwitch()` or `closeInfo()` after the delete | `M2-AC9-01` | step 4 `Installed (1):` |
 | S-NEG1a | add `pluginNoteToolbarLabel` to check 1's forbidden list only | `M2-AC9-01` | NEG1 check 1 (role-based names) |
 | S-NEG1b | add `pluginNoteToolbarLabel` to check 2's forbidden list only | `M2-AC9-01` | NEG1 check 2, `"Open Recurrence Dialog" rendered in text (action menu open)` |
 | S-NEG1c | add `Configuration` to check 3's forbidden list only | `M2-AC9-01` | NEG1 check 3, `(side menu open)` |
