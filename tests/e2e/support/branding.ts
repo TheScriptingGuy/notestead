@@ -213,3 +213,15 @@ export const openStaticPage = async (context: BrowserContext, origin: string, wh
 	}
 	return page;
 };
+
+// The text of the page error that upstream's production bundle throws when dev mode is on (it requires the react-refresh runtime,
+// which a production webpack build stubs with a throw; RU-1). The un-overlaid bundle on a localhost origin must show it (M2-AC13 NEG);
+// the overlaid bundle must never show it (M2-AC13 POS).
+export const reactRefreshCrash = 'React Refresh runtime should not be included in the production bundle';
+
+// Page errors that upstream's own fresh-profile start raises, whatever the origin and dev mode (RU-5). Each entry carries its
+// upstream citation. An unlisted page error at start fails the test; entries are added only by a planner ruling.
+export const knownUpstreamStartPageErrors: { text: string; cite: string }[] = [
+	// upstream:packages/lib/services/DecryptionWorker.ts:91 at e41516e6 (v3.7.21): the worker runs before an encryption service is set
+	{ text: 'DecryptionWorker.encryptionService_ is not set!!', cite: 'upstream:packages/lib/services/DecryptionWorker.ts:91 at e41516e6' },
+];

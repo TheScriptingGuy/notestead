@@ -15,8 +15,7 @@ import { JoplinWebApp, appStartTimeoutMs } from '../support/pages/joplinWebApp.t
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { waitFor } from '../../support/poll.ts';
 import { productName } from '../../support/branding.ts';
-
-const reactRefreshError = '[pageerror] React Refresh runtime should not be included in the production bundle.';
+import { knownUpstreamStartPageErrors, reactRefreshCrash } from '../support/branding.ts';
 
 interface DevFacts { origin: string; dev: unknown; hasJoplin: boolean; env: unknown; title: string }
 
@@ -38,7 +37,6 @@ test.describe('M2-AC13 dev mode follows the bundle, not the origin', () => {
 		const pos = await appContexts.open(origin, 'pos');
 		await new JoplinWebApp(pos.page).open(origin);
 		const posFacts = await readFacts(pos);
-		expect(pos.console.filter(l => l.includes('[pageerror]')), 'the overlaid bundle starts without a page error on the localhost origin').toEqual([]);
 		expect(posFacts.origin).toContain('localhost');
 		expect(posFacts.dev, 'window.__DEV__ with the overlay').toBe(false);
 		expect(posFacts.hasJoplin, '"joplin" in window: upstream exposes it in dev mode only').toBe(false);
@@ -47,7 +45,11 @@ test.describe('M2-AC13 dev mode follows the bundle, not the origin', () => {
 		const posPaths = await opfsPaths(pos);
 		expect(posPaths, 'the production database file').toContain('/joplin.sqlite.sqlite3');
 		expect(posPaths.filter(p => p.includes('-20240127-1')), 'no dev-mode database file').toEqual([]);
-		expect(pos.console.filter(l => l.includes('[pageerror]')), 'no page error up to the end of the positive phase').toEqual([]);
+		// RU-5: every page error of the positive phase is written down; none is the dev-path crash, the rest are upstream's known start errors
+		const posPageErrors = pos.console.filter(l => l.includes('[pageerror]'));
+		test.info().annotations.push({ type: 'pos-pageerrors', description: JSON.stringify(posPageErrors) });
+		expect(posPageErrors.filter(l => l.includes(reactRefreshCrash)), 'the overlaid bundle never reaches upstream\'s dev path').toEqual([]);
+		expect(posPageErrors.filter(l => !knownUpstreamStartPageErrors.some(k => l.includes(k.text))), 'page errors that are not upstream\'s known start errors (tests/e2e/support/branding.ts)').toEqual([]);
 		await appContexts.close(pos);
 		extraWebs.stop(overlaid);
 
@@ -73,7 +75,7 @@ test.describe('M2-AC13 dev mode follows the bundle, not the origin', () => {
 		expect(negFacts.origin, 'the same origin as the positive phase').toBe(posFacts.origin);
 		expect(negFacts.dev, 'window.__DEV__ without the overlay').toBe(true);
 		expect(negFacts.title, 'document.title without the overlay').toBe('Joplin DEV');
-		await expect.poll(() => neg.console.some(l => l.endsWith(reactRefreshError)), { timeout: 60_000, message: 'the un-overlaid bundle entered upstream\'s dev path (React Refresh pageerror)' }).toBe(true);
+		await expect.poll(() => neg.console.some(l => l.endsWith(`[pageerror] ${reactRefreshCrash}.`)), { timeout: 60_000, message: 'the un-overlaid bundle entered upstream\'s dev path (React Refresh pageerror)' }).toBe(true);
 		const negPaths = await opfsPaths(neg).catch((error: Error) => [`(unreadable: ${error.message})`]);
 		test.info().annotations.push({ type: 'neg-opfs', description: JSON.stringify(negPaths) });
 		test.info().annotations.push({ type: 'origins', description: JSON.stringify({ pos: posFacts.origin, neg: negFacts.origin }) });
