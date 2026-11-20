@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deviceBatch } from './batch.mjs';
 
 const readStdin = async () => {
 	const chunks = [];
@@ -63,24 +64,7 @@ await joplin(profile, ['config', '--import'], JSON.stringify({
 	'sync.9.password': plan.password,
 }));
 
-const batch = [
-	`e2ee enable --password "${plan.masterPassword}"`,
-	`mkbook "${plan.folder}"`,
-	`use "${plan.folder}"`,
-	...plan.notes.flatMap(n => [`mknote "${n.title}"`, `set "${n.title}" body "${n.body}"`]),
-	...(extras ? [
-		`mktodo "${extras.todo.title}"`,
-		`set "${extras.todo.title}" todo_due ${extras.todo.due}`,
-		`tag add "${extras.tag.title}" "${extras.tag.note}"`,
-		`mknote "${extras.attachment.note}"`,
-		`attach "${extras.attachment.note}" "${attachmentPath}"`,
-	] : []),
-	// a real device syncs again; the first sync after `e2ee enable` can leave an item unsent (M2-S3 WO-11: a seed whose folder
-	// never reached the server)
-	'sync',
-	'sync',
-	'ls --format json',
-].join('\n');
+const batch = deviceBatch(plan, extras, attachmentPath);
 const batchFile = '/tmp/home/device-batch.txt';
 writeFileSync(batchFile, `${batch}\n`, { mode: 0o600 });
 const output = await joplin(profile, ['batch', batchFile]);
