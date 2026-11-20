@@ -122,6 +122,12 @@ The plan's "Planner rulings on the WO-4 HARD STOP and observations" is binding. 
 6. **Run:** `e2e_pre; T=90m run test-results/verify/m2-s6/run/m2-s6-r2.log env $IMG corepack yarn playwright test tests/e2e/m2-s6`. Expected: everything passes except `M2-S6-ADR10-01`/`-02` (PRODUCT FAILURE R1; record the complete list of covered controls over all five states). The WO-4 outcome rules apply otherwise; the RU-1 NEG failing at steps 2 to 4 is a **HARD STOP**.
 7. Then WO-5 as written, plus `S-LOGO`. `S-ADR10` is runnable now (RU-3): its pass criterion is that the failure message names `Synchronise` in state (2), in addition to the recorded `Attach file`.
 
+## WO-4S: Resume after ruling RU-5 (2026-11-20)
+1. `tests/e2e/support/branding.ts`: `knownUpstreamStartPageErrors` (one entry, the RU-5 text, with its citation in a comment) and `reactRefreshCrash` (the RU-1 step 4 text, shared by POS and NEG). `dev-mode.spec.ts` POS: RU-5 assertions 1 and 2 and the `pos-pageerrors` annotation, replacing "no `[pageerror]`". eslint and tsc clean. **Commit:** `test(e2e): M2-AC13 POS tolerates only cited upstream start errors (M2-S6 RU-5)`.
+2. **Verify the NEG first, alone:** `e2e_pre; T=30m run test-results/verify/m2-s6/run/ac13-r3.log env $IMG corepack yarn playwright test tests/e2e/m2-s6/dev-mode.spec.ts`. It must pass with POS and NEG (annotations `origins`, `pos-pageerrors`, `neg-opfs` present). A NEG failure at RU-1 steps 2 to 4, or any unlisted POS page error: **HARD STOP**.
+3. Then WO-5 (every row of the plan's sensitivity table except none deferred: run `S-AC11a/b/c`, `S-AC12a/b`, `S-AC13a`, `S-OPFS3`, `S-LOGO` and `S-ADR10`, the last with WO-4R step 7's criterion).
+4. Report to the orchestrator: the commits, the ac13-r3 result, each sensitivity's failure site, L20 count, RECORDs, and the SE work list (R1 only, unless something new appears: `Attach file` in state (4), narrow (0,796) 52x48 35%, wide (0,752) 48x48 36%; Source link 50x17). The SE starts after that report.
+
 ## WO-5: Sensitivity runs (no commits)
 Each is a temporary edit, run alone (`-g <test id>`), with `e2e_pre` and `env $IMG`, logged under `sens/<id>.log`, junit copied, reverted with `git checkout -- <files>`, and `git status --short` clean before the next. The table is the plan's "Sensitivity runs". `S-OPFS3` runs `tests/e2e/harness/opfs-files.spec.ts -g M2-S6-OPFS-03`.
 - **A sensitivity run that passes, or fails elsewhere:** **HARD STOP**.
