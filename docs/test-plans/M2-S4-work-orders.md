@@ -57,6 +57,8 @@ These orders implement `docs/test-plans/M2-S4.md`. Read that plan first. Its Fin
   export NOTESTEAD_WEB_ARTIFACT=$HOME/joplin-web-app-work/ci-evidence/37285783648/extracted/web-bundle-v3.7.21
   export NOTESTEAD_KEEP_IMAGE=1
   run() { log=$1; shift; mkdir -p "$(dirname "$log")"; s=$(date +%s); LANG=C.UTF-8 timeout "${T:-100m}" "$@" > "$log" 2>&1; c=$?; echo "# duration $(( $(date +%s) - s )) s; exit $c" >> "$log"; return $c; }
+  # before EVERY E2E run (R5 ruling, 2026-11-20): move earlier stack logs out of the scanned tree
+  e2e_pre() { [ -d test-results/e2e/stack ] && mkdir -p test-results/verify/m2-s4/stale-stack && mv test-results/e2e/stack "test-results/verify/m2-s4/stale-stack/$(date +%s)"; true; }
   IMG="NOTESTEAD_WEB_IMAGE=localhost/notestead-web:stack-test NOTESTEAD_HEADLESS_IMAGE=localhost/notestead-headless:stack-test NOTESTEAD_DEVICE_IMAGE=localhost/notestead-test-device:3.7.1"
   # first heavy run (builds and keeps the images):  T=60m run test-results/verify/m2-s4/green/x.log corepack yarn playwright test <spec>
   # later heavy runs:                               T=60m run test-results/verify/m2-s4/green/x.log env $IMG corepack yarn playwright test <spec>
@@ -454,13 +456,14 @@ Each is a temporary edit. Run each one alone, with `env $IMG`, log it under `sen
 |---|---|---|---|
 | S-AC9a | `plugin-jpl.spec.ts` step 0: comment out R's `PUT user_data`, and the seed-check line for it | `M2-AC9-01` | step 6 (R unchecked, 120 s) |
 | S-AC9b | step 7: `expectedDue` uses `+3` | `M2-AC9-01` | step 7 `todo_due` (expected vs received) |
-| S-AC9c | after step 3: `openInfo(fx.name)`, then press "Delete", confirming if asked | `M2-AC9-01` | step 4 `Installed (1):` |
+| S-AC9c | **exactly the five steps of the plan's "Planner ruling on the S-AC9c HARD STOP"** (Delete, confirm in `prompt-dialog`, poll for card gone or "Deleted", close, back) | `M2-AC9-01` | step 4 `Installed (1):` |
 | S-NEG1a | add `pluginNoteToolbarLabel` to check 1's forbidden list only | `M2-AC9-01` | NEG1 check 1 (role-based names) |
 | S-NEG1b | add `pluginNoteToolbarLabel` to check 2's forbidden list only | `M2-AC9-01` | NEG1 check 2, `"Open Recurrence Dialog" rendered in text (action menu open)` |
 | S-NEG1c | add `Configuration` to check 3's forbidden list only | `M2-AC9-01` | NEG1 check 3, `(side menu open)` |
 | S-NEG2 | `plugin-platforms.spec.ts`: build `desktop` with `platforms` forced to `['desktop', 'mobile']` (a temporary option on `buildProbeJpl`, reverted afterwards) | `M2-AC9-03` | the `Incompatible` chip expectation |
 | S-AC10 | `plugin-repository.spec.ts`: change the last hex digit of `hash` | `M2-AC10`, with `NOTESTEAD_NETWORK_TESTS=1` | the OPFS sha256 assertion |
 
+- **Run each sensitivity by hand, one at a time** (no queued driver), with `e2e_pre` first.
 - **A sensitivity run that passes, or fails elsewhere:** **HARD STOP** (the test cannot see what the plan says it sees).
 - **A qualifying L20 failure during a sensitivity run:** an occurrence (D12), not a sensitivity result. Record it, and re-run that sensitivity **once**, unchanged: an L20 hit says nothing about the sensitivity. If the second attempt also hits L20: **HARD STOP**.
 
