@@ -112,10 +112,20 @@ These orders implement `docs/test-plans/M2-S6.md`. Read that plan first. Its Fin
 - Any other failure whose message names a product fact: **PRODUCT FAILURE**. A failure inside harness code (an exception in a helper, a locator that never matches an upstream control that the `ariaSnapshot` shows under another name): **HARD STOP**.
 - A qualifying L20 failure: plan D9.
 
+## WO-4R: Resume after the planner's rulings RU-1 to RU-4 (2026-11-20)
+The plan's "Planner rulings on the WO-4 HARD STOP and observations" is binding. Start from the uncommitted WO-4 tree (`tests/e2e/m2-s6/*.spec.ts`, `tests/e2e/support/branding.ts`, `closeSyncWizard` in `pages/joplinWebApp.ts`); the planner committed only `docs/test-plans/M2-S6*.md`, including your Findings section as you wrote it.
+1. **RU-1, `dev-mode.spec.ts`:** rewrite the NEG phase exactly as RU-1 steps 1 to 6; add POS's "no `[pageerror]`" assertion. If `appContexts` fails a test on page errors at teardown, add an opt-out for one context with a recorded reason (annotation), modelled on `allowSqliteFailures`, and use it for the NEG context only. That is a shared fixture change: the WO-rules regressions apply.
+2. **RU-2, `branding.spec.ts` and `source-offer.spec.ts`:** the app page first, then `closed.html` and `just-one-client.html?no-retry=1` in second pages of the same context, each with `toHaveURL` and its upstream `h1` first; the main page's `Enter` last. The same order in `M2-AC12-03` on the un-overlaid container.
+3. **RU-3, `source-link-placement.spec.ts`:** collect every state's findings, assert one list at the end; all five states visited on both viewports. A state that cannot be reached or set up: **HARD STOP**.
+4. **RU-4:** add `tests/e2e/m2-s6/limitations.spec.ts` with `M2-S6-LOGO-01` (plan AC table): fresh profile via `webApp`, `JoplinWebApp.open`, then inside `getByRole('button', { name: /^Joplin Cloud\b/ })` the `svg` `stop` elements' `stop-color` (attribute or computed style; react-native-svg on web renders real SVG) include `#3873DB` and `#163467` case-insensitively, and inside `getByRole('button', { name: /^Other\b/ })` none does. If the logo is not rendered as an inline `svg` with those stops: **HARD STOP** (record its `ariaSnapshot` and the button's `innerHTML` length, not its markup).
+5. **Commit** (eslint and tsc clean first): `test(e2e): M2-S6 branding, source offer, dev mode, Source-link placement and the Joplin Cloud logo limitation (M2-AC11-13)`. If you changed a shared fixture, commit that first as `test(harness): …` with its own regression logs.
+6. **Run:** `e2e_pre; T=90m run test-results/verify/m2-s6/run/m2-s6-r2.log env $IMG corepack yarn playwright test tests/e2e/m2-s6`. Expected: everything passes except `M2-S6-ADR10-01`/`-02` (PRODUCT FAILURE R1; record the complete list of covered controls over all five states). The WO-4 outcome rules apply otherwise; the RU-1 NEG failing at steps 2 to 4 is a **HARD STOP**.
+7. Then WO-5 as written, plus `S-LOGO`. `S-ADR10` is runnable now (RU-3): its pass criterion is that the failure message names `Synchronise` in state (2), in addition to the recorded `Attach file`.
+
 ## WO-5: Sensitivity runs (no commits)
 Each is a temporary edit, run alone (`-g <test id>`), with `e2e_pre` and `env $IMG`, logged under `sens/<id>.log`, junit copied, reverted with `git checkout -- <files>`, and `git status --short` clean before the next. The table is the plan's "Sensitivity runs". `S-OPFS3` runs `tests/e2e/harness/opfs-files.spec.ts -g M2-S6-OPFS-03`.
 - **A sensitivity run that passes, or fails elsewhere:** **HARD STOP**.
-- A sensitivity whose target test is a recorded PRODUCT FAILURE (for example `S-ADR10` while `ADR10-02` already fails) is run after the SE's fix, in WO-6, not now; **RECORD** it as deferred.
+- A sensitivity whose target test is a recorded PRODUCT FAILURE is run after the SE's fix, in WO-6, not now, and **RECORD**ed as deferred. Exception: `S-ADR10` (WO-4R step 7).
 - A qualifying L20 failure during a sensitivity: an occurrence, re-run that sensitivity **once**; a second L20 hit: **HARD STOP**.
 
 **End of the RED phase.** Report to the orchestrator: the commits, the per-test outcomes of WO-3 and WO-4, the PRODUCT FAILURE list (the SE's work), the sensitivities done and deferred, the L20 count, the RECORDs. Then stop; the SE works next.
