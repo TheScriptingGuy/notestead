@@ -1,6 +1,6 @@
 # PLUGINS-WEB: desktop-only plugins and the missing plugin APIs in the web app (feasibility study)
 
-Requested by the user on 2026-11-19: fix limitation L2 and make desktop-only plugins and the missing plugin APIs work in the web app, "even with a big refactor". This is a **study only**: no code was written, and nothing changes until the user decides (§8). The draft decision is [ADR-0011](../adr/0011-plugins-on-web-compatibility-route.md) (status **Proposed**).
+Requested by the user on 2026-11-19: fix limitation L2 and make desktop-only plugins and the missing plugin APIs work in the web app, "even with a big refactor". This is a **study only**: no code was written. The user decided on 2026-11-19 (§6, "The user's answers"), and [ADR-0011](../adr/0011-plugins-on-web-compatibility-route.md) is **Accepted**; the work is story M2-S12 in [`docs/backlog/M2.md`](../backlog/M2.md).
 
 Upstream citations are `upstream:<path>:<line>` at `v3.7.21` (`e41516e66`, the pin in `upstream/joplin-version.json`), read in `~/joplin-web-app-work/upstream-joplin`. QA's M2-S4 findings (P1 to P8) are in [`docs/test-plans/M2-S4.md`](../test-plans/M2-S4.md).
 
@@ -258,6 +258,13 @@ Recommendations are in bold.
 5. **D5: report verified plugins to their authors (route E)?** **Yes**, a one-line request each, once Phase 1 shows that a plugin works.
 6. **D6: accept the risk wording.** A force-run plugin was never tested by its author on this platform. It has the same access to your decrypted notes as any plugin. Our UI and docs send bug reports to us, not to the plugin author. **Accept, with the feature off by default.**
 
+**The user's answers (2026-11-19),** recorded in ADR-0011:
+- **D1: yes.** Phase 1a (the manifest change) first, so that desktop-only plugins can run on web where that is technically possible; then phase 1b (the menu script). Opt-in per plugin, off by default.
+- **D2: not now.** No `patches/` exception.
+- **D3 and D5: not now.** No upstream PRs or issues, and no requests to plugin authors.
+- **D4:** a page in the `web` container.
+- **D6:** the risk wording is accepted.
+
 ## 7. How each phase would be tested
 - **Phase 1 (route D):**
   - **Unit (Jest):** the `.jpl` rewrite (tar in and out, manifest edit, prelude prepended once, id unchanged, original untouched, output sha256 recorded); the static-scan verdict. Negative controls: a fixture that uses `child_process` is refused; a second repack doesn't double the prelude.
@@ -280,8 +287,8 @@ Recommendations are in bold.
 - **NO-GO** for route B as a default. It needs an explicit, narrow user exception (D2).
 
 ## Follow-ups
-- If D1 is approved: a story in `docs/backlog/M2.md` (architect), the test plan (QA) and the canary fixture.
-- Candidate upstream items U15 to U19 are added to ARCHITECTURE §10 as **not filed**. Filing needs D3.
+- D1 approved: story **M2-S12** in `docs/backlog/M2.md` (architect, done), then the test plan (QA) and the canary fixture.
+- Candidate upstream items U15 to U19 are in ARCHITECTURE §10 as **not filed**. The user deferred filing (D3, D5).
 - `docs/delivery` and the deploy guide: the privacy note on the Plugins screen's direct GitHub/mirror requests (L2), for the ci-cd-specialist and senior engineer when the guide is written.
 
 ## Sources
