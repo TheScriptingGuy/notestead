@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { requireUpstreamBundle } from '../support/bundle.ts';
 import { expect, test } from '../support/fixtures.ts';
 import type { WebApp } from '../support/fixtures.ts';
-import { localFilesNamed } from '../support/localProfile.ts';
+import { localFilesNamed, opfsPaths } from '../support/localProfile.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 
 const bytesOf = (n: number): number[] => Array.from({ length: n }, (_, i) => (i * 31 + 7) & 255);
@@ -45,5 +45,30 @@ test.describe('OPFS file probe', () => {
 		await requireUpstreamBundle(stack, 'M2-S4');
 		await writeOpfs(webApp);
 		expect(await localFilesNamed(webApp, 'absent.jpl')).toEqual([]);
+	});
+
+	// M2-S6 (docs/test-plans/M2-S6.md harness table): every file path of the origin's OPFS, paths only, root files included.
+	test('M2-S6-OPFS-03 opfsPaths lists every file of the origin, at the root and in directories, and nothing else', async ({ stack, webApp }) => {
+		await requireUpstreamBundle(stack, 'M2-S6');
+		await webApp.page.goto(new URL('/manifest.json', webApp.baseURL).href);
+		await webApp.page.evaluate(async () => {
+			interface Dir { getDirectoryHandle: (name: string, o: { create: boolean }) => Promise<Dir>; getFileHandle: (name: string, o: { create: boolean }) => Promise<{ createWritable: () => Promise<{ write: (d: Uint8Array) => Promise<void>; close: () => Promise<void> }> }> }
+			const g = globalThis as unknown as { navigator: { storage: { getDirectory: () => Promise<Dir> } } };
+			const root = await g.navigator.storage.getDirectory();
+			const put = async (dir: Dir, name: string): Promise<void> => {
+				const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+				await w.write(new Uint8Array([1, 2, 3]));
+				await w.close();
+			};
+			await put(await (await root.getDirectoryHandle('joplin-web', { create: true })).getDirectoryHandle('a', { create: true }), 'x.bin');
+			await put(root, 'y.bin');
+		});
+		expect((await opfsPaths(webApp)).sort()).toEqual(['/joplin-web/a/x.bin', '/y.bin']);
+	});
+
+	test('M2-S6-OPFS-03 NEG an origin that holds nothing lists no path', async ({ stack, webApp }) => {
+		await requireUpstreamBundle(stack, 'M2-S6');
+		await webApp.page.goto(new URL('/manifest.json', webApp.baseURL).href);
+		expect(await opfsPaths(webApp)).toEqual([]);
 	});
 });
