@@ -13,9 +13,13 @@ import type { RunEntry } from './notRun.ts';
 export default class NotRunReporter implements Reporter {
 	private suite: Suite | undefined;
 	private readonly outputFile: string;
+	// `playwright test --list` runs this reporter too, with no test run at all: nothing is "not run" there (Playwright passes its mode
+	// to every reporter as the option `_mode`).
+	private readonly listOnly: boolean;
 
-	public constructor(options: { outputFile?: string } = {}) {
+	public constructor(options: { outputFile?: string; _mode?: string } = {}) {
 		this.outputFile = resolve(options.outputFile ?? `${findRepoRoot()}/test-results/e2e/not-run.json`);
+		this.listOnly = options._mode === 'list';
 	}
 
 	public onBegin(_config: FullConfig, suite: Suite): void {
@@ -23,6 +27,7 @@ export default class NotRunReporter implements Reporter {
 	}
 
 	public onEnd(_result: FullResult): Promise<{ status: 'failed' } | undefined> {
+		if (this.listOnly) return Promise.resolve(undefined);
 		const entries: RunEntry[] = (this.suite?.allTests() ?? []).map(t => ({
 			project: t.parent.project()?.name ?? '',
 			file: t.location.file.replace(`${findRepoRoot()}/`, ''),

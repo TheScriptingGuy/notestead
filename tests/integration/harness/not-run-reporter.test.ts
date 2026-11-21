@@ -12,7 +12,7 @@ import { findRepoRoot } from '../../support/repoRoot.ts';
 const repoRoot = findRepoRoot();
 const temps: string[] = [];
 
-const runInner = (p1Passes: boolean): { code: number | null; output: string; notRun: { count: number; tests: { project: string; file: string; title: string; status: string }[] } } => {
+const runInner = (p1Passes: boolean, extraArgs: string[] = []): { code: number | null; output: string; notRun: { count: number; tests: { project: string; file: string; title: string; status: string }[] } } => {
 	mkdirSync(join(repoRoot, 'test-results'), { recursive: true });
 	const dir = mkdtempSync(join(repoRoot, 'test-results', 'nst-nr-'));
 	temps.push(dir);
@@ -31,8 +31,9 @@ const runInner = (p1Passes: boolean): { code: number | null; output: string; not
 `);
 	const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' };
 	for (const key of ['CI', 'JEST_WORKER_ID', 'NODE_OPTIONS', 'NOTESTEAD_E2E_STACK']) delete env[key];
-	const r = spawnSync(join(repoRoot, 'node_modules', '.bin', 'playwright'), ['test', '-c', join(dir, 'playwright.config.ts')], { cwd: repoRoot, env, encoding: 'utf8', timeout: 120_000 });
+	const r = spawnSync(join(repoRoot, 'node_modules', '.bin', 'playwright'), ['test', '-c', join(dir, 'playwright.config.ts'), ...extraArgs], { cwd: repoRoot, env, encoding: 'utf8', timeout: 120_000 });
 	const output = `${r.stdout}${r.stderr}`;
+	if (extraArgs.includes('--list')) return { code: r.status, output, notRun: { count: existsSync(outputFile) ? -1 : 0, tests: [] } };
 	if (!existsSync(outputFile)) throw new Error(`the run wrote no not-run.json (exit ${r.status}); its output ends: ${output.slice(-600)}`);
 	return { code: r.status, output, notRun: JSON.parse(readFileSync(outputFile, 'utf8')) as ReturnType<typeof runInner>['notRun'] };
 };
@@ -50,6 +51,11 @@ describe('H-NR-01 not-run tests fail the run', () => {
 		expect(r.notRun.count).toBe(1);
 		expect(r.notRun.tests).toHaveLength(1);
 		expect(r.notRun.tests[0]).toMatchObject({ project: 'p2', title: 'p2 test that needs p1' });
+	});
+
+	test('h-nr-01-list playwright test --list runs no test, so nothing is not run: the reporter stays quiet and the exit code is 0', () => {
+		const r = runInner(false, ['--list']);
+		expect({ code: r.code, notRunLine: r.output.includes('NOT RUN'), wroteFile: r.notRun.count === -1 }).toEqual({ code: 0, notRunLine: false, wroteFile: false });
 	});
 
 	test('h-nr-01-neg the same configuration with a passing first project reports 0 and passes', () => {
