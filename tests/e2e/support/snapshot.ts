@@ -1,5 +1,9 @@
 // Data snapshots of an account through the Data API and their comparison (docs/test-plans/M2-S5.md D8). Pure: unit-tested
-// (sn-01…05). Bodies are kept as sha256 only, and every message names ids and fields, never a value (M2-S2 r1 C4).
+// (sn-01…05; `restSnapshot` needs the headless Data API). Bodies are kept as sha256 only, and every message names ids and fields, never a value (M2-S2 r1 C4).
+import { createHash } from 'node:crypto';
+import { allItems } from './restQueries.ts';
+import type { RestGet } from './restQueries.ts';
+
 export interface SnapshotNote {
 	id: string; title: string;
 	// the sha256 of the body
@@ -62,3 +66,17 @@ export const snapshotProblems = (diff: SnapshotDiff, allowed: { changed?: { id: 
 	for (const id of diff.conflicts) problems.push(`conflict: ${id}`);
 	return problems;
 };
+
+// ---- Reading a snapshot (needs the headless Data API) ----
+const noteFields = 'id,title,body,parent_id,is_todo,todo_due,todo_completed,is_conflict,deleted_time,updated_time';
+
+// Every note (conflict copies and trashed notes included) and every notebook of the account, through the REST Data API, paged until
+// `has_more` is false. Bodies are kept as their sha256 only.
+export const restSnapshot = (dataApi: { get: RestGet }): Snapshot => ({
+	notes: allItems(dataApi.get, '/notes?include_conflicts=1&include_deleted=1', noteFields).map(n => ({
+		id: String(n.id), title: String(n.title), body: createHash('sha256').update(String(n.body ?? ''), 'utf8').digest('hex'),
+		parent_id: String(n.parent_id), is_todo: Number(n.is_todo), todo_due: Number(n.todo_due), todo_completed: Number(n.todo_completed),
+		is_conflict: Number(n.is_conflict), deleted_time: Number(n.deleted_time), updated_time: Number(n.updated_time),
+	})),
+	folders: allItems(dataApi.get, '/folders', 'id,title,parent_id').map(f => ({ id: String(f.id), title: String(f.title), parent_id: String(f.parent_id) })),
+});

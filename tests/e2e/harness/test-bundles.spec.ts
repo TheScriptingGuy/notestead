@@ -8,6 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Page } from '@playwright/test';
 import { requireUpstreamBundle } from '../support/bundle.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { configureAndCheckJoplinServerSync, deltaPath, firstSyncTimeoutMs, syncWebOnce, unlockE2ee } from '../support/flows.ts';
@@ -19,6 +20,12 @@ import { checkTestBundles, dropNewestMigration, treeDigests } from '../support/t
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { freePort } from '../../stack/stack.ts';
 import { holdsFor } from '../../support/poll.ts';
+
+// A successful check has saved the settings already (M2-AC1 step 2): "Save changes" is disabled, and Back returns to the note list.
+const leaveCheckedSettings = async (page: Page): Promise<void> => {
+	await expect(page.getByRole('button', { name: 'Save changes', exact: true, disabled: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Back', exact: true }).click();
+};
 
 test.describe('M2-S5 harness: derived bundles, redeploy, offline and clear site data', () => {
 	test.describe.configure({ timeout: longSpecTimeoutMs });
@@ -77,7 +84,7 @@ test.describe('M2-S5 harness: derived bundles, redeploy, offline and clear site 
 		await test.step('the configuration check succeeds through the test web, then the app syncs and unlocks', async () => {
 			const settings = await configureAndCheckJoplinServerSync(app, web.url, `${web.url}/joplin-server`, e2eeAccount);
 			expect(await settings.configCheckStatus()).toBe('success');
-			await settings.saveAndGoBack();
+			await leaveCheckedSettings(ctx.page);
 			await expect(app.decryptionBanner(), 'the web app synced and asks for the master password').toBeVisible({ timeout: firstSyncTimeoutMs });
 			await unlockE2ee(app, e2eeAccount);
 			await expect.poll(() => app.noteInList(first.title).isVisible(), { timeout: 3 * 60_000, intervals: [1_000] }).toBe(true);
@@ -97,13 +104,14 @@ test.describe('M2-S5 harness: derived bundles, redeploy, offline and clear site 
 		await test.step('redeploy the same bundle on the same port: same origin, same registration, the profile opens', async () => {
 			const again = await extraWebs.redeploy(web, { mountDist: testBundles.a });
 			expect(again.url, 'the origin does not change').toBe(web.url);
-			expect((await extraWebs.accessLog(again)).length, 'the new container has served nothing yet').toBe(0);
+			// `redeploy` waited for GET / itself: the entries so far are the harness's readiness check, not the browser's
+			const mark = (await extraWebs.accessLog(again)).length;
 			await ctx.page.reload({ timeout: appStartTimeoutMs });
 			await expect(app.sidebarButton(), 'the main screen opens on the old profile').toBeVisible({ timeout: appStartTimeoutMs });
 			await expect(app.noteInList(first.title)).toBeVisible();
 			const registrations = await swRegistrations(ctx.page);
 			expect(registrations, 'the same single registration').toEqual([scope]);
-			await expect.poll(async () => (await extraWebs.accessLog(again)).some(e => e.method === 'GET' && e.path === '/' && e.status === 200), { timeout: 30_000, message: 'the new container\'s log has the reload\'s GET /' }).toBe(true);
+			await expect.poll(async () => (await extraWebs.accessLog(again)).slice(mark).some(e => e.method === 'GET' && e.path === '/' && (e.status === 200 || e.status === 304)), { timeout: 30_000, message: 'the new container\'s log has the reload\'s GET / (200, or 304 when the bundle is the same: the revalidation)' }).toBe(true);
 			test.info().annotations.push({ type: 'access-log', description: `${(await extraWebs.accessLog(again)).length} entries after the redeploy's reload` });
 		});
 	});
@@ -153,7 +161,7 @@ test.describe('M2-S5 harness: derived bundles, redeploy, offline and clear site 
 		if (!first) throw new Error('the account has no seeded note');
 		const settings = await configureAndCheckJoplinServerSync(app, web.url, `${web.url}/joplin-server`, e2eeAccount);
 		expect(await settings.configCheckStatus()).toBe('success');
-		await settings.saveAndGoBack();
+		await leaveCheckedSettings(ctx.page);
 		await expect(app.decryptionBanner()).toBeVisible({ timeout: firstSyncTimeoutMs });
 		await unlockE2ee(app, e2eeAccount);
 		await expect.poll(() => app.noteInList(first.title).isVisible(), { timeout: 3 * 60_000, intervals: [1_000] }).toBe(true);
