@@ -7,7 +7,10 @@
 //   docs/testing/strategy.md §6).
 // - @network tests (internet access) run only with NOTESTEAD_NETWORK_TESTS=1: nightly and on pin bumps in CI (docs/test-plans/M2-S4.md D8).
 // - Reports: the redacting reporter first (it redacts every attachment, the trace included, before anything copies
-//   it), then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
+//   it), then the not-run reporter, then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
+// - Not run counts as failed (M2-S1 r1 C3, docs/test-plans/M2-S5.md D9): when a `chromium` test fails, Playwright leaves the dependent
+//   `chromium-serial` project's tests unrun and reports them only as "did not run". The suite has no skips, so the not-run reporter
+//   (tests/e2e/support/notRunReporter.ts) lists every one of them by name, writes test-results/e2e/not-run.json and fails the run.
 // - Traces: recorded by the `webApp` fixture (no screenshots) and kept on failure; see `use.trace` below.
 // - Projects: `chromium` (parallel) and `chromium-serial` (*.serial.spec.ts: specs that disrupt a shared service, one
 //   worker, after `chromium`; tests/e2e/support/projects.ts, ADR-0007 A3).
@@ -37,6 +40,7 @@ export default defineConfig({
 	globalSetup: './tests/e2e/support/globalSetup.ts',
 	reporter: [
 		['./tests/e2e/support/redactingReporter.ts'],
+		['./tests/e2e/support/notRunReporter.ts'],
 		['list'],
 		['html', { outputFolder: 'playwright-report', open: 'never' }],
 		['junit', { outputFile: 'test-results/e2e/junit.xml' }],
