@@ -37,6 +37,12 @@ export class JoplinWebApp {
 		await this.syncWizard().waitFor({ timeout: appStartTimeoutMs });
 	}
 
+	// The wizard's Close button (upstream DismissibleDialog: accessibilityLabel _('Close')); the main screen is behind it.
+	public async closeSyncWizard(): Promise<void> {
+		await this.syncWizard().getByRole('button', { name: 'Close', exact: true }).click();
+		await this.syncWizard().waitFor({ state: 'hidden' });
+	}
+
 	public syncWizard(): Locator {
 		return this.page.getByRole('dialog').filter({ has: this.page.getByRole('heading', { name: 'Synchronisation', exact: true }) });
 	}

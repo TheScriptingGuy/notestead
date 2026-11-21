@@ -200,3 +200,43 @@ export const localFilesNamed = async (webApp: WebApp, baseName: string, opts?: {
 		await probe.close();
 	}
 };
+
+// Every file path of the origin's OPFS, root files included (for example `/joplin.sqlite.sqlite3`), and never a file's content
+// (M2-S6 harness; docs/test-plans/M2-S6.md): which database file the app created tells dev mode from production (F2). Like
+// `localFilesNamed`, it closes the app page (the app's worker ends and its OPFS sync access handles are released) and reads from
+// a same-origin page that runs no app code. The caller must not use the app page afterwards. A directory that cannot be listed
+// is retried for 30 s.
+export const opfsPaths = async (webApp: WebApp, opts?: { timeoutMs?: number }): Promise<string[]> => {
+	await webApp.page.close();
+	const probe = await webApp.context.newPage();
+	let last: string[] = [];
+	try {
+		await probe.goto(new URL('/manifest.json', webApp.baseURL).href);
+		return await waitFor('the OPFS file list to be readable', async () => {
+			const found = await probe.evaluate(async () => {
+				interface Handle { kind: string; entries?: () => AsyncIterable<[string, Handle]> }
+				const g = globalThis as unknown as { navigator: { storage: { getDirectory: () => Promise<Handle> } } };
+				const paths: string[] = [];
+				const errors: string[] = [];
+				const walk = async (dir: Handle, path: string): Promise<void> => {
+					try {
+						for await (const [name, handle] of dir.entries?.() ?? []) {
+							if (handle.kind === 'directory') await walk(handle, `${path}/${name}`);
+							else paths.push(`${path}/${name}`);
+						}
+					} catch (error) {
+						errors.push(`${path || '/'}: ${(error as { name?: string }).name ?? 'error'}`);
+					}
+				};
+				await walk(await g.navigator.storage.getDirectory(), '');
+				return { paths, errors };
+			});
+			last = found.errors;
+			return found.errors.length > 0 ? undefined : found.paths.sort();
+		}, { timeoutMs: opts?.timeoutMs ?? 30_000, intervalMs: 1_000 });
+	} catch (error) {
+		throw new Error(`${(error as Error).message} (last listing errors: ${JSON.stringify(last)})`);
+	} finally {
+		await probe.close();
+	}
+};

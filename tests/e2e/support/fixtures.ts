@@ -14,6 +14,12 @@
 //           webNetwork    a recorder of every request of the webApp context (tests/e2e/support/network.ts); on failure it
 //                         attaches network.log (query strings removed). It only observes, it never routes. At teardown it
 //                         checks the network policy over the whole test (M2-S1 r1 C2), minus the requests named with `allow`.
+//           extraWebs     further `web` containers of the image under test, optionally serving another bundle, on a port of the test's
+//                         choice (M2-S6 D3); removed at teardown, their logs attached on failure
+//           appContexts   browser contexts on other origins (`http://localhost:<port>`), each fresh (own OPFS, service worker),
+//                         with the console, the trace, a network recorder and the WEB-SQLITE-1 check of `webApp` (M2-S6 D4)
+//   worker  unoverlaidDist the served bundle with every overlay change undone from upstream's public/ at the pin, two directories
+//                         under test-results/e2e/m2-s6-dists/ removed at worker teardown (M2-S6 D2; never committed)
 //           testFiles     files generated from a per-test seed in a temp dir outside test-results/, removed at teardown (M2-S3 D4)
 //           stackLogs     (auto) on failure attaches the server, web and default supervisor logs of the test's time span
 //   worker  redactStdio   (auto) the worker's stdout/stderr redacted at the source with every secret the worker knows
@@ -23,15 +29,15 @@
 // every other attachment, errors, stdout/stderr and step titles once more (tests/e2e/support/redactingReporter.ts).
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test as base } from '@playwright/test';
-import type { BrowserContext, Page, TestInfo } from '@playwright/test';
+import type { Browser, BrowserContext, Page, TestInfo } from '@playwright/test';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
 	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, projectContainers, registerToken, removeContainer, secretsFor, serverRequest,
-	StackHealthError, upHeadless, upWebWithoutHostRewrite,
+	StackHealthError, upExtraWeb, upHeadless, upWebWithoutHostRewrite,
 } from '../../stack/stack.ts';
 import type { Account, ExtraWeb, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { HttpResponse } from '../../contract/support/http.ts';
@@ -50,6 +56,8 @@ import { headlessUpTimeoutMs } from './timeouts.ts';
 import { stackEnv } from './globalSetup.ts';
 import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
+import { requireUpstreamBundle } from './bundle.ts';
+import type { UnoverlaidDirs } from './unoverlaid.ts';
 
 export interface JoplinServerHandle {
 	// http://127.0.0.1:<published port>; needs the Host of APP_BASE_URL (use `request`)
@@ -95,8 +103,35 @@ export interface WebApp {
 	allowSqliteFailures: (reason: string) => void;
 }
 
+// A browser context of `appContexts`: a WebApp plus the network recorder of its context.
+export interface AppContext extends WebApp {
+	network: NetworkRecorder;
+}
+
+export interface ExtraWebStart {
+	role: 'web-extra' | 'web-unoverlaid';
+	// default: a free port
+	port?: number;
+	// a directory mounted read-only over /srv/www (the un-overlaid bundle, `unoverlaidDist.unoverlaid`)
+	mountDist?: string;
+}
+
+export interface ExtraWebs {
+	start: (opts: ExtraWebStart) => Promise<ExtraWeb>;
+	// Removes the container (its log is kept for a failing test).
+	stop: (web: ExtraWeb) => void;
+}
+
+export interface AppContexts {
+	// A fresh context (and page) whose origin is `baseURL`, same locale and time zone as `webApp`. `label` names its attachments.
+	open: (baseURL: string, label: string) => Promise<AppContext>;
+	// Ends a context early (its OPFS worker stops, so another origin on the same port can start), keeping its evidence.
+	close: (app: AppContext) => Promise<void>;
+}
+
 interface WorkerFixtures {
 	stack: StackState;
+	unoverlaidDist: UnoverlaidDirs;
 	joplinServer: JoplinServerHandle;
 	redactStdio: undefined;
 }
@@ -113,6 +148,8 @@ interface TestFixtures {
 	webTimezone: string;
 	webNetwork: NetworkRecorder;
 	webWithoutHostRewrite: ExtraWeb;
+	extraWebs: ExtraWebs;
+	appContexts: AppContexts;
 }
 
 const failed = (testInfo: TestInfo): boolean => testInfo.status !== testInfo.expectedStatus;
@@ -152,7 +189,7 @@ const maxSqliteArgs = 20;
 // WEB-SQLITE-1 (WS-2): the evidence of a failing browser SQLite, written to web-sqlite.json (attached, and kept in the stack's
 // logs dir): the value-free failures, the argument objects of the console messages, and the origin's storage estimate (is the
 // quota or persistence the cause?). Nothing here throws: the failure itself is asserted by the caller.
-const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: SqliteFailure[], args: unknown[][], consoleLines: string[]): Promise<void> => {
+const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { context: BrowserContext; page: Page; baseURL: string }, failures: SqliteFailure[], args: unknown[][], consoleLines: string[], label = ''): Promise<void> => {
 	const readStorage = async (page: Page): Promise<{ estimate: unknown; persisted: boolean }> => {
 		return await page.evaluate(async () => {
 			const g = globalThis as unknown as { navigator: { storage: { estimate: () => Promise<unknown>; persisted: () => Promise<boolean> } } };
@@ -177,10 +214,12 @@ const keepWebSqlite = async (stack: StackState, testInfo: TestInfo, app: { conte
 	}
 	const text = redactText(JSON.stringify({ failures, args, storage, records: occurrenceRecord(failures, consoleLines) }, null, 2), workerSecrets(stack));
 	mkdirSync(stack.logsDir, { recursive: true });
-	writeFileSync(join(stack.logsDir, `${stack.project}-${shortId(testInfo)}-web-sqlite.json`), text);
-	const path = testInfo.outputPath('web-sqlite.json');
+	// A labelled session (appContexts) names its files after the label; scan-l20 finds both spellings.
+	writeFileSync(join(stack.logsDir, `${stack.project}-${shortId(testInfo)}${label ? `-${label}` : ''}-web-sqlite.json`), text);
+	const name = label ? `web-sqlite-${label}.json` : 'web-sqlite.json';
+	const path = testInfo.outputPath(name);
 	writeFileSync(path, text);
-	await testInfo.attach('web-sqlite.json', { path, contentType: 'application/json' });
+	await testInfo.attach(name, { path, contentType: 'application/json' });
 };
 
 const shortId = (testInfo: TestInfo): string => `${testInfo.testId.slice(0, 8)}${testInfo.retry ? `r${testInfo.retry}` : ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -198,6 +237,104 @@ const runProbe = (container: string, probe: string, args: string[], timeoutMs = 
 	const line = (r.stdout ?? '').split('\n').filter(l => l.startsWith('RESULT ')).pop();
 	if (!line) return { error: `data-api probe printed no result (exit ${r.status}): ${redactText(`${r.stdout}\n${r.stderr}`).slice(-1000)}` };
 	return JSON.parse(line.slice('RESULT '.length)) as DataApiResult;
+};
+
+// One browser context of the app under test: the console and trace recording and the WEB-SQLITE-1 check that `webApp` always had,
+// shared with `appContexts` (M2-S6 D4). `label` is '' for `webApp` (attachment names as before) or names a further context.
+interface AppSession {
+	app: AppContext;
+	// Stops recording and closes the context before the end of the test; its evidence is kept for `finish`.
+	closeEarly: () => Promise<void>;
+	// The end of the test: evidence attached on failure, the context closed, the SQLite check asserted.
+	finish: () => Promise<void>;
+}
+
+const startAppSession = async (browser: Browser, stack: StackState, testInfo: TestInfo, opts: { baseURL: string; timezone: string; label: string }): Promise<AppSession> => {
+	// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
+	// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
+	const context = await browser.newContext({ baseURL: opts.baseURL, locale: browserLocale, timezoneId: opts.timezone });
+	const network = recordNetwork(context);
+	const suffix = opts.label ? `-${opts.label}` : '';
+	const lines: string[] = [];
+	// WEB-SQLITE-1 evidence: the argument objects of the first 20 console messages that are a SQLite failure (they hold the
+	// worker's error object: type, dbId, messageId, the result code). Each is read in a `try`: a page can be closing.
+	const sqliteArgs: Promise<unknown[]>[] = [];
+	const watch = (page: Page): void => {
+		page.on('console', m => {
+			const text = `${new Date().toISOString()} [${m.type()}] ${m.text()}`;
+			lines.push(text);
+			if (sqliteArgs.length < maxSqliteArgs && sqliteFailures([text]).length > 0) {
+				sqliteArgs.push(Promise.all(m.args().map(async a => {
+					try {
+						return await a.jsonValue() as unknown;
+					} catch {
+						return '(unserialisable)';
+					}
+				})));
+			}
+		});
+		page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
+	};
+	context.on('page', watch);
+	// The trace of this context, kept on failure (docs/test-plans/M1-S7.md, Finding F2). The harness records it itself
+	// instead of Playwright's `use.trace` (off in playwright.config.ts): the runner merges the test's traces with
+	// yauzl, which never finishes on Node 24 once a trace entry is larger than 64 KiB (the real app's bundle, its DOM
+	// snapshots), so a failing test hung until its timeout and lost its trace. tracing.stop({ path }) writes the zip
+	// without reading one back. No screenshots: the screencast frames are pixels no redaction can reach (C1-R1); DOM
+	// snapshots and network bodies are text, which the redacting reporter redacts.
+	await context.tracing.start({ screenshots: false, snapshots: true, sources: true, title: `${testInfo.titlePath.join(' > ')}${suffix}` });
+	const page = await context.newPage();
+	let allowed: string | undefined;
+	const allowSqliteFailures = (reason: string): void => {
+		allowed = reason;
+		testInfo.annotations.push({ type: 'allow-sqlite', description: reason });
+	};
+	const app: AppContext = { context, page, baseURL: opts.baseURL, console: lines, allowSqliteFailures, network };
+	let early: { dir: string; trace: string } | undefined;
+
+	const closeEarly = async (): Promise<void> => {
+		if (early) return;
+		const sqlite = sqliteFailures(lines);
+		// The storage estimate and the failures' arguments are read while the context is still open.
+		if (sqlite.length > 0 && allowed === undefined) await keepWebSqlite(stack, testInfo, app, sqlite, await Promise.all(sqliteArgs), lines, opts.label);
+		const dir = mkdtempSync(join(tmpdir(), 'nst-trace-'));
+		const trace = join(dir, 'trace.zip');
+		early = { dir, trace };
+		await context.tracing.stop({ path: trace });
+		await context.close();
+	};
+
+	const finish = async (): Promise<void> => {
+		// A real SQLite failure in the browser (a lost write, a failed start) fails the test here, at once, instead of
+		// 60 s later as a data mismatch, or never (WEB-SQLITE-1). The evidence is kept as for any failure.
+		const sqlite = sqliteFailures(lines);
+		const sqliteFailing = sqlite.length > 0 && allowed === undefined;
+		const keep = failed(testInfo) || sqliteFailing;
+		try {
+			if (early) {
+				if (keep) {
+					await attachText(testInfo, `browser-console${suffix}.log`, redactText(lines.join('\n'), workerSecrets(stack)));
+					if (existsSync(early.trace)) await testInfo.attach(`trace${suffix}`, { path: early.trace, contentType: 'application/zip' });
+				}
+			} else {
+				if (keep) {
+					await attachText(testInfo, `browser-console${suffix}.log`, redactText(lines.join('\n'), workerSecrets(stack)));
+					const path = testInfo.outputPath(`trace${suffix}.zip`);
+					await context.tracing.stop({ path });
+					await testInfo.attach(`trace${suffix}`, { path, contentType: 'application/zip' });
+				} else {
+					await context.tracing.stop();
+				}
+				if (sqliteFailing) await keepWebSqlite(stack, testInfo, app, sqlite, await Promise.all(sqliteArgs), lines, opts.label);
+				await context.close();
+			}
+		} finally {
+			if (early) rmSync(early.dir, { recursive: true, force: true });
+		}
+		if (allowed === undefined) expect(sqliteFailureLines(sqlite), `browser SQLite failures in this test${opts.label ? ` (${opts.label})` : ''} (WEB-SQLITE-1); the startup spellfix1 line is not one`).toEqual([]);
+	};
+
+	return { app, closeEarly, finish };
 };
 
 export const builtinFixtureMessage = (name: 'page' | 'context'): string => `the built-in \`${name}\` fixture is disabled in this harness: it records no trace and no browser console (use.trace is off). Use the \`webApp\` fixture (webApp.page, webApp.context) instead.`;
@@ -363,62 +500,85 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	webApp: async ({ browser, stack, webTimezone }, use, testInfo) => {
 		if (!stack.webUrl) throw new Error('the stack has no web URL');
 		// 127.0.0.1, never localhost: upstream's environment.js turns on dev mode for any origin containing "localhost".
-		// en-GB: the app picks its UI language from the browser's locale, and the page objects use upstream's en_GB
-		// strings ("Synchronise"; en-US would give "Synchronize"). Playwright's own default is en-US.
-		const context = await browser.newContext({ baseURL: stack.webUrl, locale: browserLocale, timezoneId: webTimezone });
-		const lines: string[] = [];
-		// WEB-SQLITE-1 evidence: the argument objects of the first 20 console messages that are a SQLite failure (they hold the
-		// worker's error object: type, dbId, messageId, the result code). Each is read in a `try`: a page can be closing.
-		const sqliteArgs: Promise<unknown[]>[] = [];
-		const watch = (page: Page): void => {
-			page.on('console', m => {
-				const text = `${new Date().toISOString()} [${m.type()}] ${m.text()}`;
-				lines.push(text);
-				if (sqliteArgs.length < maxSqliteArgs && sqliteFailures([text]).length > 0) {
-					sqliteArgs.push(Promise.all(m.args().map(async a => {
-						try {
-							return await a.jsonValue() as unknown;
-						} catch {
-							return '(unserialisable)';
-						}
-					})));
-				}
-			});
-			page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
-		};
-		context.on('page', watch);
-		// The trace of this context, kept on failure (docs/test-plans/M1-S7.md, Finding F2). The harness records it itself
-		// instead of Playwright's `use.trace` (off in playwright.config.ts): the runner merges the test's traces with
-		// yauzl, which never finishes on Node 24 once a trace entry is larger than 64 KiB (the real app's bundle, its DOM
-		// snapshots), so a failing test hung until its timeout and lost its trace. tracing.stop({ path }) writes the zip
-		// without reading one back. No screenshots: the screencast frames are pixels no redaction can reach (C1-R1); DOM
-		// snapshots and network bodies are text, which the redacting reporter redacts.
-		await context.tracing.start({ screenshots: false, snapshots: true, sources: true, title: testInfo.titlePath.join(' > ') });
-		const page = await context.newPage();
-		let allowed: string | undefined;
-		const allowSqliteFailures = (reason: string): void => {
-			allowed = reason;
-			testInfo.annotations.push({ type: 'allow-sqlite', description: reason });
+		const session = await startAppSession(browser, stack, testInfo, { baseURL: stack.webUrl, timezone: webTimezone, label: '' });
+		try {
+			await use(session.app);
+		} finally {
+			await session.finish();
+		}
+	},
+
+	// The served bundle with every overlay change undone from upstream's public/ at the pin (docs/test-plans/M2-S6.md D2).
+	// Built once per worker from the stack's own web container; the directories hold upstream's files and are removed at
+	// worker teardown. Never committed (they live under test-results/, which is ignored).
+	unoverlaidDist: [async ({ stack }, use, workerInfo) => {
+		await requireUpstreamBundle(stack, 'M2-S6');
+		const dir = join(findRepoRoot(), 'test-results', 'e2e', 'm2-s6-dists', `w${workerInfo.workerIndex}-${process.pid}`);
+		try {
+			// Loaded here, not at the top: unoverlaid.ts reads upstream's tree through tests/acceptance/support/upstream.mts (ESM with
+			// import.meta, which Jest's CommonJS transform cannot parse), and the Jest unit tests import this module's types.
+			const { reconstructUnoverlaid } = await import('./unoverlaid.ts');
+			await use(reconstructUnoverlaid(stack, dir));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, { scope: 'worker' }],
+
+	// Further web containers of the image under test (docs/test-plans/M2-S6.md D3).
+	extraWebs: async ({ stack }, use, testInfo) => {
+		const running = new Map<string, ExtraWeb>();
+		const logs = new Map<string, string>();
+		let n = 0;
+		const stop = (web: ExtraWeb): void => {
+			if (!running.delete(web.container)) return;
+			logs.set(web.container, containerLog(stack, web.container, undefined, workerSecrets(stack)));
+			removeContainer(stack, web.container);
 		};
 		try {
-			await use({ context, page, baseURL: stack.webUrl, console: lines, allowSqliteFailures });
+			await use({
+				start: async opts => {
+					n++;
+					const web = await upExtraWeb(stack, { label: `${shortId(testInfo)}-${n}`, role: opts.role, port: opts.port, mountDist: opts.mountDist });
+					running.set(web.container, web);
+					return web;
+				},
+				stop,
+			});
 		} finally {
-			// A real SQLite failure in the browser (a lost write, a failed start) fails the test here, at once, instead of
-			// 60 s later as a data mismatch, or never (WEB-SQLITE-1). The evidence is kept as for any failure.
-			const sqlite = sqliteFailures(lines);
-			const sqliteFailing = sqlite.length > 0 && allowed === undefined;
-			if (failed(testInfo) || sqliteFailing) {
-				await attachText(testInfo, 'browser-console.log', redactText(lines.join('\n'), workerSecrets(stack)));
-				const path = testInfo.outputPath('trace.zip');
-				await context.tracing.stop({ path });
-				await testInfo.attach('trace', { path, contentType: 'application/zip' });
-			} else {
-				await context.tracing.stop();
-			}
-			if (sqliteFailing) await keepWebSqlite(stack, testInfo, { context, page, baseURL: stack.webUrl }, sqlite, await Promise.all(sqliteArgs), lines);
-			await context.close();
-			if (allowed === undefined) expect(sqliteFailureLines(sqlite), 'browser SQLite failures in this test (WEB-SQLITE-1); the startup spellfix1 line is not one').toEqual([]);
+			for (const web of [...running.values()]) stop(web);
+			if (failed(testInfo)) for (const [container, text] of logs) await attachText(testInfo, `${container.slice(stack.project.length + 1)}.log`, text);
 		}
+	},
+
+	// Contexts on other origins (docs/test-plans/M2-S6.md D4), for example `http://localhost:<port>` of an extra web container.
+	appContexts: async ({ browser, stack, webTimezone }, use, testInfo) => {
+		const sessions = new Map<AppContext, AppSession>();
+		// Every session is finished even when an earlier one throws (its SQLite check); the first error is rethrown.
+		let first: unknown;
+		try {
+			await use({
+				open: async (baseURL, label) => {
+					if (!/^[a-z0-9-]+$/.test(label)) throw new Error(`appContexts.open: the label ${JSON.stringify(label)} must be lowercase letters, digits and dashes`);
+					const session = await startAppSession(browser, stack, testInfo, { baseURL, timezone: webTimezone, label });
+					sessions.set(session.app, session);
+					return session.app;
+				},
+				close: async app => {
+					const session = sessions.get(app);
+					if (!session) throw new Error('appContexts.close: not a context of this test');
+					await session.closeEarly();
+				},
+			});
+		} finally {
+			for (const session of sessions.values()) {
+				try {
+					await session.finish();
+				} catch (error) {
+					first ??= error;
+				}
+			}
+		}
+		if (first) throw first;
 	},
 });
 
