@@ -1,6 +1,8 @@
 // Recognises a real browser SQLite failure in a test's console lines (WEB-SQLITE-1, docs/test-plans/M2-S3.md R1/WS-1). No
 // Playwright import: unit-tested in tests/unit/harness/webSqlite.test.ts. A result names the kind, the result code and the
 // statement's verb and table; it never carries the SQL or a bound value, which can hold note content (review M2-S2-r1 C4).
+import { parseProfileRefusal } from './profileRefusal.ts';
+
 export type SqliteFailureKind = 'step' | 'save' | 'startup';
 export interface SqliteFailure { rc: number | null; kind: SqliteFailureKind; statement: string; line: number }
 
@@ -48,6 +50,26 @@ export const sqliteFailures = (lines: string[]): SqliteFailure[] => {
 		else if (startupPattern.test(text)) found.push({ rc: null, kind: 'startup', statement: 'buildStartupTasks/openDatabase', line });
 	});
 	return found;
+};
+
+// The expected refusal of an older bundle (docs/test-plans/M2-S5.md D6): a `startup` failure is excused only by a refusal dialog
+// (profileRefusal.ts) recorded within `windowMs` after its console line's time; one dialog excuses one failure. A `step` or a
+// `save` failure is never excused. Value-free like the failures it takes.
+export const excusedStartupFailures = (failures: SqliteFailure[], consoleLines: string[], dialogs: { message: string; ts: number }[], windowMs = 10_000): { excused: SqliteFailure[]; rest: SqliteFailure[] } => {
+	const unused = dialogs.filter(d => parseProfileRefusal(d.message) !== undefined).sort((a, b) => a.ts - b.ts);
+	const excused: SqliteFailure[] = [];
+	const rest: SqliteFailure[] = [];
+	for (const f of failures) {
+		const time = Date.parse((consoleLines[f.line - 1] ?? '').split(' ')[0]);
+		const at = f.kind === 'startup' && !Number.isNaN(time) ? unused.findIndex(d => d.ts - time >= 0 && d.ts - time <= windowMs) : -1;
+		if (at >= 0) {
+			unused.splice(at, 1);
+			excused.push(f);
+		} else {
+			rest.push(f);
+		}
+	}
+	return { excused, rest };
 };
 
 export const sqliteFailureLines = (failures: SqliteFailure[]): string[] =>
