@@ -301,6 +301,7 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
   - **Mitigation and status:**
     - **Upstream issues, filed by the user (U14):** A, the transaction scope, and B, mapping the web driver's errors to `code` so the retry applies. Drafts are in the worklog §6; the links get added here when they are filed. A sqlite-wasm report for the `rc= -1` itself (C) waits for a smaller reproduction without Joplin. Draft C's "two or three browsers loading the app at once" is out of date: use the single-browser figures above (worklog §11).
     - **No local fix:** following "Reuse, never fork", there is no `patches/` file.
+- **L21.** **The sync wizard shows upstream's Joplin Cloud logo.** The "Joplin Cloud" option in the web app's sync wizard carries upstream's logo (an inline SVG compiled into the app, `upstream:packages/app-mobile/components/SyncWizard/JoplinCloudIcon.tsx`), which our branding overlay can't replace without patching upstream. It labels the third-party sync option and is not Notestead's branding; Joplin Cloud itself is not supported here (L10). The trademark review before the first public release includes it. Documented by `M2-S6-LOGO-01`. *(Added 2026-11-21; the user's decision Q1 = (a) of 2026-11-20, ADR-0010 Consequences.)*
 
 ## 10. Upstream-first ledger
 Each shim we carry has an upstream change that would remove it. Filing uses the user's GitHub account (Q11, approved at gate 1; U2 and U5 go privately through Joplin's security policy):
@@ -326,6 +327,24 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | U17 | *(candidate, not filed; forum UX thread first, #14456 precedent)* app-mobile: render plugin `menus`/`menuItems` (note action menu, note/notebook/tag long-press menus) | the menus part of L2, and ADR-0011's menu prelude |
 | U18 | *(candidate, not filed)* lib/app-mobile: an opt-in, per-plugin "run anyway (unsupported)" for incompatible plugins on Android/web | ADR-0011's re-tag step |
 | U19 | *(candidate, not filed; the user deferred author requests on 2026-11-19, D5)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
+| U20 | *(candidate, not filed; draft in §10.1)* app-mobile web: the published production bundle crashes at start on any `localhost` origin, because `environment.js` turns on `__DEV__` there and a production build stubs the React Refresh runtime with a throw | nothing we carry (the overlay's `environment.js` stays for branding and U7); it fixes the raw bundle for everyone else |
+
+### 10.1 Draft issue texts (unfiled; the user files them)
+**U20.** Title: *Web app: the production web build crashes at start when served from a `localhost` origin.*
+
+> **Version:** v3.7.21 (`e41516e6`), `packages/app-mobile`, the output of `yarn web`.
+>
+> **Steps:** build the web app with `yarn web` and serve `web/dist/` statically on `http://localhost:8080`. Open it in Chromium.
+>
+> **Expected:** the app starts, as it does when the same files are served on `http://127.0.0.1:8080` or any non-localhost host.
+>
+> **Actual:** the title becomes "Joplin DEV" and the page throws an uncaught `Error: React Refresh runtime should not be included in the production bundle.` No database is opened and the sync wizard never appears.
+>
+> **Cause:** `packages/app-mobile/web/public/environment.js:2` sets `window.__DEV__ = window.location.origin.includes('localhost')`, which is copied into `dist/` unchanged. Under `__DEV__` the app reaches the React Refresh runtime, which `web/webpack.config.ts` adds only for hot reload (`ReactRefreshWebpackPlugin`, `react-refresh/babel`), so a production build contains the package's production stub, which throws.
+>
+> **Suggestion:** decide dev mode at build time instead of from the origin, for example by having webpack define `__DEV__` from its `mode` (or write `environment.js` from the build), so a production build is never in dev mode, wherever it is served. Self-hosters commonly open a local deployment on `localhost`.
+
+Before filing: check upstream's issues for an existing report, and re-check the behaviour at the pin in force then.
 
 ## 11. Spike results (M0)
 
@@ -409,3 +428,4 @@ Routed to the architect by channels.md §11 and recorded: the D7 rule (above), a
 | # | Question | The user's decision | Applied in |
 |---|---|---|---|
 | O5 | Desktop-only plugins on web (study [PLUGINS-WEB](../spikes/PLUGINS-WEB.md), decisions D1 to D6) | **2026-11-19.** D1 **yes**: build the plugin repackager, phase 1a (manifest change) first, then 1b (menu script), opt-in per plugin and off by default. D2 **not now**: no `patches/` exception. D3 and D5 **not now**: no upstream PRs or plugin-author requests (U15 to U19 stay unfiled). D4: a page in the `web` container. D6: the risk wording is accepted. | ADR-0011 (Accepted), L2, §2, §5, §6 row 12, M2-S12 |
+| O6 | Upstream's Joplin Cloud logo in the web app's sync wizard (M2-S6 Q1) | **2026-11-20: (a)**, accept it as nominative use; include it in the trademark review before the first public release; document it with an E2E test. | ADR-0010 (Consequences, Amendments 2026-11-21), L21, `M2-S6-LOGO-01` |
