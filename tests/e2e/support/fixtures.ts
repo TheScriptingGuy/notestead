@@ -130,6 +130,9 @@ export interface ExtraWebStart {
 	mountDist?: string;
 }
 
+// A test's own `web` container that was taken down: where it was, so `up` can put a new one on the same port (RU-2).
+export interface DownWeb { port: number; url: string; role: string; container: string }
+
 export interface ExtraWebs {
 	start: (opts: ExtraWebStart) => Promise<ExtraWeb>;
 	// Removes the container (its log is kept for a failing test).
@@ -138,6 +141,11 @@ export interface ExtraWebs {
 	// and Cache Storage), serving `mountDist` (docs/test-plans/M2-S5.md D4, I5). The old container's log is kept. Throws
 	// `port <P> was taken during the redeploy` when the port is not free again.
 	redeploy: (web: ExtraWeb, opts: { mountDist?: string }) => Promise<ExtraWeb>;
+	// The two halves of `redeploy` (docs/test-plans/M2-S5.md RU-2): `down` stops and removes the container (its log and access log are
+	// kept) and remembers its port; `up` starts a new one on that port. An offline phase of a test is the context offline while its
+	// `web` is down.
+	down: (web: ExtraWeb) => DownWeb;
+	up: (down: DownWeb, opts: { mountDist?: string }) => Promise<ExtraWeb>;
 	// The container's access log so far, parsed (method, path without query, status, time). Never the query string.
 	accessLog: (web: ExtraWeb) => Promise<AccessEntry[]>;
 }
@@ -607,6 +615,16 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			stoppedAccess.set(web.container, `${r.stdout}\n${r.stderr}`);
 			removeContainer(stack, web.container);
 		};
+		const up = async (down: DownWeb, opts: { mountDist?: string }): Promise<ExtraWeb> => {
+			try {
+				await waitFor(`port ${down.port} to be free again`, async () => (await portFree(down.port) ? true : undefined), { timeoutMs: 10_000, intervalMs: 250 });
+			} catch {
+				throw new Error(`port ${down.port} was taken during the redeploy`);
+			}
+			const next = await start({ role: down.role as ExtraWebStart['role'], port: down.port, mountDist: opts.mountDist });
+			if (next.url !== down.url) throw new Error(`the redeploy changed the origin from ${down.url} to ${next.url}`);
+			return next;
+		};
 		const start = async (opts: ExtraWebStart): Promise<ExtraWeb> => {
 			n++;
 			const web = await upExtraWeb(stack, { label: `${shortId(testInfo)}-${n}`, role: opts.role, port: opts.port, mountDist: opts.mountDist });
@@ -618,19 +636,20 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 			await use({
 				start,
 				stop,
+				down: web => {
+					const role = roles.get(web.container);
+					if (!role || !running.has(web.container)) throw new Error('extraWebs.down: not a running container of this test');
+					const port = Number.parseInt(new URL(web.url).port, 10);
+					stop(web);
+					return { port, url: web.url, role, container: web.container };
+				},
+				up,
 				redeploy: async (web, opts) => {
 					const role = roles.get(web.container);
 					if (!role || !running.has(web.container)) throw new Error('extraWebs.redeploy: not a running container of this test');
 					const port = Number.parseInt(new URL(web.url).port, 10);
 					stop(web);
-					try {
-						await waitFor(`port ${port} to be free again`, async () => (await portFree(port) ? true : undefined), { timeoutMs: 10_000, intervalMs: 250 });
-					} catch {
-						throw new Error(`port ${port} was taken during the redeploy`);
-					}
-					const next = await start({ role: role as ExtraWebStart['role'], port, mountDist: opts.mountDist });
-					if (next.url !== web.url) throw new Error(`the redeploy changed the origin from ${web.url} to ${next.url}`);
-					return next;
+					return up({ port, url: web.url, role, container: web.container }, opts);
 				},
 				accessLog: async web => {
 					const text = running.has(web.container) ? (() => { const r = podmanSync(['logs', web.container], { allowFail: true }); return `${r.stdout}\n${r.stderr}`; })() : (stoppedAccess.get(web.container) ?? '');
