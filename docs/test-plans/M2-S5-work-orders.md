@@ -204,3 +204,8 @@ The plan's "Planner rulings on the WO-5 HARD STOPs" is binding. The planner comm
    - Y not shown after the load: **PRODUCT FAILURE** if the harness controls passed, with the evidence.
    - The WO-5 outcome rules apply otherwise; L20 per D10. The story count is 1 so far, and the per-run HARD STOP stays at the third occurrence in one invocation.
 4. Then **WO-6** and **WO-7** as written, with the amended sensitivity table (S-AC15a/b amended, S-AC16f/g added). End the RED phase with the report WO-7 describes. Also report whether the R1 wording constraint was relayed: it is in plan R1, and the SE reads it there.
+
+## WO-8 amendments (rulings RU-7, RU-8, 2026-11-22)
+- **L20 (RU-7):** in WO-8, an L20-only failure is recorded and does not fail the story by itself; the third occurrence in one invocation is still a **HARD STOP**. Record `M2-AC16-02`-style hits after an excused refusal as `startupFailed: no` (RU-7). In the results, state per AC test whether it has passed completely (WS-1 included) at least once, in WO-8 or in the CI proof run; `M2-AC15-01` and `M2-AC16-02` have not yet. If WO-8 leaves one without such a pass, report it; never re-run to get one.
+- **Welcome notebooks (RU-8):** for `M2-AC16-02` in the WO-8 run, record the number of added welcome folders, their `created_time`s, and the number of app starts after the clear (`Starting application` and upstream's reload console lines). Record only.
+- **Sensitivities:** S-AC15c/S-AC15c2 (RU-5) and S-AC16b with its attempt-1 log (RU-6) are ratified; list both in the results.
