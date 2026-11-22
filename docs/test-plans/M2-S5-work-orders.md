@@ -180,3 +180,27 @@ A failure in steps 2 to 6: as in WO-5 (NEG, control or harness failing: **HARD S
 Append `## Results (QA executor, Pi arm64, <date>)` to `docs/test-plans/M2-S5.md`: per row of the AC table and the harness table, PASS/FAIL, the command, the duration (the log's `# duration`), the log/junit/trace paths under `test-results/verify/m2-s5/`, and the annotations (`cache`, `offline-requests`, `offline-reload-error`, `self-reloads`, `added-after-recovery`, `access-log`). Then the sensitivity table with each run's failure site, the L20 occurrences, the RECORDs, `not-run.json` counts, and x64 as **PENDING-CI**. Put a short "Results at a glance" under the plan's header.
 
 **Commit:** `docs(test-plans): M2-S5 results on arm64`, staged by path. Then end your turn with the final report: the orders done, the commits, per-AC status, the L20 count, the RECORDs and any PRODUCT FAILURE still open.
+
+---
+
+## WO-5R: Resume after the planner's rulings RU-1 to RU-4 (2026-11-22)
+The plan's "Planner rulings on the WO-5 HARD STOPs" is binding. The planner committed only `docs/test-plans/M2-S5*.md`, including your Findings section as you wrote it. Start from `6317c06` with a clean tree.
+
+1. **Harness (`test(harness)`, one commit, shared-module regressions of the rules):**
+   - `tests/e2e/support/fixtures.ts`: split `redeploy` into `extraWebs.down(web): DownWeb` (`{ port, url, role, container }`; log kept, container removed) and `extraWebs.up(down, { mountDist }): ExtraWeb` (same port; the two existing errors); `redeploy` = `up(down(web))`, behaviour unchanged.
+   - `tests/e2e/support/upgradeFlows.ts`: `quiesce(fx, web)` (RU-3a: `waitFor` 120 s of a `holdsFor` 5 s window with no new access-log entry; the failure names the last 5 entries' method and path), `goOffline(fx, s)` and `goOnline(fx, down, { mountDist })` (RU-2 steps, in that order; `navigator.onLine === false` asserted after `setOffline(true)`), and `serverUnreachable(down)` (the RU-2 guard: `podman container exists` false and `net.connect` to `127.0.0.1:<P>` refused, bounded 5 s).
+   - Unit test for the pure part of the guard's decision if any; otherwise none.
+   - Regressions: `corepack yarn jest tests/unit/harness tests/integration/harness`; `e2e_pre; T=60m run …/green/harness-e2e-r2.log env $IMG corepack yarn playwright test tests/e2e/harness/test-bundles.spec.ts`.
+2. **Specs (`test(e2e)`, one commit):**
+   - `offline.spec.ts`:
+     - `M2-AC15-01`: online part as now. Then `goOffline`, then `serverUnreachable`. Then the one `page.reload()` (`fromServiceWorker()` true, the main screen, the body, `crossOriginIsolated`), then the offline edit, `expectStoredLocally`, and the REST control. Then `serverUnreachable` again, then `goOnline` with A, and `syncWebThenHeadless` with the exact REST body. The access-log assertion goes; the annotation `offline-requests` is replaced by `offline-guard`, which records the refused connects.
+     - `M2-AC15-02`: online part, `caches.delete('v1')`, then `goOffline` (it re-caches `/manifest.json` only, so the `/` and `/index.html` check still applies), then `serverUnreachable`, then the reload rejecting with the RU-2 regex.
+   - `upgrade.spec.ts` (`M2-AC16-01`, `-03`) and `downgrade.spec.ts` (`M2-AC16-02`): RU-1 steps 1 to 6 exactly. For `-01`, edit X stays online and synced as before; only Y moves. Y is asserted in note 2 **before** bundle B's first web sync. The rest is unchanged: the marker, the cache digest, the access log after the load, the refusal, the clear, the re-sync and the comparison.
+3. **Run:** `e2e_pre; T=90m run test-results/verify/m2-s5/run/m2-s5-r2.log env $IMG corepack yarn playwright test tests/e2e/m2-s5`. Expected: 5 passed.
+   - The guard failing (a container or listener still there): **HARD STOP**.
+   - `quiesce` never holding: **HARD STOP** (record the last entries; the app may poll, and the planner rules).
+   - A REST control finding the token: **HARD STOP**.
+   - A `PUT` or a `/joplin-server/` request in the new container's log before the load mark: **HARD STOP**.
+   - Y not shown after the load: **PRODUCT FAILURE** if the harness controls passed, with the evidence.
+   - The WO-5 outcome rules apply otherwise; L20 per D10. The story count is 1 so far, and the per-run HARD STOP stays at the third occurrence in one invocation.
+4. Then **WO-6** and **WO-7** as written, with the amended sensitivity table (S-AC15a/b amended, S-AC16f/g added). End the RED phase with the report WO-7 describes. Also report whether the R1 wording constraint was relayed: it is in plan R1, and the SE reads it there.
