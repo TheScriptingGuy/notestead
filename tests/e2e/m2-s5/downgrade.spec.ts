@@ -14,8 +14,9 @@ import { parseProfileRefusal } from '../support/profileRefusal.ts';
 import { compareSnapshots, restSnapshot, snapshotProblems } from '../support/snapshot.ts';
 import { bundleMarker } from '../support/swState.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
-import { expectNetworkPolicy, newToken, restBody, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
+import { expectNetworkPolicy, expectOnlyReadiness, goOffline, goOnline, newToken, restBody, serverUnreachable, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
 import { syncHeadlessOnce } from '../../stack/stack.ts';
+import type { DownWeb } from '../support/fixtures.ts';
 import { holdsFor } from '../../support/poll.ts';
 
 test.describe('M2-S5 downgrade refusal and recovery', () => {
@@ -25,7 +26,7 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 	test('M2-AC16-02 NEG an older bundle with a lower database version is refused, and clear site data and re-sync recovers all synced data', async ({ stack, e2eeAccount, headlessService, dataApi, extraWebs, appContexts, testBundles }) => {
 		await requireUpstreamBundle(stack, 'M2-S5');
 		const s = await startUnlocked({ stack, e2eeAccount, extraWebs, appContexts, testBundles }, 'down');
-		const { app, ctx, web } = s;
+		const { app, ctx } = s;
 		const [note1, note2] = s.notes;
 		const { versions } = testBundles;
 		const x = newToken();
@@ -38,15 +39,26 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 		});
 		const s0 = restSnapshot(dataApi);
 
-		await test.step('an unsynced edit Z in note 2, stored locally only', async () => {
+		const fx = { stack, e2eeAccount, extraWebs, appContexts, testBundles };
+		let down: DownWeb | undefined;
+		await test.step('go offline (RU-1, RU-2): quiesce, the web container down, the context offline', async () => {
+			down = await goOffline(fx, s);
+			await serverUnreachable(down);
+		});
+		if (!down) throw new Error('unreachable');
+
+		await test.step('offline: an unsynced edit Z in note 2, stored locally; a headless sync does not have it (RU-1 control)', async () => {
 			await typeIntoNote(s, note2.title, z, 'the unsynced edit Z');
-			expect(restBody(dataApi, note2.id).includes(z), 'Z exists only in the local profile').toBe(false);
+			await syncHeadlessOnce(stack, headlessService);
+			expect(restBody(dataApi, note2.id).includes(z), 'REST lacks Z: it never reached the server').toBe(false);
 		});
 
-		await test.step('roll back: redeploy web with the older bundle O, one reload', async () => {
+		await test.step('roll back: unload the tab offline, bring web back with the older bundle O, one online load (RU-1, I8)', async () => {
 			ctx.expectProfileRefusal('M2-AC16-02: the downgrade to bundle O is refused by upstream (plan F1, D6)');
-			s.web = await extraWebs.redeploy(web, { mountDist: testBundles.o });
-			await ctx.page.reload({ timeout: appStartTimeoutMs });
+			await ctx.page.goto('about:blank');
+			await goOnline(fx, s, down!, { mountDist: testBundles.o });
+			await expectOnlyReadiness(extraWebs, s.web);
+			await ctx.page.goto(s.web.url, { timeout: appStartTimeoutMs });
 		});
 
 		await test.step('refusal: upstream\'s alert names both versions, the page shows Startup error., nothing opens', async () => {

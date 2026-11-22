@@ -13,9 +13,10 @@ import { NoteScreen, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts'
 import { compareSnapshots, restSnapshot, snapshotProblems } from '../support/snapshot.ts';
 import { bundleMarker, swCachedDigest, swController } from '../support/swState.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
-import { expectNetworkPolicy, newToken, restBody, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
+import { expectNetworkPolicy, expectOnlyReadiness, goOffline, goOnline, newToken, restBody, serverUnreachable, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
 import type { Fixtures, Started } from '../support/upgradeFlows.ts';
-import type { DataApi } from '../support/fixtures.ts';
+import type { DataApi, DownWeb } from '../support/fixtures.ts';
+import { syncHeadlessOnce } from '../../stack/stack.ts';
 import type { HeadlessService } from '../../stack/stack.ts';
 
 interface UpgradeFixtures extends Fixtures {
@@ -52,9 +53,17 @@ test.describe('M2-S5 bundle upgrade', () => {
 			}
 		});
 
-		await test.step('with bundle A: edit Y in note 2, stored locally only; snapshot S0', async () => {
+		let down: DownWeb | undefined;
+		await test.step('go offline (RU-1, RU-2): quiesce, the web container down, the context offline', async () => {
+			down = await goOffline(fx, s);
+			await serverUnreachable(down);
+		});
+		if (!down) throw new Error('unreachable');
+
+		await test.step('offline: edit Y in note 2, stored locally; a headless sync does not have it (RU-1 control)', async () => {
 			await typeIntoNote(s, note2.title, y, 'the local-only edit Y');
-			expect(restBody(dataApi, note2.id).includes(y), 'Y exists only in the local profile').toBe(false);
+			await syncHeadlessOnce(stack, headlessService);
+			expect(restBody(dataApi, note2.id).includes(y), 'REST lacks Y: it never reached the server').toBe(false);
 		});
 		const s0 = restSnapshot(dataApi);
 
@@ -66,14 +75,13 @@ test.describe('M2-S5 bundle upgrade', () => {
 
 		let consoleMark = 0;
 		let logMark = 0;
-		await test.step(`redeploy web with bundle ${which} on the same port, then one online reload`, async () => {
-			const redeployed = await extraWebs.redeploy(web, { mountDist: target });
+		await test.step(`unload the tab offline, bring web back with bundle ${which} on the same port, then one online load (RU-1, I8)`, async () => {
+			await ctx.page.goto('about:blank');
+			const redeployed = await goOnline(fx, s, down!, { mountDist: target });
 			expect(redeployed.url, 'the same origin').toBe(web.url);
-			expect(await bundleMarker(ctx.page), 'before the reload the running page is still bundle A').toBeNull();
+			logMark = await expectOnlyReadiness(extraWebs, redeployed);
 			consoleMark = ctx.console.length;
-			logMark = (await extraWebs.accessLog(redeployed)).length;
-			s.web = redeployed;
-			await ctx.page.reload({ timeout: appStartTimeoutMs });
+			await ctx.page.goto(redeployed.url, { timeout: appStartTimeoutMs });
 		});
 
 		await test.step(`bundle ${which} is served: it runs, its app bundle is cached, its files were fetched`, async () => {
