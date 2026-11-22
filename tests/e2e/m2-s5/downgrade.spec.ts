@@ -5,6 +5,7 @@
 //               untouched (Z is still in it); clear site data, open the app, sign in, enter the master password, sync: every synced
 //               note and notebook is back, Z is gone (it was never synced), and the account gained nothing but upstream's welcome notebook
 // Needs the real upstream bundle: NOTESTEAD_WEB_ARTIFACT=<CI web-bundle artifact dir>.
+import { ok } from '../support/dataApi.ts';
 import { requireUpstreamBundle } from '../support/bundle.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { configureJoplinServerSync, firstSyncTimeoutMs, syncWebOnce, syncWebThenHeadless } from '../support/flows.ts';
@@ -41,6 +42,7 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 
 		const fx = { stack, e2eeAccount, extraWebs, appContexts, testBundles };
 		let down: DownWeb | undefined;
+		let clearMark = 0;
 		await test.step('go offline (RU-1, RU-2): quiesce, the web container down, the context offline', async () => {
 			down = await goOffline(fx, s);
 			await serverUnreachable(down);
@@ -80,6 +82,7 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 		});
 
 		await test.step('runbook step 4, clear site data: the app starts as a fresh profile', async () => {
+			clearMark = ctx.console.length;
 			await clearSiteData(ctx);
 			ctx.page = await ctx.context.newPage();
 			const fresh = new JoplinWebApp(ctx.page);
@@ -139,6 +142,10 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 			expect(problems, 'S0 is intact, nothing is lost or conflicting, and every added item is a new notebook or a note in one').toEqual([]);
 			const now = restSnapshot(dataApi);
 			const titles = now.folders.filter(f => addedFolders.has(f.id)).map(f => f.title);
+			// RU-8, record only: when the added notebooks were created, and how often the app started after the clear
+			const created = [...addedFolders].map(id => Number(ok(dataApi.get(`/folders/${id}?fields=id,created_time`), 'GET /folders/:id').created_time)).sort((a, b) => a - b);
+			const after = ctx.console.slice(clearMark);
+			test.info().annotations.push({ type: 'welcome-evidence', description: `created_time ${JSON.stringify(created)}; after the clear: ${after.filter(l => l.includes('Starting application')).length} 'Starting application' lines, ${after.filter(l => /Reloading page to make use of (updated )?COOP\/COEP Service Worker\./.test(l)).length} upstream reload lines` });
 			test.info().annotations.push({ type: 'added-after-recovery', description: `${addedFolders.size} notebooks (${titles.join(', ')}), ${diff.added.filter(a => a.kind === 'note').length} notes` });
 		});
 
