@@ -257,3 +257,18 @@ Rules for every order apply, with WO-10's `e2e_pre`.
    - An L20 hit: per D10. A non-L20 failure elsewhere: **HARD STOP**.
 4. **S-AC16h:** if the run's `M2-AC16-03` took (R), run S-AC16h once (`-g M2-AC16-03`, the temporary edit of plan RU-13). It must fail at "the hang does not match L22", naming (ii). If the run took (C), **RECORD** "S-AC16h not exercised in the browser; covered by `swu-03`", and do not repeat runs to get (R).
 5. **Results (one commit, `docs(test-plans): M2-S5 WO-11 results`):** append `### WO-11 results` to the Results section: the per-test outcome, the `self-reload` and `sw-switches` annotations, S-AC16h's site or the RECORD, L20, and the logs. Then end your turn. The planner gives the sign-off from these logs (RU-14).
+
+## WO-11R: Resume after ruling RU-15 (2026-11-23)
+The planner committed your findings as written, plus RU-15. Start from `e8dc85e` with a clean tree. WO-10's `e2e_pre` applies.
+1. **RED → GREEN.**
+   - Commit 1: `swu-06…09` (plan RU-15) in `tests/unit/harness/swTimeline.test.ts`. RED = the missing `judgeUserReload` export. Subject: `test(harness): judge the race branch's user reload by commit and server request (M2-S5 RU-15, RED)`.
+   - Commit 2: `judgeUserReload` and `userReload` in `tests/e2e/support/swTimeline.ts`. Subject: `test(harness): user reload judged by the browser's commit, not Playwright's promise (M2-S5 RU-15)`.
+2. **Specs (one commit):**
+   - `upgrade.spec.ts` (B2 branch, race case) and `sw-update.spec.ts` use `userReload` instead of a bare `page.reload()`. In `H-SWU-01` a switch ends only after its judgement. Every other step is unchanged.
+   - Subject: `test(e2e): M2-AC16-03 and H-SWU-01 judge the user reload by its commit (M2-S5 RU-15)`.
+   - Before committing: eslint and tsc clean, `corepack yarn jest tests/unit/harness`.
+3. **One run** (a new run after a test change; not repeated whatever the outcome): `e2e_pre; T=60m run test-results/verify/m2-s5/verify/ac16-03-r15.log env $IMG corepack yarn playwright test tests/e2e/m2-s5/upgrade.spec.ts tests/e2e/harness/sw-update.spec.ts`. Copy the timelines to `verify/ac16-03-r15-timelines/`.
+   - `unknown`, a user reload that does not commit, or a rejection other than `ERR_ABORTED`: **HARD STOP**.
+   - L20: per D10. Any other failure: **HARD STOP**.
+4. **S-AC16h:** as WO-11 step 4. Run it once if `M2-AC16-03` took (R); otherwise RECORD it.
+5. **Results:** `docs(test-plans): M2-S5 WO-11 results`, as WO-11 step 5, adding the `user reload` annotations and the (C)/(R) counts. Then end your turn; the planner checks the logs for the sign-off (RU-14).
