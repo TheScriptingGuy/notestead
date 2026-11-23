@@ -11,11 +11,13 @@ import { expect, test } from '../support/fixtures.ts';
 import { syncWebThenHeadless } from '../support/flows.ts';
 import { NoteScreen, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import { compareSnapshots, restSnapshot, snapshotProblems } from '../support/snapshot.ts';
+import { classifySelfReload, recordSwTimeline, updatedWorkerLine } from '../support/swTimeline.ts';
 import { bundleMarker, swCachedDigest, swController } from '../support/swState.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { expectNetworkPolicy, expectOnlyReadiness, goOffline, goOnline, newToken, restBody, serverUnreachable, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
 import type { Fixtures, Started } from '../support/upgradeFlows.ts';
 import type { DataApi, DownWeb } from '../support/fixtures.ts';
+import { waitFor } from '../../support/poll.ts';
 import { syncHeadlessOnce } from '../../stack/stack.ts';
 import type { HeadlessService } from '../../stack/stack.ts';
 
@@ -75,12 +77,14 @@ test.describe('M2-S5 bundle upgrade', () => {
 
 		let consoleMark = 0;
 		let logMark = 0;
+		let sw: Awaited<ReturnType<typeof recordSwTimeline>> | undefined;
 		await test.step(`unload the tab offline, bring web back with bundle ${which} on the same port, then one online load (RU-1, I8)`, async () => {
 			await ctx.page.goto('about:blank');
 			const redeployed = await goOnline(fx, s, down!, { mountDist: target });
 			expect(redeployed.url, 'the same origin').toBe(web.url);
 			logMark = await expectOnlyReadiness(extraWebs, redeployed);
 			consoleMark = ctx.console.length;
+			if (which === 'B2') sw = await recordSwTimeline(ctx.page);
 			await ctx.page.goto(redeployed.url, { timeout: appStartTimeoutMs });
 		});
 
@@ -96,12 +100,33 @@ test.describe('M2-S5 bundle upgrade', () => {
 		});
 
 		if (which === 'B2') {
-			await test.step('control: upstream reloaded the page itself for the updated service worker', async () => {
-				const updated = 'Reloading page to make use of updated COOP/COEP Service Worker.';
+			await test.step('upstream\'s self-reload for the updated service worker: committed, or the documented L22 race (RU-13)', async () => {
 				const plain = 'Reloading page to make use of COOP/COEP Service Worker.';
-				await expect.poll(() => ctx.console.slice(consoleMark).some(l => l.endsWith(updated)), { timeout: 60_000, intervals: [1_000], message: 'the console shows upstream\'s updated-worker reload line' }).toBe(true);
+				await expect.poll(() => ctx.console.slice(consoleMark).some(l => l.endsWith(updatedWorkerLine)), { timeout: 60_000, intervals: [1_000], message: 'the console shows upstream\'s updated-worker reload line' }).toBe(true);
+				const lineTime = Date.parse(ctx.console.slice(consoleMark).find(l => l.endsWith(updatedWorkerLine))!.split(' ')[0]);
+				const events = sw!.events;
+				const rootGets = async (from: number): Promise<number> => (await extraWebs.accessLog(s.web)).filter(e => e.method === 'GET' && e.path === '/' && e.ts >= from).length;
+				// a commit shows within seconds; the race is only claimed after a full 60 s without one
+				await waitFor('the self-reload to commit', async () => ((events.some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= lineTime) && (await rootGets(lineTime)) > 0) ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 }).catch(() => undefined);
+				const entries = await extraWebs.accessLog(s.web);
 				const after = ctx.console.slice(consoleMark);
-				test.info().annotations.push({ type: 'self-reloads', description: `updated-worker lines ${after.filter(l => l.endsWith(updated)).length}, not-controlling lines ${after.filter(l => l.endsWith(plain)).length}` });
+				test.info().annotations.push({ type: 'self-reloads', description: `updated-worker lines ${after.filter(l => l.endsWith(updatedWorkerLine)).length}, not-controlling lines ${after.filter(l => l.endsWith(plain)).length}` });
+				const result = classifySelfReload(events, entries, lineTime);
+				await test.info().attach('sw-timeline.json', { body: JSON.stringify({ outcome: result.outcome, parts: result.parts, timeline: events.map(e => ({ ...e, t: e.t - lineTime })), container: entries.filter(e => e.ts >= lineTime - 1_000 && (e.path === '/' || e.path === '/serviceWorker.bundle.js')).map(e => ({ ...e, ts: e.ts - lineTime })) }, null, 2), contentType: 'application/json' });
+				expect(after.filter(l => l.endsWith(updatedWorkerLine)), 'exactly one updated-worker reload line').toHaveLength(1);
+				expect(result.outcome, `the hang does not match L22, or is not a commit: ${result.parts.join('; ')}`).not.toBe('unknown');
+				if (result.outcome === 'committed') {
+					test.info().annotations.push({ type: 'self-reload', description: `committed in ${Math.max(...events.filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= lineTime).map(e => e.t)) - lineTime} ms` });
+				} else {
+					const eventMark = events.length;
+					const logBefore = entries.length;
+					const reloadStarted = Date.now();
+					await ctx.page.reload({ timeout: appStartTimeoutMs });
+					await expect.poll(() => events.slice(eventMark).some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank'), { timeout: appStartTimeoutMs, intervals: [500], message: 'the manual reload committed (a main-frame navigation)' }).toBe(true);
+					await expect.poll(async () => (await extraWebs.accessLog(s.web)).slice(logBefore).some(e => e.method === 'GET' && e.path === '/'), { timeout: 60_000, intervals: [500], message: 'the container logged the manual reload\'s GET /' }).toBe(true);
+					test.info().annotations.push({ type: 'self-reload', description: `L22 race; manual reload committed in ${Date.now() - reloadStarted} ms` });
+				}
+				await sw!.stop();
 				await expect.poll(() => bundleMarker(ctx.page), { timeout: appStartTimeoutMs, intervals: [500] }).toBe(expectedMarker);
 			});
 		}

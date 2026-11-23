@@ -9,20 +9,10 @@ import { requireUpstreamBundle } from '../support/bundle.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { JoplinWebApp, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import { bundleMarker } from '../support/swState.ts';
+import { classifySelfReload, recordSwTimeline, updatedWorkerLine } from '../support/swTimeline.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { waitFor } from '../../support/poll.ts';
 import { freePort } from '../../stack/stack.ts';
-
-interface Stamped { t: number; kind: string; detail: Record<string, unknown> }
-
-const updatedLine = 'Reloading page to make use of updated COOP/COEP Service Worker.';
-const pathOf = (url: string): string => {
-	try {
-		return new URL(url).pathname || url;
-	} catch {
-		return url;
-	}
-};
 
 test.describe('M2-S5 harness: service-worker update reload', () => {
 	test.describe.configure({ timeout: longSpecTimeoutMs });
@@ -35,21 +25,13 @@ test.describe('M2-S5 harness: service-worker update reload', () => {
 		const app = new JoplinWebApp(ctx.page);
 		await app.open(web.url);
 
-		const events: Stamped[] = [];
-		const cdp = await ctx.context.newCDPSession(ctx.page);
-		const record = (kind: string, detail: Record<string, unknown>): void => { events.push({ t: Date.now(), kind, detail }); };
-		cdp.on('ServiceWorker.workerVersionUpdated', (e: { versions: { versionId: string; scriptURL: string; status: string; runningStatus: string }[] }) => {
-			for (const v of e.versions) record('workerVersionUpdated', { versionId: v.versionId, script: pathOf(v.scriptURL), status: v.status, runningStatus: v.runningStatus });
-		});
-		cdp.on('Page.frameRequestedNavigation', (e: { frameId: string; reason: string; url: string }) => record('frameRequestedNavigation', { frameId: e.frameId, reason: e.reason, url: pathOf(e.url) }));
-		cdp.on('Page.frameStartedLoading', (e: { frameId: string }) => record('frameStartedLoading', { frameId: e.frameId }));
-		cdp.on('Page.frameNavigated', (e: { frame: { id: string; loaderId: string; url: string; parentId?: string } }) => record('frameNavigated', { frameId: e.frame.id, loaderId: e.frame.loaderId, url: pathOf(e.frame.url), main: e.frame.parentId === undefined }));
-		cdp.on('Page.frameStoppedLoading', (e: { frameId: string }) => record('frameStoppedLoading', { frameId: e.frameId }));
-		await cdp.send('ServiceWorker.enable');
-		await cdp.send('Page.enable');
+		const sw = await recordSwTimeline(ctx.page);
+		const events = sw.events;
 
 		const outcomes: string[] = [];
-		const hung: number[] = [];
+		const failures: string[] = [];
+		let committed = 0;
+		let races = 0;
 		for (let i = 1; i <= 6; i++) {
 			const toB2 = i % 2 === 1;
 			const expected = toB2 ? `B2-${testBundles.nonce}` : null;
@@ -61,41 +43,53 @@ test.describe('M2-S5 harness: service-worker update reload', () => {
 			const started = Date.now();
 			await ctx.page.goto(web.url, { timeout: appStartTimeoutMs });
 
-			let lineAt: number | undefined;
+			let lineTime: number | undefined;
 			try {
-				await waitFor(`switch ${i}: the updated-worker reload line`, async () => (ctx.console.slice(consoleMark).some(l => l.endsWith(updatedLine)) ? true : undefined), { timeoutMs: 60_000, intervalMs: 250 });
-				lineAt = Date.now();
+				await waitFor(`switch ${i}: the updated-worker reload line`, async () => (ctx.console.slice(consoleMark).some(l => l.endsWith(updatedWorkerLine)) ? true : undefined), { timeoutMs: 60_000, intervalMs: 250 });
+				lineTime = Date.parse(ctx.console.slice(consoleMark).find(l => l.endsWith(updatedWorkerLine))!.split(' ')[0]);
 			} catch {
-				lineAt = undefined;
+				lineTime = undefined;
 			}
-			let committedMs: number | undefined;
-			if (lineAt !== undefined) {
-				const after = lineAt;
-				try {
-					await waitFor(`switch ${i}: a main-frame navigation committed after the line`, async () => {
-						const navigated = events.slice(eventMark).some(e => e.kind === 'frameNavigated' && e.detail.main === true && e.t >= after - 50 && !String(e.detail.url).startsWith('blank'));
-						if (!navigated) return undefined;
-						try {
-							return (await bundleMarker(ctx.page)) === expected ? true : undefined;
-						} catch {
-							return undefined;
-						}
-					}, { timeoutMs: 60_000, intervalMs: 500 });
-					committedMs = Date.now() - after;
-				} catch {
-					committedMs = undefined;
+			let label: string;
+			if (lineTime === undefined) {
+				failures.push(`${i}: no updated-worker reload line`);
+				label = 'unknown (no reload line)';
+			} else {
+				const line = lineTime;
+				const rootGets = async (): Promise<number> => (await extraWebs.accessLog(web)).filter(e => e.method === 'GET' && e.path === '/' && e.ts >= line).length;
+				await waitFor(`switch ${i}: the self-reload to commit`, async () => ((events.slice(eventMark).some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= line) && (await rootGets()) > 0) ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 }).catch(() => undefined);
+				const result = classifySelfReload(events.slice(eventMark), await extraWebs.accessLog(web), line);
+				if (result.outcome === 'committed') {
+					committed++;
+					label = `C committed in ${Math.max(...events.slice(eventMark).filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= line).map(e => e.t)) - line} ms`;
+				} else if (result.outcome === 'race') {
+					const mark = events.length;
+					const logBefore = (await extraWebs.accessLog(web)).length;
+					const t0 = Date.now();
+					try {
+						await ctx.page.reload({ timeout: appStartTimeoutMs });
+						await waitFor(`switch ${i}: the manual reload to commit`, async () => (events.slice(mark).some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank') && (await bundleMarker(ctx.page)) === expected ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 });
+						if (!(await extraWebs.accessLog(web)).slice(logBefore).some(e => e.method === 'GET' && e.path === '/')) throw new Error('no GET / for the manual reload');
+						races++;
+						label = `R L22 race; manual reload committed in ${Date.now() - t0} ms`;
+					} catch (error) {
+						failures.push(`${i}: the manual reload did not commit (${(error as Error).message.split('\n')[0]})`);
+						label = 'R, manual reload hung';
+					}
+				} else {
+					failures.push(`${i}: unknown (${result.parts.join('; ')})`);
+					label = 'unknown';
 				}
 			}
-			if (committedMs === undefined) hung.push(i);
-			outcomes.push(`${i} (${toB2 ? 'B2' : 'A'}): ${committedMs === undefined ? `hung${lineAt === undefined ? ' (no reload line)' : ''}` : `committed in ${committedMs} ms`}`);
+			outcomes.push(`${i} (${toB2 ? 'B2' : 'A'}): ${label}`);
 
-			const container = (await extraWebs.accessLog(web)).slice(logMark).filter(e => e.path === '/' || e.path === '/serviceWorker.bundle.js').map(e => ({ t: e.ts, kind: 'container', detail: { method: e.method, path: e.path, status: e.status } }));
-			const consoleLines = ctx.console.slice(consoleMark).filter(l => l.includes('Reloading page to make use of')).map(l => ({ t: Date.parse(l.split(' ')[0]), kind: 'console', detail: { line: l.split('] ')[1] ?? l } }));
-			const timeline = [...events.slice(eventMark), ...container, ...consoleLines].sort((a, b) => a.t - b.t).map(e => ({ ms: e.t - started, kind: e.kind, ...e.detail }));
-			await test.info().attach(`sw-timeline-${i}.json`, { body: JSON.stringify({ switch: i, bundle: toB2 ? 'B2' : 'A', outcome: outcomes[outcomes.length - 1], timeline }, null, 2), contentType: 'application/json' });
+			const container = (await extraWebs.accessLog(web)).slice(logMark).filter(e => e.path === '/' || e.path === '/serviceWorker.bundle.js').map(e => ({ t: e.ts, kind: 'container', method: e.method, path: e.path, status: e.status }));
+			const timeline = [...events.slice(eventMark), ...container].sort((x, y) => x.t - y.t).map(e => ({ ...e, t: e.t - started }));
+			await test.info().attach(`sw-timeline-${i}.json`, { body: JSON.stringify({ switch: i, bundle: toB2 ? 'B2' : 'A', outcome: label, timeline }, null, 2), contentType: 'application/json' });
 		}
-		test.info().annotations.push({ type: 'sw-switches', description: outcomes.join('; ') });
+		await sw.stop();
+		test.info().annotations.push({ type: 'sw-switches', description: `C ${committed}, R ${races}, other ${6 - committed - races}: ${outcomes.join('; ')}` });
 		test.info().annotations.push({ type: 'sw-instrumentation', description: process.env.PLAYWRIGHT_DISABLE_SERVICE_WORKER_NETWORK ? 'off' : 'on' });
-		expect(hung, `switches whose self-reload never committed: ${outcomes.join('; ')}`).toEqual([]);
+		expect(failures, `switches that are neither a commit nor the L22 race with a committing manual reload: ${outcomes.join('; ')}`).toEqual([]);
 	});
 });
