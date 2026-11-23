@@ -2,7 +2,7 @@
 // the page and the container's access log it says `committed`, `race` (limitation L22: all four parts of the signature) or `unknown`.
 // Synthetic timelines, so the strictness of the race matcher does not depend on the browser's luck.
 import { describe, expect, test } from '@jest/globals';
-import { classifySelfReload } from '../../e2e/support/swTimeline.ts';
+import { classifySelfReload, judgeUserReload } from '../../e2e/support/swTimeline.ts';
 import type { SwEvent } from '../../e2e/support/swTimeline.ts';
 
 const line = 10_000;
@@ -48,5 +48,33 @@ describe('self-reload classifier', () => {
 		expect(r.parts.join(' ')).toMatch(/\(i\)[^;]*missing/);
 		const blank = classifySelfReload([...raceEvents, navigated(line + 500, 'blank')], [], line);
 		expect(blank.outcome).toBe('race');
+	});
+	// RU-15: the user's reload in the race branch is judged by the browser's commit and the server's log, not by Playwright's promise
+	const t0 = 50_000;
+	const ok = { state: 'resolved' } as const;
+	const aborted = { state: 'rejected', message: 'page.reload: net::ERR_ABORTED; maybe frame was detached?' } as const;
+
+	test('swu-06 a resolved reload with a main-frame commit and a GET / is committed', () => {
+		const r = judgeUserReload(ok, [navigated(t0 + 100)], [get(t0 + 20)], t0);
+		expect(r.committed).toBe(true);
+	});
+
+	test('swu-07 ERR_ABORTED with a commit and a GET / is committed (the reload replaced the stuck self-reload)', () => {
+		const r = judgeUserReload(aborted, [navigated(t0 + 100)], [get(t0 + 20)], t0);
+		expect(r.committed).toBe(true);
+		expect(r.parts.join(' ')).toMatch(/ERR_ABORTED/);
+	});
+
+	test('swu-08 a GET / without a commit, or a commit without a GET /, is not committed', () => {
+		expect(judgeUserReload(aborted, [], [get(t0 + 20)], t0).committed).toBe(false);
+		expect(judgeUserReload(ok, [navigated(t0 + 100)], [], t0).committed).toBe(false);
+		// events before t0 do not count, and neither does about:blank
+		expect(judgeUserReload(ok, [navigated(t0 - 100), navigated(t0 + 10, 'blank')], [get(t0 + 20)], t0).committed).toBe(false);
+	});
+
+	test('swu-09 any other rejection fails, named, even with a commit and a GET /', () => {
+		const r = judgeUserReload({ state: 'rejected', message: 'page.reload: net::ERR_FAILED' }, [navigated(t0 + 100)], [get(t0 + 20)], t0);
+		expect(r.committed).toBe(false);
+		expect(r.parts.join(' ')).toMatch(/ERR_FAILED/);
 	});
 });
