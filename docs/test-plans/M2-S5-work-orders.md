@@ -233,3 +233,27 @@ e2e_pre() { t=$(date +%s); mkdir -p test-results/verify/m2-s5/stale-stack test-r
 6. **Strategy (one commit, `docs(testing): local full regression bound and evidence-keeping (M2-S5 RU-9, RU-10)`):** in `docs/testing/strategy.md` §7, a local full E2E regression runs with a 170-minute bound, and every run moves the previous `test-results/e2e/output` aside first.
 
 Then stop. The planner rules on RU-9 (a) or (b) from the report. `M2-AC16-03` is not run again before that ruling.
+
+---
+
+## WO-11: M2-AC16-03 and H-SWU-01 under RU-13 (RED → GREEN for the matcher; one run)
+Rules for every order apply, with WO-10's `e2e_pre`.
+1. **Matcher (RED → GREEN).**
+   - Commit 1: `tests/unit/harness/swTimeline.test.ts` with `swu-01…05` (plan RU-13). RED = the missing module. Subject: `test(harness): classify upstream's self-reload as committed, the L22 race, or unknown (M2-S5 RU-13, RED)`.
+   - Commit 2: `tests/e2e/support/swTimeline.ts`. Move `H-SWU-01`'s CDP recorder there as `recordSwTimeline(page): Promise<{ events, stop }>` (value-free events: kind, time, ids, path, status, runningStatus, reason), and add `classifySelfReload(events, accessEntries, lineTime, windowMs = 60_000): { outcome: 'committed' | 'race' | 'unknown'; parts: string[] }`. Subject: `test(harness): the self-reload timeline and its classifier (M2-S5 RU-13)`.
+2. **Specs (one commit):**
+   - `upgrade.spec.ts`, the `B2` branch of the `upgrade` flow:
+     - start `recordSwTimeline` before the one online load;
+     - after the updated-worker line, wait up to 60 s and then classify;
+     - `committed`: continue;
+     - `race`: exactly one `ctx.page.reload({ timeout: appStartTimeoutMs })`; it must commit (a `frameNavigated` of the main frame after it) and the container must log a `GET /`;
+     - `unknown`: fail with `parts`;
+     - always write the `self-reload` annotation and attach the timeline JSON;
+     - every other step unchanged. `M2-AC16-01` (the B branch) is unchanged.
+   - `sw-update.spec.ts` (`H-SWU-01`): each switch classified the same way; on `race`, one manual reload that must commit; `unknown` collected; one assertion at the end that no switch is `unknown` and every manual reload committed; `sw-switches` annotation with the C and R counts.
+   - Subject: `test(e2e): M2-AC16-03 and H-SWU-01 accept a committed self-reload or the documented L22 race, nothing else (M2-S5 RU-13)`. Run eslint and tsc clean first; run `corepack yarn jest tests/unit/harness` (regression).
+3. **One run** (not repeated, whatever the outcome): `e2e_pre; T=60m run test-results/verify/m2-s5/verify/ac16-03-r13.log env $IMG corepack yarn playwright test tests/e2e/m2-s5/upgrade.spec.ts tests/e2e/harness/sw-update.spec.ts`. Expected: `M2-AC16-01`, `M2-AC16-03` and `H-SWU-01` pass, with the outcome of each self-reload in the annotations.
+   - `unknown` anywhere, or a manual reload that does not commit: **HARD STOP**. Attach the timelines; do not widen the matcher.
+   - An L20 hit: per D10. A non-L20 failure elsewhere: **HARD STOP**.
+4. **S-AC16h:** if the run's `M2-AC16-03` took (R), run S-AC16h once (`-g M2-AC16-03`, the temporary edit of plan RU-13). It must fail at "the hang does not match L22", naming (ii). If the run took (C), **RECORD** "S-AC16h not exercised in the browser; covered by `swu-03`", and do not repeat runs to get (R).
+5. **Results (one commit, `docs(test-plans): M2-S5 WO-11 results`):** append `### WO-11 results` to the Results section: the per-test outcome, the `self-reload` and `sw-switches` annotations, S-AC16h's site or the RECORD, L20, and the logs. Then end your turn. The planner gives the sign-off from these logs (RU-14).
