@@ -4,6 +4,7 @@
 // commits that navigation (C) or loses it (R, the L22 race). `classifySelfReload` tells them apart from the CDP events of the page and the
 // container's access log, and is strict: anything but a commit or the whole signature is `unknown`. Value-free: kinds, times, ids, paths.
 import type { Page } from '@playwright/test';
+import { waitFor } from '../../support/poll.ts';
 
 export interface SwEvent {
 	// epoch milliseconds, when this process received the event
@@ -67,4 +68,41 @@ export const classifySelfReload = (events: SwEvent[], accessEntries: LogEntry[],
 	];
 	const race = !!request && !!redundant && !!taking && navigations.length === 0 && rootRequests.length === 0;
 	return { outcome: race ? 'race' : 'unknown', parts };
+};
+
+export type ReloadOutcome = { state: 'resolved' } | { state: 'rejected'; message: string };
+
+// RU-15: the user's reload of a tab stuck by the L22 race. Playwright's promise is an unreliable witness there (the reload replaces the
+// stuck self-reload navigation and can reject with `net::ERR_ABORTED`), so the commit is judged from the browser (a main-frame
+// navigation to the app after `t0`) and the server (a GET / after `t0`). `net::ERR_ABORTED` is accepted, together with that evidence and
+// recorded; any other rejection fails, named.
+export const judgeUserReload = (outcome: ReloadOutcome, events: SwEvent[], accessEntries: LogEntry[], t0: number): { committed: boolean; parts: string[] } => {
+	const navigated = events.some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= t0);
+	const served = accessEntries.some(e => e.method === 'GET' && e.path === '/' && e.ts >= t0);
+	const parts: string[] = [
+		outcome.state === 'resolved' ? 'promise: resolved' : outcome.message.includes('net::ERR_ABORTED') ? 'promise: ERR_ABORTED (replaced the stuck self-reload)' : `promise: rejected with ${outcome.message.split('\n')[0]}`,
+		`main-frame navigation to the app after the reload: ${navigated ? 'seen' : 'missing'}`,
+		`GET / after the reload: ${served ? 'seen' : 'missing'}`,
+	];
+	const promiseOk = outcome.state === 'resolved' || outcome.message.includes('net::ERR_ABORTED');
+	return { committed: promiseOk && navigated && served, parts };
+};
+
+// Starts one `page.reload()` and waits, by polling, for its commit evidence; returns once the promise has settled too, so nothing is
+// still running in the tab. Nothing else is started in the tab meanwhile.
+export const userReload = async (page: Page, events: SwEvent[], accessLog: () => Promise<LogEntry[]>, opts: { timeoutMs: number }): Promise<{ committed: boolean; parts: string[]; ms: number }> => {
+	const t0 = Date.now();
+	let settled: ReloadOutcome | undefined;
+	const promise = page.reload({ timeout: opts.timeoutMs }).then((): ReloadOutcome => ({ state: 'resolved' }), (e: Error): ReloadOutcome => ({ state: 'rejected', message: e.message }));
+	void promise.then(o => { settled = o; });
+	try {
+		await waitFor('the user reload to commit', async () => {
+			if (settled?.state === 'rejected' && !settled.message.includes('net::ERR_ABORTED')) return true;
+			return judgeUserReload(settled ?? { state: 'resolved' }, events, await accessLog(), t0).committed ? true : undefined;
+		}, { timeoutMs: opts.timeoutMs, intervalMs: 500 });
+	} catch {
+		// the verdict below names what is missing
+	}
+	const final = await promise;
+	return { ...judgeUserReload(final, events, await accessLog(), t0), ms: Date.now() - t0 };
 };
