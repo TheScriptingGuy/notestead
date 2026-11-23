@@ -11,7 +11,7 @@ import { expect, test } from '../support/fixtures.ts';
 import { syncWebThenHeadless } from '../support/flows.ts';
 import { NoteScreen, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import { compareSnapshots, restSnapshot, snapshotProblems } from '../support/snapshot.ts';
-import { classifySelfReload, recordSwTimeline, updatedWorkerLine } from '../support/swTimeline.ts';
+import { classifySelfReload, recordSwTimeline, updatedWorkerLine, userReload } from '../support/swTimeline.ts';
 import { bundleMarker, swCachedDigest, swController } from '../support/swState.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { expectNetworkPolicy, expectOnlyReadiness, goOffline, goOnline, newToken, restBody, serverUnreachable, startUnlocked, typeIntoNote } from '../support/upgradeFlows.ts';
@@ -118,13 +118,10 @@ test.describe('M2-S5 bundle upgrade', () => {
 				if (result.outcome === 'committed') {
 					test.info().annotations.push({ type: 'self-reload', description: `committed in ${Math.max(...events.filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= lineTime).map(e => e.t)) - lineTime} ms` });
 				} else {
-					const eventMark = events.length;
-					const logBefore = entries.length;
-					const reloadStarted = Date.now();
-					await ctx.page.reload({ timeout: appStartTimeoutMs });
-					await expect.poll(() => events.slice(eventMark).some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank'), { timeout: appStartTimeoutMs, intervals: [500], message: 'the manual reload committed (a main-frame navigation)' }).toBe(true);
-					await expect.poll(async () => (await extraWebs.accessLog(s.web)).slice(logBefore).some(e => e.method === 'GET' && e.path === '/'), { timeout: 60_000, intervals: [500], message: 'the container logged the manual reload\'s GET /' }).toBe(true);
-					test.info().annotations.push({ type: 'self-reload', description: `L22 race; manual reload committed in ${Date.now() - reloadStarted} ms` });
+					const reload = await userReload(ctx.page, events, () => extraWebs.accessLog(s.web), { timeoutMs: appStartTimeoutMs });
+					test.info().annotations.push({ type: 'user-reload', description: reload.parts.join('; ') });
+					expect(reload.committed, `the user's reload of the stuck tab committed: ${reload.parts.join('; ')}`).toBe(true);
+					test.info().annotations.push({ type: 'self-reload', description: `L22 race; manual reload committed in ${reload.ms} ms` });
 				}
 				await sw!.stop();
 				await expect.poll(() => bundleMarker(ctx.page), { timeout: appStartTimeoutMs, intervals: [500] }).toBe(expectedMarker);

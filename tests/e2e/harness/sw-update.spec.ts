@@ -9,7 +9,7 @@ import { requireUpstreamBundle } from '../support/bundle.ts';
 import { expect, test } from '../support/fixtures.ts';
 import { JoplinWebApp, appStartTimeoutMs } from '../support/pages/joplinWebApp.ts';
 import { bundleMarker } from '../support/swState.ts';
-import { classifySelfReload, recordSwTimeline, updatedWorkerLine } from '../support/swTimeline.ts';
+import { classifySelfReload, recordSwTimeline, updatedWorkerLine, userReload } from '../support/swTimeline.ts';
 import { longSpecTimeoutMs } from '../support/timeouts.ts';
 import { waitFor } from '../../support/poll.ts';
 import { freePort } from '../../stack/stack.ts';
@@ -63,18 +63,13 @@ test.describe('M2-S5 harness: service-worker update reload', () => {
 					committed++;
 					label = `C committed in ${Math.max(...events.slice(eventMark).filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= line).map(e => e.t)) - line} ms`;
 				} else if (result.outcome === 'race') {
-					const mark = events.length;
-					const logBefore = (await extraWebs.accessLog(web)).length;
-					const t0 = Date.now();
-					try {
-						await ctx.page.reload({ timeout: appStartTimeoutMs });
-						await waitFor(`switch ${i}: the manual reload to commit`, async () => (events.slice(mark).some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank') && (await bundleMarker(ctx.page)) === expected ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 });
-						if (!(await extraWebs.accessLog(web)).slice(logBefore).some(e => e.method === 'GET' && e.path === '/')) throw new Error('no GET / for the manual reload');
+					const reload = await userReload(ctx.page, events, () => extraWebs.accessLog(web), { timeoutMs: appStartTimeoutMs });
+					if (reload.committed && (await bundleMarker(ctx.page)) === expected) {
 						races++;
-						label = `R L22 race; manual reload committed in ${Date.now() - t0} ms`;
-					} catch (error) {
-						failures.push(`${i}: the manual reload did not commit (${(error as Error).message.split('\n')[0]})`);
-						label = 'R, manual reload hung';
+						label = `R L22 race; user reload committed in ${reload.ms} ms (${reload.parts[0]})`;
+					} else {
+						failures.push(`${i}: the user reload did not commit (${reload.parts.join('; ')})`);
+						label = 'R, user reload not committed';
 					}
 				} else {
 					failures.push(`${i}: unknown (${result.parts.join('; ')})`);
