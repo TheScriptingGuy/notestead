@@ -209,3 +209,27 @@ The plan's "Planner rulings on the WO-5 HARD STOPs" is binding. The planner comm
 - **L20 (RU-7):** in WO-8, an L20-only failure is recorded and does not fail the story by itself; the third occurrence in one invocation is still a **HARD STOP**. Record `M2-AC16-02`-style hits after an excused refusal as `startupFailed: no` (RU-7). In the results, state per AC test whether it has passed completely (WS-1 included) at least once, in WO-8 or in the CI proof run; `M2-AC15-01` and `M2-AC16-02` have not yet. If WO-8 leaves one without such a pass, report it; never re-run to get one.
 - **Welcome notebooks (RU-8):** for `M2-AC16-02` in the WO-8 run, record the number of added welcome folders, their `created_time`s, and the number of app starts after the clear (`Starting application` and upstream's reload console lines). Record only.
 - **Sensitivities:** S-AC15c/S-AC15c2 (RU-5) and S-AC16b with its attempt-1 log (RU-6) are ratified; list both in the results.
+
+---
+
+## WO-10: Diagnose the M2-AC16-03 self-reload hang (RU-9); m2-s6 targeted run (RU-10)
+Rules for every order apply. **Changed rule:** `e2e_pre` now also moves the previous output, so evidence is never overwritten:
+```sh
+e2e_pre() { t=$(date +%s); mkdir -p test-results/verify/m2-s5/stale-stack test-results/verify/m2-s5/stale-output; [ -d test-results/e2e/stack ] && mv test-results/e2e/stack "test-results/verify/m2-s5/stale-stack/$t"; [ -d test-results/e2e/output ] && mv test-results/e2e/output "test-results/verify/m2-s5/stale-output/$t"; true; }
+```
+1. **Keep the evidence:** copy `test-results/e2e/output/m2-s5-upgrade-M2-S5-bundle-1313e--changes-the-service-worker-chromium/` to `test-results/verify/m2-s5/verify/full-ac16-03-hang/` before any run.
+2. **`H-SWU-01` (one commit, `test(harness): characterise the service-worker update reload (M2-S5 RU-9)`), `tests/e2e/harness/sw-update.spec.ts`.**
+   - Fixtures: `extraWebs`, `appContexts` and `testBundles` only; no account, no headless service.
+   - Flow: start a test `web` with A, then `JoplinWebApp.open` (the sync wizard of a fresh profile is enough). Then **6 switches**, alternating B2, A, B2, A, B2, A. Every switch changes `serviceWorker.bundle.js`, because A's and B2's differ. Each switch is: `ctx.page.goto('about:blank')`, `extraWebs.redeploy` with the next bundle, the console and log marks, one `ctx.page.goto(url)`. Then wait up to 60 s for the updated-worker reload line, and up to 60 s more for a main-frame navigation that **commits after that line**: the CDP `Page.frameNavigated` of the main frame, followed by the marker of the expected bundle (`null` for A).
+   - **Timeline (always attached, value-free, as `sw-timeline-<i>.json`):** from a CDP session on the page, `ServiceWorker.enable` → every `workerVersionUpdated` (`versionId`, `scriptURL` path, `status`, `runningStatus`, the time); and `Page.enable` → `frameRequestedNavigation`, `frameStartedLoading`, `frameNavigated` (main frame: `loaderId`, URL path), `frameStoppedLoading`. Add the console's reload lines and the container's `GET /` and `GET /serviceWorker.bundle.js` entries, all with times.
+   - **Collect all 6 outcomes, then assert once** (like M2-S6 RU-3): every switch's self-reload committed. The failure lists the switches that hung. Annotation `sw-switches` with `<i>: committed in <ms> | hung` for each switch.
+3. **Run it twice, logged separately:**
+   - default: `e2e_pre; T=40m run test-results/verify/m2-s5/diag/swu-default.log env $IMG corepack yarn playwright test tests/e2e/harness/sw-update.spec.ts`;
+   - Playwright's worker network instrumentation off: the same with `PLAYWRIGHT_DISABLE_SERVICE_WORKER_NETWORK=1` added to the env (`swu-nosw.log`).
+
+   Copy each run's output directory to `diag/<name>-output/`. A failure is the measurement, **not** a HARD STOP. Do not run either variant more than once.
+4. **Report** (under `## Findings (executor)` → `### WO-10 diagnosis`, uncommitted, then end your turn). For each variant: the hung/committed counts. For each hung switch: the last `workerVersionUpdated` states of the old and the new version, whether `frameRequestedNavigation`/`frameStartedLoading` happened, and whether any `GET /` arrived. Also compare with the full-run hang of step 1 (its console and container times). Give your reading, labelled unproven where it is. Change no test, harness or config beyond `H-SWU-01`.
+5. **The m2-s6 targeted run (RU-10):** `e2e_pre; T=40m run test-results/verify/m2-s5/verify/m2-s6.log env $IMG corepack yarn playwright test tests/e2e/m2-s6 tests/e2e/harness/unoverlaid-dist.spec.ts tests/e2e/harness/opfs-files.spec.ts`. Expected: all pass, with L20 per D10. Any non-L20 failure: **HARD STOP**. Record the result in the report.
+6. **Strategy (one commit, `docs(testing): local full regression bound and evidence-keeping (M2-S5 RU-9, RU-10)`):** in `docs/testing/strategy.md` §7, a local full E2E regression runs with a 170-minute bound, and every run moves the previous `test-results/e2e/output` aside first.
+
+Then stop. The planner rules on RU-9 (a) or (b) from the report. `M2-AC16-03` is not run again before that ruling.
