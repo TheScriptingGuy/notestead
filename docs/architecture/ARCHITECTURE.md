@@ -222,7 +222,8 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
   - **Our version (D7, gate 1):** one lockstep semver for all artifacts. An upstream patch is our PATCH; a Joplin minor upgrade is our **MAJOR** (MINOR while 0.x) and moves the floating `joplin<minor>` image tag (ADR-0006).
 - **Rollback:**
   - Image digests are immutable. The headless profile is snapshotted before a CLI version change (last 3 kept).
-  - The browser database migrates forward only: roll back, then "clear site data" and re-sync. Unsynced local edits, local E2EE password entry and plugins are lost.
+  - The browser database migrates forward only: roll back, then "clear site data" and re-sync. Unsynced local edits, local E2EE password entry and plugins are lost. The user's runbook is `deploy/web/README.md`, "Rolling back the web app" (M2-S5).
+  - After an upgrade that changes the service worker, a tab may need one manual reload (L22).
   - The user's server is never touched.
 
 ## 8. Test strategy (summary of ADR-0007)
@@ -302,6 +303,12 @@ The measured outage per cycle on the Pi is **~16–19 s** for small deltas: thre
     - **Upstream issues, filed by the user (U14):** A, the transaction scope, and B, mapping the web driver's errors to `code` so the retry applies. Drafts are in the worklog §6; the links get added here when they are filed. A sqlite-wasm report for the `rc= -1` itself (C) waits for a smaller reproduction without Joplin. Draft C's "two or three browsers loading the app at once" is out of date: use the single-browser figures above (worklog §11).
     - **No local fix:** following "Reuse, never fork", there is no `patches/` file.
 - **L21.** **The sync wizard shows upstream's Joplin Cloud logo.** The "Joplin Cloud" option in the web app's sync wizard carries upstream's logo (an inline SVG compiled into the app, `upstream:packages/app-mobile/components/SyncWizard/JoplinCloudIcon.tsx`), which our branding overlay can't replace without patching upstream. It labels the third-party sync option and is not Notestead's branding; Joplin Cloud itself is not supported here (L10). The trademark review before the first public release includes it. Documented by `M2-S6-LOGO-01`. *(Added 2026-11-21; the user's decision Q1 = (a) of 2026-11-20, ADR-0010 Consequences.)*
+- **L22.** **After an upgrade, the tab can stay "loading" after its automatic reload. Reload the page once.** When an upgrade changes the web app's service worker (`serviceWorker.bundle.js`), upstream's page script reloads the page by itself (console: `Reloading page to make use of updated COOP/COEP Service Worker.`). Sometimes that automatic reload never finishes: the tab keeps its loading indicator and no request reaches the server. **The app is already running the new version, and your data is safe:** the page that started the reload has opened the profile and keeps syncing. One manual reload completes it. *(Added 2026-11-23, M2-S5.)*
+  - **Cause (upstream plus Chromium, nothing of ours):** the page script reloads on the registration's `updatefound` event, that is while the new worker is still installing (`upstream:packages/app-mobile/web/serviceWorker.ts:275-279`), and the new worker calls `skipWaiting()` on install and `clients.claim()` on activate (`serviceWorker.ts:43-44`). The reload therefore races the activation. When the old worker is replaced while the reload navigation is in flight, Chromium drops that navigation. Our headers were the same in hanging and committing reloads.
+  - **Signature** (the classifier in `M2-AC16-03` and `H-SWU-01` requires all four parts; anything else fails the test): (i) a main-frame `frameRequestedNavigation` with reason `reload` after upstream's reload line; (ii) after it, the old worker version `redundant` and the new one `activating` or `activated`; (iii) no main-frame `frameNavigated` for 60 s after (i); (iv) no `GET /` in the web container's log after the line. In every committed reload, the old version instead answers the navigation and `GET /` arrives about 30 ms later.
+  - **Measured rate on the Pi (arm64, Chromium), which varies between runs:** `H-SWU-01` (six worker-changing switches per run) hung 2 of 6 with Playwright's worker instrumentation on and 4 of 6 with it off (WO-10); 1 of 5 in WO-11's first run, where `M2-AC16-03` also hung; 0 of 7 self-reloads in the signed-off run (WO-11R). The WO-8 full regression's `M2-AC16-03` hang has the same signature. Because it happens with the instrumentation off, it is not a test artefact. Other browsers are not measured.
+  - **Detection:** `H-SWU-01` records the count of committed (C) and raced (R) switches per run (`sw-switches`); `M2-AC16-03` accepts (R) only with the full signature followed by one committed user reload (RU-13, RU-15). A change in the rate, or the race disappearing after an upstream fix, shows up in those counts at the L22 review.
+  - **Remedy upstream:** U21 (draft in §10.1). Evidence: [`docs/test-plans/M2-S5.md`](../test-plans/M2-S5.md), WO-10 diagnosis, RU-12 to RU-16.
 
 ## 10. Upstream-first ledger
 Each shim we carry has an upstream change that would remove it. Filing uses the user's GitHub account (Q11, approved at gate 1; U2 and U5 go privately through Joplin's security policy):
@@ -328,6 +335,7 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 | U18 | *(candidate, not filed)* lib/app-mobile: an opt-in, per-plugin "run anyway (unsupported)" for incompatible plugins on Android/web | ADR-0011's re-tag step |
 | U19 | *(candidate, not filed; the user deferred author requests on 2026-11-19, D5)* plugin authors: declare `"platforms": ["desktop", "mobile"]` once a plugin is verified on web (route E) | ADR-0011's repackaging, for that plugin |
 | U20 | *(candidate, not filed; draft in §10.1)* app-mobile web: the published production bundle crashes at start on any `localhost` origin, because `environment.js` turns on `__DEV__` there and a production build stubs the React Refresh runtime with a throw | nothing we carry (the overlay's `environment.js` stays for branding and U7); it fixes the raw bundle for everyone else |
+| U21 | *(candidate, not filed; draft in §10.1)* app-mobile web: reload on `navigator.serviceWorker` `controllerchange` instead of the registration's `updatefound`, so the automatic reload after a worker update no longer races `skipWaiting()`/`clients.claim()` | L22 (nothing we carry; `H-SWU-01` shows when it lands) |
 
 ### 10.1 Draft issue texts (unfiled; the user files them)
 **U20.** Title: *Web app: the production web build crashes at start when served from a `localhost` origin.*
@@ -344,7 +352,27 @@ Each shim we carry has an upstream change that would remove it. Filing uses the 
 >
 > **Suggestion:** decide dev mode at build time instead of from the origin, for example by having webpack define `__DEV__` from its `mode` (or write `environment.js` from the build), so a production build is never in dev mode, wherever it is served. Self-hosters commonly open a local deployment on `localhost`.
 
-Before filing: check upstream's issues for an existing report, and re-check the behaviour at the pin in force then.
+**U21.** Title: *Web app: the automatic reload after a service-worker update can hang (reload on `updatefound` races `skipWaiting`/`clients.claim`).*
+
+> **Version:** v3.7.21 (`e41516e6`), `packages/app-mobile/web/serviceWorker.ts`, as built by `yarn web`. Chromium (Playwright's build) on Linux arm64; other browsers not tested.
+>
+> **Steps:** serve the web app, open it and let it load once, so its service worker controls the page. Deploy a build in which `serviceWorker.bundle.js` differs, then reload the tab once while online.
+>
+> **Expected:** the page logs `Reloading page to make use of updated COOP/COEP Service Worker.`, reloads, and the reloaded page loads.
+>
+> **Actual:** in some updates the reload never commits. The tab stays loading, no request for the page reaches the server (only the browser's own `serviceWorker.bundle.js` update checks), and the page that started the reload keeps running. A manual reload completes it. In our measurements: 2 and 4 hangs in 6 updates in two runs, and 0 in 7 in a later one; the rate varies between runs. It also happens with the test tool's worker network instrumentation turned off.
+>
+> **What the browser's timeline shows:** in a hang, the reload navigation (`reason: reload`) starts, and while it is in flight the old worker version becomes `redundant` and the new one `activating`. The navigation then never commits. In every reload that commits, the old version is still active, answers the navigation, and the page request reaches the server about 30 ms later.
+>
+> **Cause:** the page script reloads on the registration's `updatefound` event (`serviceWorker.ts:275-279`), which fires as soon as the new worker starts installing. The worker calls `skipWaiting()` on `install` and `clients.claim()` on `activate` (`serviceWorker.ts:43-44`), so it takes over at once. The reload navigation is therefore dispatched while the controller is being replaced, and Chromium can drop it.
+>
+> **Suggested fix:** reload on `navigator.serviceWorker`'s `controllerchange` event instead of on `updatefound`. That is the standard pattern for "reload once the new worker is in control": it fires after the new worker controls the page, so the reload is handled by the new worker and cannot race the activation. Keep the existing `coiReloadedBySelf` guard so the page reloads at most once. Note that `controllerchange` also fires when the first worker claims a page it didn't control, which overlaps the existing "registration active but not controlling" reload (`serviceWorker.ts:281-286`); the two paths should not both reload. The script is adapted from gzuidhof/coi-serviceworker; whether that project has the same pattern is worth checking, and it may want the same change.
+
+A **Chromium bug report is optional.** Chromium arguably should not lose a navigation when its controlling worker is replaced mid-fetch, but a report there needs a minimal reproduction without Joplin: a static page whose worker calls `skipWaiting()` and `clients.claim()`, a page script that calls `location.reload()` on `updatefound`, and a loop that changes the worker script and counts reloads that never commit. We have not built one; the upstream fix above removes the race either way.
+
+Evidence for both: L22, [`docs/test-plans/M2-S5.md`](../test-plans/M2-S5.md) (WO-10 diagnosis, RU-12, WO-11), timelines under the QA run's `test-results/verify/m2-s5/diag/` (local, not in the repo).
+
+Before filing: check upstream's issues for an existing report, and re-check the behaviour at the pin in force then. This applies to U20 and U21.
 
 ## 11. Spike results (M0)
 
