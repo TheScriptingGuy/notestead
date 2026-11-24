@@ -272,3 +272,26 @@ The planner committed your findings as written, plus RU-15. Start from `e8dc85e`
    - L20: per D10. Any other failure: **HARD STOP**.
 4. **S-AC16h:** as WO-11 step 4. Run it once if `M2-AC16-03` took (R); otherwise RECORD it.
 5. **Results:** `docs(test-plans): M2-S5 WO-11 results`, as WO-11 step 5, adding the `user reload` annotations and the (C)/(R) counts. Then end your turn; the planner checks the logs for the sign-off (RU-14).
+
+---
+
+## WO-12: Self-reload outcome (N), commit-only load, and the exact upload control (RU-17, RU-18)
+Rules for every order apply, with WO-10's `e2e_pre`. Start from `4ab86ef` plus the planner's ruling commit, with a clean tree.
+1. **RED → GREEN.**
+   - Commit 1: `swu-10…13` in `tests/unit/harness/swTimeline.test.ts` and `ro-01…04` in `tests/unit/harness/upgradeFlows.test.ts` (plan RU-17, RU-18). RED = the `N` outcome and the missing `unexpectedBeforeLoad`. Subject: `test(harness): the update-at-navigation outcome and the exact before-load control (M2-S5 RU-17, RU-18, RED)`.
+   - Commit 2: `classifySelfReload` returns `committed | race | updated-at-navigation | unknown` (the (N) signature of RU-17; it takes the versionId that was active before the load). Add `unexpectedBeforeLoad` in `tests/e2e/support/upgradeFlows.ts`, and use it in `expectOnlyReadiness`. Subject: `test(harness): classify the update found at navigation, and name only unexplained requests before the load (M2-S5 RU-17, RU-18)`.
+2. **Specs (one commit):**
+   - **The one online load** in `sw-update.spec.ts`, `upgrade.spec.ts` and `downgrade.spec.ts`: `goto(url, { waitUntil: 'commit', timeout: appStartTimeoutMs })`. Then assert the response status (200 or 304) and a `GET /` after the mark.
+   - **`H-SWU-01`:**
+     - per switch, wait up to 60 s for the reload line **or** for the (N) signature, then classify;
+     - (N) needs `bundleMarker` = expected;
+     - the `sw-switches` annotation gains the `N` count;
+     - `unknown` fails.
+   - **`M2-AC16-03`:** the control step becomes "the worker was updated" (RU-17 point 3). On (R), `userReload` as now. Every other step unchanged.
+   - Subject: `test(e2e): the one online load waits for the commit; the worker update may be found at navigation (M2-S5 RU-17, RU-18)`.
+   - Before committing: eslint and tsc clean; `corepack yarn jest tests/unit/harness`.
+3. **One local run** (not repeated): `e2e_pre; T=60m run test-results/verify/m2-s5/verify/wo12.log env $IMG corepack yarn playwright test tests/e2e/m2-s5 tests/e2e/harness/sw-update.spec.ts`. Copy the timelines to `verify/wo12-timelines/`.
+   - Expected: all pass, each self-reload's outcome annotated.
+   - `unknown`, a non-committing user reload, a rejection other than `ERR_ABORTED`, or an unexplained before-load entry: **HARD STOP**.
+   - L20 per D10.
+4. **Results:** `docs(test-plans): M2-S5 WO-12 results`. Append `### WO-12 results` with the outcomes, the C/R/N counts and L20. Then end your turn. The planner renews the sign-off from the logs, and the orchestrator starts the CI proof run.
