@@ -7,6 +7,8 @@ import { freePort, podmanSync } from '../../stack/stack.ts';
 import { holdsFor, waitFor } from '../../support/poll.ts';
 import type { Account, ExtraWeb, HeadlessService, StackState } from '../../stack/stack.ts';
 import { ok } from './dataApi.ts';
+import { unexpectedBeforeLoad } from './beforeLoad.ts';
+export { unexpectedBeforeLoad };
 import { openUnlockedWebApp } from './flows.ts';
 import { expectStoredLocally } from './localProfile.ts';
 import { connectionCheckUrl, endOfTestViolations } from './network.ts';
@@ -117,7 +119,6 @@ export const serverUnreachable = async (down: DownWeb): Promise<string> => {
 // RU-1 step 5: the new container has seen nothing but the harness's own readiness `GET /` before the app's one online load.
 export const expectOnlyReadiness = async (extraWebs: ExtraWebs, web: ExtraWeb): Promise<number> => {
 	const log = await extraWebs.accessLog(web);
-	const other = log.filter(e => !(e.method === 'GET' && e.path === '/')).map(e => `${e.method} ${e.path}`);
-	expect(other, 'the new container saw only the readiness GET / before the load (no upload from the old app)').toEqual([]);
+	expect(unexpectedBeforeLoad(log), 'the new container saw only the readiness GET / and the browser\'s update check before the load (no upload from the old app)').toEqual([]);
 	return log.length;
 };

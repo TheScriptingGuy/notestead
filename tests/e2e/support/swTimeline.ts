@@ -49,11 +49,30 @@ export const recordSwTimeline = async (page: Page): Promise<{ events: SwEvent[];
 // Tolerance for the order of two events received within a few milliseconds of each other.
 const slack = 100;
 
-export const classifySelfReload = (events: SwEvent[], accessEntries: LogEntry[], lineTime: number, windowMs = 60_000): { outcome: 'committed' | 'race' | 'unknown'; parts: string[] } => {
-	const end = lineTime + windowMs;
-	const inWindow = events.filter(e => e.t >= lineTime - slack && e.t <= end);
-	const navigations = inWindow.filter(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= lineTime);
-	const rootRequests = accessEntries.filter(e => e.method === 'GET' && e.path === '/' && e.ts >= lineTime && e.ts <= end);
+// `lineTime` is the time of the updated-worker reload line, or undefined when there was none. Without a line, (N) "updated at navigation"
+// (RU-17) is recognised only with its full signature, given the load's time and the worker version that was active before it: the
+// browser's own update check at the start of the navigation found the new worker before the page script registered `updatefound`.
+export const classifySelfReload = (events: SwEvent[], accessEntries: LogEntry[], lineTime: number | undefined, windowMs = 60_000, load?: { t: number; previousVersionId: string }): { outcome: 'committed' | 'race' | 'updated-at-navigation' | 'unknown'; parts: string[] } => {
+	if (lineTime === undefined) {
+		if (!load) return { outcome: 'unknown', parts: ['no reload line and no load to judge an update at navigation against'] };
+		const end = load.t + windowMs;
+		const inWindow = events.filter(e => e.t >= load.t - slack && e.t <= end);
+		const taken = inWindow.find(e => e.kind === 'workerVersionUpdated' && e.status === 'activated' && e.versionId !== undefined && e.versionId !== load.previousVersionId);
+		const reloads = inWindow.filter(e => e.kind === 'frameRequestedNavigation' && e.reason === 'reload');
+		const fetched = accessEntries.some(e => e.method === 'GET' && e.path === '/serviceWorker.bundle.js' && e.status === 200 && e.ts >= load.t && e.ts <= end);
+		const parts = [
+			'(i) no updated-worker reload line: seen',
+			`(ii) a version other than ${load.previousVersionId} reached activated after the load started: ${taken ? `seen (${load.previousVersionId} -> ${taken.versionId})` : 'missing'}`,
+			`(iii) no reload navigation after the commit: ${reloads.length === 0 ? 'seen' : `missing (${reloads.length} requested)`}`,
+			`(iv) GET /serviceWorker.bundle.js answered 200 after the load started: ${fetched ? 'seen' : 'missing'}`,
+		];
+		return { outcome: taken && reloads.length === 0 && fetched ? 'updated-at-navigation' : 'unknown', parts };
+	}
+	const lineT = lineTime;
+	const end = lineT + windowMs;
+	const inWindow = events.filter(e => e.t >= lineT - slack && e.t <= end);
+	const navigations = inWindow.filter(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= lineT);
+	const rootRequests = accessEntries.filter(e => e.method === 'GET' && e.path === '/' && e.ts >= lineT && e.ts <= end);
 	if (navigations.length > 0 && rootRequests.length > 0) return { outcome: 'committed', parts: ['main-frame navigation committed after the line', 'GET / after the line'] };
 
 	const request = inWindow.find(e => e.kind === 'frameRequestedNavigation' && e.reason === 'reload');
