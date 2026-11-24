@@ -59,8 +59,10 @@ test.describe('M2-S5 downgrade refusal and recovery', () => {
 			ctx.expectProfileRefusal('M2-AC16-02: the downgrade to bundle O is refused by upstream (plan F1, D6)');
 			await ctx.page.goto('about:blank');
 			await goOnline(fx, s, down!, { mountDist: testBundles.o });
-			await expectOnlyReadiness(extraWebs, s.web);
-			await ctx.page.goto(s.web.url, { timeout: appStartTimeoutMs });
+			const logMark = await expectOnlyReadiness(extraWebs, s.web);
+			const response = await ctx.page.goto(s.web.url, { waitUntil: 'commit', timeout: appStartTimeoutMs });
+			expect([200, 304], 'the document\'s response status').toContain(response?.status());
+			await expect.poll(async () => (await extraWebs.accessLog(s.web)).slice(logMark).some(e => e.method === 'GET' && e.path === '/'), { timeout: 60_000, intervals: [500], message: 'the container logged the load\'s GET /' }).toBe(true);
 		});
 
 		await test.step('refusal: upstream\'s alert names both versions, the page shows Startup error., nothing opens', async () => {

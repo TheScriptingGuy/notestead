@@ -89,6 +89,9 @@ export const classifySelfReload = (events: SwEvent[], accessEntries: LogEntry[],
 	return { outcome: race ? 'race' : 'unknown', parts };
 };
 
+// The worker version that was active (last `activated`) at time `t`, or '' when none was seen.
+export const activeVersionBefore = (events: SwEvent[], t: number): string => [...events].filter(e => e.kind === 'workerVersionUpdated' && e.status === 'activated' && e.t <= t).pop()?.versionId ?? '';
+
 export type ReloadOutcome = { state: 'resolved' } | { state: 'rejected'; message: string };
 
 // RU-15: the user's reload of a tab stuck by the L22 race. Playwright's promise is an unreliable witness there (the reload replaces the
