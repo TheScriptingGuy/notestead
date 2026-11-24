@@ -77,4 +77,33 @@ describe('self-reload classifier', () => {
 		expect(r.committed).toBe(false);
 		expect(r.parts.join(' ')).toMatch(/ERR_FAILED/);
 	});
+	// RU-17: (N) the browser found the new worker at the start of the navigation, so upstream's page script never saw `updatefound`
+	const load = { t: line - 5_000, previousVersionId: '0' };
+	const nEvents = [wv(load.t + 10, '0', 'activated'), wv(load.t + 300, '1', 'installing'), wv(load.t + 400, '1', 'installed'), wv(load.t + 450, '1', 'activating'), wv(load.t + 600, '1', 'activated')];
+	const swGet = (ts: number, status: number): { method: string; path: string; status: number; ts: number } => get(ts, '/serviceWorker.bundle.js', status);
+
+	test('swu-10 no reload line, a new version activated, no reload navigation and a 200 for the worker script is (N)', () => {
+		const r = classifySelfReload(nEvents, [get(load.t + 5), swGet(load.t + 8, 200)], undefined, 60_000, load);
+		expect(r.outcome).toBe('updated-at-navigation');
+		expect(r.parts.join(' ')).toMatch(/0 .* 1/);
+	});
+
+	test('swu-11 (N) without the new version activating (ii) is unknown, and names (ii)', () => {
+		const r = classifySelfReload(nEvents.filter(e => e.versionId !== '1'), [swGet(load.t + 8, 200)], undefined, 60_000, load);
+		expect(r.outcome).toBe('unknown');
+		expect(r.parts.join(' ')).toMatch(/\(ii\)[^;]*missing/);
+	});
+
+	test('swu-12 (N) with only a 304 for the worker script (iv) is unknown, and names (iv)', () => {
+		const r = classifySelfReload(nEvents, [swGet(load.t + 8, 304)], undefined, 60_000, load);
+		expect(r.outcome).toBe('unknown');
+		expect(r.parts.join(' ')).toMatch(/\(iv\)[^;]*missing/);
+		// a reload navigation after the load (iii) also rules (N) out
+		expect(classifySelfReload([...nEvents, requested(load.t + 700)], [swGet(load.t + 8, 200)], undefined, 60_000, load).outcome).toBe('unknown');
+	});
+
+	test('swu-13 with a reload line the outcome is never (N)', () => {
+		const r = classifySelfReload([...nEvents, requested(line + 5)], [swGet(load.t + 8, 200)], line, 60_000, load);
+		expect(r.outcome).not.toBe('updated-at-navigation');
+	});
 });
