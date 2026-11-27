@@ -295,3 +295,32 @@ Rules for every order apply, with WO-10's `e2e_pre`. Start from `4ab86ef` plus t
    - `unknown`, a non-committing user reload, a rejection other than `ERR_ABORTED`, or an unexplained before-load entry: **HARD STOP**.
    - L20 per D10.
 4. **Results:** `docs(test-plans): M2-S5 WO-12 results`. Append `### WO-12 results` with the outcomes, the C/R/N counts and L20. Then end your turn. The planner renews the sign-off from the logs, and the orchestrator starts the CI proof run.
+
+---
+
+## WO-13: Classifier precision and H-SWU-01 as a characterisation run (RU-24, RU-25)
+Rules for every order apply, with WO-10's `e2e_pre`. Start from `c06543e` plus the planner's ruling commit, with a clean tree.
+1. **RED → GREEN.**
+   - Commit 1: `swu-14…17` (plan RU-24). RED = (C) without a console line, and the missing (M) class. Subject: `test(harness): a self-reload proven by the timeline, and the update missed at a load (M2-S5 RU-24, RED)`.
+   - Commit 2: `classifySelfReload`:
+     - (C) from the timeline; the console line is recorded, not required;
+     - outcome `missed-at-load` (M) with its full signature;
+     - signature parts in `parts`.
+
+     Subject: `test(harness): classify self-reloads from the timeline; name the update missed at a load (M2-S5 RU-24)`.
+2. **Config and specs (one commit):**
+   - **`playwright.config.ts`:** `grepInvert` excludes `@network` unless `NOTESTEAD_NETWORK_TESTS=1`, and `@characterisation` unless `NOTESTEAD_CHARACTERISATION_TESTS=1` (one regex built from both). Update the header comment.
+   - **`sw-update.spec.ts`:**
+     - the title gets the `@characterisation` tag and says "characterises";
+     - per switch, record the class; after an (R), the user reload as now;
+     - assert only RU-25's three invariants, collected over all switches and asserted once at the end;
+     - an `unknown` is recorded in `sw-switches`, with its timeline attached;
+     - `sw-switches` lists the C/R/N/M/unknown counts.
+   - **`upgrade.spec.ts` (`M2-AC16-03`):** the control accepts (C), (R) and (N); (M) and `unknown` fail, named. Every other step is unchanged.
+   - **NT tests:** if a test asserts the `grepInvert` (M2-S4 NT-*), extend it to `@characterisation`, with its NEG.
+   - Subject: `test(e2e): H-SWU-01 characterises the worker update and asserts only user-facing invariants; M2-AC16-03 classifies from the timeline (M2-S5 RU-24, RU-25)`.
+   - Before committing: eslint and tsc clean; `corepack yarn jest tests/unit/harness tests/integration/harness`.
+3. **One local run** (not repeated): `e2e_pre; T=60m run test-results/verify/m2-s5/verify/wo13.log env $IMG NOTESTEAD_CHARACTERISATION_TESTS=1 corepack yarn playwright test tests/e2e/m2-s5 tests/e2e/harness/sw-update.spec.ts`. Also `playwright test --list` without the variable, which must not list `H-SWU-01` (`verify/wo13-list.log`).
+   - An M2-S5 AC failure that is not L20, or an `H-SWU-01` invariant failure: **HARD STOP**.
+   - `unknown` in `H-SWU-01`: **RECORD** with its timeline. In `M2-AC16-03`: **HARD STOP**.
+4. **Results:** `docs(test-plans): M2-S5 WO-13 results`, with the class counts and the `M2-AC16-03` `self-reload` annotation. Then end your turn. The planner renews the sign-off from the logs, and the orchestrator starts the third proof run.
