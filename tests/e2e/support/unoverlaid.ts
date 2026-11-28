@@ -35,7 +35,7 @@ const walk = (dir: string): Map<string, Buffer> => {
 };
 
 // Modes 0644 and 0755 only: the container's user (65532) reads the bind mount through the "other" bits.
-const normalizeModes = (dir: string): void => {
+export const normalizeModes = (dir: string): void => {
 	chmodSync(dir, 0o755);
 	for (const entry of readdirSync(dir)) {
 		const p = join(dir, entry);
@@ -44,15 +44,23 @@ const normalizeModes = (dir: string): void => {
 	}
 };
 
-export const reconstructUnoverlaid = (stack: StackState, dir: string): UnoverlaidDirs => {
+// Step 1 of the reconstruction, shared with the M2-S5 test bundles (docs/test-plans/M2-S5.md D1): the exact tree the stack's web
+// container serves, copied with `podman cp` into `target` (which must not exist), with the modes of `normalizeModes`.
+export const copyServedTree = (stack: StackState, target: string): void => {
 	const container = stack.containers.web;
 	if (!container) throw new Error('the stack has no web container');
+	rmSync(target, { recursive: true, force: true });
+	mkdirSync(dirname(target), { recursive: true });
+	podmanSync(['cp', `${container}:/srv/www`, target]);
+	normalizeModes(target);
+};
+
+export const reconstructUnoverlaid = (stack: StackState, dir: string): UnoverlaidDirs => {
 	rmSync(dir, { recursive: true, force: true });
 	mkdirSync(dir, { recursive: true });
 	const served = join(dir, 'served');
 	const unoverlaid = join(dir, 'unoverlaid');
-	podmanSync(['cp', `${container}:/srv/www`, served]);
-	normalizeModes(served);
+	copyServedTree(stack, served);
 	cpSync(served, unoverlaid, { recursive: true });
 	for (const name of overlayAdded) rmSync(join(unoverlaid, name), { recursive: true, force: true });
 	for (const [path, content] of upstreamPublic()) {

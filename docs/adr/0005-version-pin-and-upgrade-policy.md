@@ -49,6 +49,7 @@ Facts that constrain the policy (all verified in the reference clone):
      - Rolling the bundle back across a migration makes the app refuse its own database.
      - The runbook says: sync first, roll back, then "clear site data" and re-sync. What is lost: unsynced local edits, the local E2EE password cache and installed plugins, which the user reinstalls.
      - The service worker fetches network-first, so a redeployed bundle is picked up on the next online load.
+     - **The user-facing runbook is [`deploy/web/README.md`, "Rolling back the web app"](../../deploy/web/README.md#rolling-back-the-web-app)** (M2-S5, checked by `U-AC16-RB-01`).
    - **The user's Joplin Server is never upgraded or rolled back by this project.**
 
 ## Alternatives considered
@@ -79,3 +80,9 @@ This ADR *is* the upgrade policy. Each bump PR updates `upstream/joplin-version.
 
 ## Amendments (2026-10-04, M1-S1)
 - **Same-minor lockfile rule, made precise.** `@joplin/lib@3.7.1` depends on `@joplin/fork-*` (4.1.64, 1.2.68, 2.0.7) and `@joplin/turndown*` (4.0.86, 1.0.68), which upstream versions on their own lines. The rule therefore applies to the lockstep `@joplin/*` packages only, and fails closed for unknown ones. The exempt packages are covered by the exact `joplin` pin plus `yarn.lock`, and their upgrades show up in the bump PR's lockfile diff. M1-AC3 is amended to match.
+
+## Amendments (2026-11-23, M2-S5)
+- **Browser rollback runbook.** Decision 4's browser steps are written for users in [`deploy/web/README.md`, "Rolling back the web app"](../../deploy/web/README.md#rolling-back-the-web-app): sync, redeploy the previous image by digest, close all tabs, clear site data, sign in, enter the master password and sync. `U-AC16-RB-01` checks the runbook's content; `M2-AC16-02` proves in the browser that a downgraded bundle refuses the newer profile and that the recovery restores the data. M5-AC9 (the runbook exercised once on the Pi) still applies.
+- **Each recovery adds one or more welcome notebooks** (L5, L14): the recovered profile is fresh, so upstream's welcome notebook is created again; the runbook tells the user to delete the extras.
+- **Upgrades that change the service worker may leave the tab loading** after upstream's automatic reload (L22, upstream draft U21). The new bundle is already running; one manual reload completes it. Patch-bump release notes mention it when `serviceWorker.bundle.js` changes.
+- **Upgrade test against real artifacts (M6-AC8).** M2-AC16 uses bundle A and a fixture bundle B built from it. On a pin bump, the bump PR also runs M2-AC16's upgrade path with A = the previous pin's released web artifact and B = the new pin's, so an upstream migration, service-worker or cache change between real versions is exercised before users get it.

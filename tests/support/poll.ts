@@ -45,3 +45,17 @@ export const holdsFor = async (what: string, probe: () => Promise<string | undef
 		await pause(opts.intervalMs ?? 1_000);
 	}
 };
+
+// A promise that must answer within `ms`: a page evaluation in a frame stuck in a navigation never does (the L22 race, M2-S5 WO-13), and
+// `waitFor` cannot interrupt a probe that never returns. The abandoned promise is left to settle by itself.
+export const withTimeout = async <T>(what: string, promise: Promise<T>, ms: number): Promise<T> => {
+	const stop = new AbortController();
+	try {
+		return await Promise.race([
+			promise,
+			pause(ms, undefined, { signal: stop.signal }).then(() => { throw new Error(`${what} did not answer within ${ms} ms`); }, () => new Promise<never>(() => undefined)),
+		]);
+	} finally {
+		stop.abort();
+	}
+};

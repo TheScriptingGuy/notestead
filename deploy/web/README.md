@@ -53,3 +53,22 @@ The base image is pinned by its multi-arch index digest. To update, take the new
 index digest from the registry (`Docker-Content-Digest` of the image index; it must list `linux/amd64` and
 `linux/arm64`), change both in the `FROM` line, and run the contract suite
 (`corepack yarn jest -c jest.contract.config.js tests/contract/m1-s4`).
+
+## Rolling back the web app
+Use this to go back to the previous web image after a bad upgrade. The browser keeps its own copy of the app and its
+database, so redeploying the old image is not enough. The steps follow
+[ADR-0005, Decision 4](../../docs/adr/0005-version-pin-and-upgrade-policy.md).
+
+1. In the web app, sync and wait for it to finish, so the server has your latest changes.
+2. Redeploy the previous image by its digest (`localhost/notestead-web@sha256:...`), not by a tag.
+3. Close all tabs and windows of the app.
+4. Delete the site data for the app's address in the browser's site settings. This removes the app's local database,
+   cache and settings.
+5. Open the app, sign in, enter the master password, and sync. Your notes download again.
+
+What is lost: unsynced local edits, the saved master password entry (you enter it again in step 5) and installed
+plugins (install them again). Online edits upload within about 2 seconds, so a rollback loses only edits made offline
+or in the last few seconds before it.
+
+A recovered browser profile is a fresh one, so the app adds an extra copy of the welcome notebook to your account.
+Delete the extra welcome notebooks after step 5.

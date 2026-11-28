@@ -240,3 +240,70 @@ export const opfsPaths = async (webApp: WebApp, opts?: { timeoutMs?: number }): 
 		await probe.close();
 	}
 };
+
+// One read of the app's database files (the main database and the log database, *.sqlite3, never a journal) while the app page
+// stays open, for comparing a whole profile with a data snapshot (docs/test-plans/M2-S5.md D8). The caller searches the one read
+// with `findInDatabaseFile` for every needle, so an absence counts only when the same read found the needles that must be there.
+// A file that cannot be read yet is retried for 30 s; at least one file must have been read.
+export const localDatabaseFiles = async (webApp: WebApp, opts?: { timeoutMs?: number }): Promise<{ path: string; bytes: Uint8Array }[]> => {
+	const probe = await openProbe(webApp);
+	try {
+		return await waitFor('the web app\'s database files to be readable', async () => {
+			const r = await readDatabaseFiles(probe);
+			return r.unreadable === 0 && r.files.length > 0 ? r.files : undefined;
+		}, { timeoutMs: opts?.timeoutMs ?? 30_000, intervalMs: 500 });
+	} finally {
+		await probe.close();
+	}
+};
+
+// "Clear site data" as a user does it in Chromium's site settings (docs/test-plans/M2-S5.md I6, D7): the app's tab is closed
+// (the app's worker releases its OPFS handles), then the origin's data is deleted through CDP `Storage.clearDataForOrigin` from a
+// same-origin probe page, and the effect is proven before the helper returns: no service-worker registration, no Cache Storage
+// cache, an empty OPFS. Anything left throws, naming what survived (scopes, cache names, paths: never content). The caller opens
+// a new page afterwards. `storageTypes` is a parameter for the sensitivity run that clears less.
+export const clearSiteData = async (webApp: WebApp, opts: { storageTypes?: string } = {}): Promise<void> => {
+	await webApp.page.close();
+	const origin = new URL(webApp.baseURL).origin;
+	const probe = await webApp.context.newPage();
+	try {
+		await probe.goto(`${origin}/manifest.json`);
+		const cdp = await webApp.context.newCDPSession(probe);
+		try {
+			await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: opts.storageTypes ?? 'all' });
+		} finally {
+			await cdp.detach();
+		}
+		await probe.reload();
+		let left: { registrations: string[]; caches: string[]; opfs: string[] } | undefined;
+		try {
+			await waitFor('the origin\'s data to be gone', async () => {
+				left = await probe.evaluate(async () => {
+					interface Handle { kind: string; entries?: () => AsyncIterable<[string, Handle]> }
+					const g = globalThis as unknown as {
+						navigator: { serviceWorker?: { getRegistrations: () => Promise<{ scope: string }[]> }; storage: { getDirectory: () => Promise<Handle> } };
+						caches: { keys: () => Promise<string[]> };
+					};
+					const opfs: string[] = [];
+					const walk = async (dir: Handle, path: string): Promise<void> => {
+						for await (const [name, handle] of dir.entries?.() ?? []) {
+							opfs.push(`${path}/${name}`);
+							if (handle.kind === 'directory') await walk(handle, `${path}/${name}`);
+						}
+					};
+					await walk(await g.navigator.storage.getDirectory(), '');
+					return {
+						registrations: (await (g.navigator.serviceWorker?.getRegistrations() ?? Promise.resolve([]))).map(r => r.scope),
+						caches: await g.caches.keys(),
+						opfs: opfs.sort(),
+					};
+				});
+				return left.registrations.length === 0 && left.caches.length === 0 && left.opfs.length === 0 ? true : undefined;
+			}, { timeoutMs: 30_000, intervalMs: 1_000 });
+		} catch (error) {
+			throw new Error(`clearSiteData left data behind: ${left ? `service-worker registrations ${JSON.stringify(left.registrations)}, caches ${JSON.stringify(left.caches)}, OPFS paths ${JSON.stringify(left.opfs)}` : (error as Error).message}`);
+		}
+	} finally {
+		await probe.close();
+	}
+};

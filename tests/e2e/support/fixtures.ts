@@ -18,6 +18,8 @@
 //                         choice (M2-S6 D3); removed at teardown, their logs attached on failure
 //           appContexts   browser contexts on other origins (`http://localhost:<port>`), each fresh (own OPFS, service worker),
 //                         with the console, the trace, a network recorder and the WEB-SQLITE-1 check of `webApp` (M2-S6 D4)
+//   worker  testBundles   the served bundle A and the derived bundles B, B2 and O of M2-S5, under test-results/e2e/m2-s5-bundles/ removed at
+//                         worker teardown (docs/test-plans/M2-S5.md D1-D3; never committed)
 //   worker  unoverlaidDist the served bundle with every overlay change undone from upstream's public/ at the pin, two directories
 //                         under test-results/e2e/m2-s6-dists/ removed at worker teardown (M2-S6 D2; never committed)
 //           testFiles     files generated from a per-test seed in a temp dir outside test-results/, removed at teardown (M2-S3 D4)
@@ -34,13 +36,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test as base } from '@playwright/test';
 import type { Browser, BrowserContext, Page, TestInfo } from '@playwright/test';
+import { createServer } from 'node:net';
 import { checkServerUrl } from '../../stack/guard.ts';
 import {
-	containerLog, createAccount, downHeadless, enableE2ee, knownSecrets, projectContainers, registerToken, removeContainer, secretsFor, serverRequest,
+	containerLog, createAccount, podmanSync, downHeadless, enableE2ee, knownSecrets, projectContainers, registerToken, removeContainer, secretsFor, serverRequest,
 	StackHealthError, upExtraWeb, upHeadless, upWebWithoutHostRewrite,
 } from '../../stack/stack.ts';
 import type { Account, ExtraWeb, HeadlessService, StackState } from '../../stack/stack.ts';
 import type { HttpResponse } from '../../contract/support/http.ts';
+import { waitFor } from '../../support/poll.ts';
 import { redactText } from '../../support/redact.ts';
 import type { KnownSecret } from '../../support/redact.ts';
 import { installStdioRedaction, mergeSecrets, registeredSecrets, secretFeedEnabled } from '../../support/secrets.ts';
@@ -58,6 +62,10 @@ import { endOfTestViolations, recordNetwork } from './network.ts';
 import type { NetworkRecorder } from './network.ts';
 import { requireUpstreamBundle } from './bundle.ts';
 import type { UnoverlaidDirs } from './unoverlaid.ts';
+import { parseAccessLog } from './accessLog.ts';
+import type { AccessEntry } from './accessLog.ts';
+import { excusedStartupFailures } from './webSqlite.ts';
+import type { TestBundles } from './testBundles.ts';
 
 export interface JoplinServerHandle {
 	// http://127.0.0.1:<published port>; needs the Host of APP_BASE_URL (use `request`)
@@ -101,6 +109,12 @@ export interface WebApp {
 	// Opts this test out of the browser SQLite failure check (WEB-SQLITE-1), with the reason recorded as an annotation. No
 	// spec uses it; it exists for a future story that injects faults on purpose.
 	allowSqliteFailures: (reason: string) => void;
+	// The one startup failure an older bundle's refusal causes is expected (docs/test-plans/M2-S5.md D6): from this call on, the
+	// context's browser dialogs are recorded and accepted, and a `startup` failure is excused only when a recorded dialog that is
+	// upstream's profile-version refusal follows it within 10 s. Every other SQLite failure still fails the test.
+	expectProfileRefusal: (reason: string) => void;
+	// The dialogs recorded since `expectProfileRefusal` (message, time in epoch ms); empty before it.
+	dialogs: { message: string; ts: number }[];
 }
 
 // A browser context of `appContexts`: a WebApp plus the network recorder of its context.
@@ -116,10 +130,24 @@ export interface ExtraWebStart {
 	mountDist?: string;
 }
 
+// A test's own `web` container that was taken down: where it was, so `up` can put a new one on the same port (RU-2).
+export interface DownWeb { port: number; url: string; role: string; container: string }
+
 export interface ExtraWebs {
 	start: (opts: ExtraWebStart) => Promise<ExtraWeb>;
 	// Removes the container (its log is kept for a failing test).
 	stop: (web: ExtraWeb) => void;
+	// Replaces a container by a new one of the same image on the same host port (so the same origin: the same OPFS, service worker
+	// and Cache Storage), serving `mountDist` (docs/test-plans/M2-S5.md D4, I5). The old container's log is kept. Throws
+	// `port <P> was taken during the redeploy` when the port is not free again.
+	redeploy: (web: ExtraWeb, opts: { mountDist?: string }) => Promise<ExtraWeb>;
+	// The two halves of `redeploy` (docs/test-plans/M2-S5.md RU-2): `down` stops and removes the container (its log and access log are
+	// kept) and remembers its port; `up` starts a new one on that port. An offline phase of a test is the context offline while its
+	// `web` is down.
+	down: (web: ExtraWeb) => DownWeb;
+	up: (down: DownWeb, opts: { mountDist?: string }) => Promise<ExtraWeb>;
+	// The container's access log so far, parsed (method, path without query, status, time). Never the query string.
+	accessLog: (web: ExtraWeb) => Promise<AccessEntry[]>;
 }
 
 export interface AppContexts {
@@ -132,6 +160,7 @@ export interface AppContexts {
 interface WorkerFixtures {
 	stack: StackState;
 	unoverlaidDist: UnoverlaidDirs;
+	testBundles: TestBundles;
 	joplinServer: JoplinServerHandle;
 	redactStdio: undefined;
 }
@@ -276,6 +305,20 @@ const startAppSession = async (browser: Browser, stack: StackState, testInfo: Te
 		page.on('pageerror', e => lines.push(`${new Date().toISOString()} [pageerror] ${e.message}`));
 	};
 	context.on('page', watch);
+	// The expected profile refusal (D6): dialogs are listened to only after `expectProfileRefusal`, so a test's own
+	// `waitForEvent('dialog')` is not disturbed. An `alert` must be closed or the page blocks.
+	const dialogs: { message: string; ts: number }[] = [];
+	let refusal: string | undefined;
+	const watchDialogs = (p: Page): void => {
+		p.on('dialog', d => {
+			dialogs.push({ message: d.message(), ts: Date.now() });
+			d.accept().catch(() => undefined);
+		});
+	};
+	const failuresOf = (): SqliteFailure[] => {
+		const all = sqliteFailures(lines);
+		return refusal === undefined ? all : excusedStartupFailures(all, lines, dialogs).rest;
+	};
 	// The trace of this context, kept on failure (docs/test-plans/M1-S7.md, Finding F2). The harness records it itself
 	// instead of Playwright's `use.trace` (off in playwright.config.ts): the runner merges the test's traces with
 	// yauzl, which never finishes on Node 24 once a trace entry is larger than 64 KiB (the real app's bundle, its DOM
@@ -289,12 +332,19 @@ const startAppSession = async (browser: Browser, stack: StackState, testInfo: Te
 		allowed = reason;
 		testInfo.annotations.push({ type: 'allow-sqlite', description: reason });
 	};
-	const app: AppContext = { context, page, baseURL: opts.baseURL, console: lines, allowSqliteFailures, network };
+	const expectProfileRefusal = (reason: string): void => {
+		if (refusal !== undefined) return;
+		refusal = reason;
+		testInfo.annotations.push({ type: 'expect-profile-refusal', description: reason });
+		for (const p of context.pages()) watchDialogs(p);
+		context.on('page', watchDialogs);
+	};
+	const app: AppContext = { context, page, baseURL: opts.baseURL, console: lines, allowSqliteFailures, expectProfileRefusal, dialogs, network };
 	let early: { dir: string; trace: string } | undefined;
 
 	const closeEarly = async (): Promise<void> => {
 		if (early) return;
-		const sqlite = sqliteFailures(lines);
+		const sqlite = failuresOf();
 		// The storage estimate and the failures' arguments are read while the context is still open.
 		if (sqlite.length > 0 && allowed === undefined) await keepWebSqlite(stack, testInfo, app, sqlite, await Promise.all(sqliteArgs), lines, opts.label);
 		const dir = mkdtempSync(join(tmpdir(), 'nst-trace-'));
@@ -307,18 +357,20 @@ const startAppSession = async (browser: Browser, stack: StackState, testInfo: Te
 	const finish = async (): Promise<void> => {
 		// A real SQLite failure in the browser (a lost write, a failed start) fails the test here, at once, instead of
 		// 60 s later as a data mismatch, or never (WEB-SQLITE-1). The evidence is kept as for any failure.
-		const sqlite = sqliteFailures(lines);
+		const sqlite = failuresOf();
 		const sqliteFailing = sqlite.length > 0 && allowed === undefined;
 		const keep = failed(testInfo) || sqliteFailing;
 		try {
 			if (early) {
 				if (keep) {
 					await attachText(testInfo, `browser-console${suffix}.log`, redactText(lines.join('\n'), workerSecrets(stack)));
+					if (refusal !== undefined) await attachText(testInfo, `dialogs${suffix}.log`, redactText(dialogs.map(d => `${new Date(d.ts).toISOString()} ${d.message}`).join('\n'), workerSecrets(stack)));
 					if (existsSync(early.trace)) await testInfo.attach(`trace${suffix}`, { path: early.trace, contentType: 'application/zip' });
 				}
 			} else {
 				if (keep) {
 					await attachText(testInfo, `browser-console${suffix}.log`, redactText(lines.join('\n'), workerSecrets(stack)));
+					if (refusal !== undefined) await attachText(testInfo, `dialogs${suffix}.log`, redactText(dialogs.map(d => `${new Date(d.ts).toISOString()} ${d.message}`).join('\n'), workerSecrets(stack)));
 					const path = testInfo.outputPath(`trace${suffix}.zip`);
 					await context.tracing.stop({ path });
 					await testInfo.attach(`trace${suffix}`, { path, contentType: 'application/zip' });
@@ -336,6 +388,13 @@ const startAppSession = async (browser: Browser, stack: StackState, testInfo: Te
 
 	return { app, closeEarly, finish };
 };
+
+// Whether a listener can bind 127.0.0.1:<port> now (the published port of a removed container is released a moment later).
+const portFree = (port: number): Promise<boolean> => new Promise(resolve => {
+	const server = createServer();
+	server.once('error', () => resolve(false));
+	server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
+});
 
 export const builtinFixtureMessage = (name: 'page' | 'context'): string => `the built-in \`${name}\` fixture is disabled in this harness: it records no trace and no browser console (use.trace is off). Use the \`webApp\` fixture (webApp.page, webApp.context) instead.`;
 
@@ -508,6 +567,23 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		}
 	},
 
+	// The served bundle A and the bundles derived from it (docs/test-plans/M2-S5.md D1-D3), built once per worker from the stack's own
+	// web container and removed at worker teardown. They hold upstream's files, live under test-results/ (ignored) and are never
+	// committed. A failing self-check throws with its problems (paths and counts), never a skip.
+	testBundles: [async ({ stack }, use, workerInfo) => {
+		await requireUpstreamBundle(stack, 'M2-S5');
+		const root = join(findRepoRoot(), 'test-results', 'e2e', 'm2-s5-bundles', `w${workerInfo.workerIndex}-${process.pid}`);
+		const { buildTestBundles, checkTestBundles, removeTestBundles } = await import('./testBundles.ts');
+		try {
+			const bundles = await buildTestBundles(stack, root, randomBytes(4).toString('hex'));
+			const problems = checkTestBundles(bundles);
+			if (problems.length > 0) throw new Error(`the M2-S5 test bundles failed their self-check:\n${problems.join('\n')}`);
+			await use(bundles);
+		} finally {
+			removeTestBundles(root);
+		}
+	}, { scope: 'worker' }],
+
 	// The served bundle with every overlay change undone from upstream's public/ at the pin (docs/test-plans/M2-S6.md D2).
 	// Built once per worker from the stack's own web container; the directories hold upstream's files and are removed at
 	// worker teardown. Never committed (they live under test-results/, which is ignored).
@@ -527,22 +603,58 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	// Further web containers of the image under test (docs/test-plans/M2-S6.md D3).
 	extraWebs: async ({ stack }, use, testInfo) => {
 		const running = new Map<string, ExtraWeb>();
+		const roles = new Map<string, string>();
 		const logs = new Map<string, string>();
+		// The raw access log of a container that was stopped (the parsed entries keep no query string and no header).
+		const stoppedAccess = new Map<string, string>();
 		let n = 0;
 		const stop = (web: ExtraWeb): void => {
 			if (!running.delete(web.container)) return;
 			logs.set(web.container, containerLog(stack, web.container, undefined, workerSecrets(stack)));
+			const r = podmanSync(['logs', web.container], { allowFail: true });
+			stoppedAccess.set(web.container, `${r.stdout}\n${r.stderr}`);
 			removeContainer(stack, web.container);
+		};
+		const up = async (down: DownWeb, opts: { mountDist?: string }): Promise<ExtraWeb> => {
+			try {
+				await waitFor(`port ${down.port} to be free again`, async () => (await portFree(down.port) ? true : undefined), { timeoutMs: 10_000, intervalMs: 250 });
+			} catch {
+				throw new Error(`port ${down.port} was taken during the redeploy`);
+			}
+			const next = await start({ role: down.role as ExtraWebStart['role'], port: down.port, mountDist: opts.mountDist });
+			if (next.url !== down.url) throw new Error(`the redeploy changed the origin from ${down.url} to ${next.url}`);
+			return next;
+		};
+		const start = async (opts: ExtraWebStart): Promise<ExtraWeb> => {
+			n++;
+			const web = await upExtraWeb(stack, { label: `${shortId(testInfo)}-${n}`, role: opts.role, port: opts.port, mountDist: opts.mountDist });
+			running.set(web.container, web);
+			roles.set(web.container, opts.role);
+			return web;
 		};
 		try {
 			await use({
-				start: async opts => {
-					n++;
-					const web = await upExtraWeb(stack, { label: `${shortId(testInfo)}-${n}`, role: opts.role, port: opts.port, mountDist: opts.mountDist });
-					running.set(web.container, web);
-					return web;
-				},
+				start,
 				stop,
+				down: web => {
+					const role = roles.get(web.container);
+					if (!role || !running.has(web.container)) throw new Error('extraWebs.down: not a running container of this test');
+					const port = Number.parseInt(new URL(web.url).port, 10);
+					stop(web);
+					return { port, url: web.url, role, container: web.container };
+				},
+				up,
+				redeploy: async (web, opts) => {
+					const role = roles.get(web.container);
+					if (!role || !running.has(web.container)) throw new Error('extraWebs.redeploy: not a running container of this test');
+					const port = Number.parseInt(new URL(web.url).port, 10);
+					stop(web);
+					return up({ port, url: web.url, role, container: web.container }, opts);
+				},
+				accessLog: async web => {
+					const text = running.has(web.container) ? (() => { const r = podmanSync(['logs', web.container], { allowFail: true }); return `${r.stdout}\n${r.stderr}`; })() : (stoppedAccess.get(web.container) ?? '');
+					return parseAccessLog(text);
+				},
 			});
 		} finally {
 			for (const web of [...running.values()]) stop(web);
