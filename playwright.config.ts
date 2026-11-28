@@ -6,6 +6,8 @@
 // - Workers: 1 locally (the Pi's one-heavy-job rule); CI decides. Retries: 0 locally, 1 in CI (flake policy,
 //   docs/testing/strategy.md §6).
 // - @network tests (internet access) run only with NOTESTEAD_NETWORK_TESTS=1: nightly and on pin bumps in CI (docs/test-plans/M2-S4.md D8).
+// - @characterisation tests (H-SWU-01) run only with NOTESTEAD_CHARACTERISATION_TESTS=1: locally in a QA verify of a story that touches the worker,
+//   the bundle or deploy/web, and nightly in CI (docs/test-plans/M2-S5.md RU-25).
 // - Reports: the redacting reporter first (it redacts every attachment, the trace included, before anything copies
 //   it), then the not-run reporter, then list (console), HTML (playwright-report/) and JUnit (test-results/e2e/junit.xml) for CI.
 // - Not run counts as failed (M2-S1 r1 C3, docs/test-plans/M2-S5.md D9): when a `chromium` test fails, Playwright leaves the dependent
@@ -22,6 +24,12 @@ import { e2eProjects } from './tests/e2e/support/projects.ts';
 import { actionTimeoutMs, ciGlobalTimeoutMs, navigationTimeoutMs } from './tests/e2e/support/timeouts.ts';
 
 const ci = !!process.env.CI;
+// @network tests need the internet (NOTESTEAD_NETWORK_TESTS=1); @characterisation tests characterise upstream's browser behaviour and are
+// a scheduled run, not a per-commit gate (NOTESTEAD_CHARACTERISATION_TESTS=1; docs/test-plans/M2-S5.md RU-25).
+const excludedTags = (env: NodeJS.ProcessEnv): RegExp | undefined => {
+	const tags = [...(env.NOTESTEAD_NETWORK_TESTS === '1' ? [] : ['@network']), ...(env.NOTESTEAD_CHARACTERISATION_TESTS === '1' ? [] : ['@characterisation'])];
+	return tags.length > 0 ? new RegExp(tags.join('|')) : undefined;
+};
 const chromium = chooseChromium();
 
 export default defineConfig({
@@ -29,7 +37,7 @@ export default defineConfig({
 	testMatch: '**/*.spec.ts',
 	outputDir: 'test-results/e2e/output',
 	forbidOnly: true,
-	grepInvert: process.env.NOTESTEAD_NETWORK_TESTS === '1' ? undefined : /@network/,
+	grepInvert: excludedTags(process.env),
 	workers: ci ? undefined : 1,
 	retries: ci ? 1 : 0,
 	// A test may start its own headless service (an initial E2EE sync: ~1 min on the Pi).

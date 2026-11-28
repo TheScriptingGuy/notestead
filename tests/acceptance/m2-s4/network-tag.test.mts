@@ -9,9 +9,9 @@ import { describe, it } from 'node:test';
 import { parse } from 'yaml';
 import { repoRoot } from '../support/repo.mts';
 
-const listTests = (networkTests: string): { status: number | null; stdout: string; stderr: string } => {
+const listTests = (networkTests: string, characterisation = ''): { status: number | null; stdout: string; stderr: string } => {
 	const r = spawnSync('corepack', ['yarn', 'playwright', 'test', '--list'], {
-		cwd: repoRoot, encoding: 'utf8', timeout: 5 * 60_000, env: { ...process.env, NOTESTEAD_NETWORK_TESTS: networkTests },
+		cwd: repoRoot, encoding: 'utf8', timeout: 5 * 60_000, env: { ...process.env, NOTESTEAD_NETWORK_TESTS: networkTests, NOTESTEAD_CHARACTERISATION_TESTS: characterisation },
 	});
 	return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
@@ -29,6 +29,19 @@ describe('M2-S4 D8: @network tests stay out of the default run', () => {
 		const r = listTests('1');
 		assert.equal(r.status, 0, `playwright test --list exited ${r.status}: ${r.stderr.slice(0, 500)}`);
 		assert.ok(r.stdout.includes('M2-AC10'), 'M2-AC10 is listed when NOTESTEAD_NETWORK_TESTS=1');
+	});
+
+	// M2-S5 RU-25: @characterisation tests (H-SWU-01) are a scheduled run, excluded the same way
+	it('NT-04 the default list has no @characterisation test, NOTESTEAD_NETWORK_TESTS=1 alone does not add it, NOTESTEAD_CHARACTERISATION_TESTS=1 does (and keeps @network out)', () => {
+		const none = listTests('');
+		assert.equal(none.status, 0, `playwright test --list exited ${none.status}: ${none.stderr.slice(0, 500)}`);
+		assert.ok(!none.stdout.includes('H-SWU-01'), 'H-SWU-01 is not listed by default');
+		const network = listTests('1');
+		assert.ok(!network.stdout.includes('H-SWU-01'), 'H-SWU-01 is not listed with only NOTESTEAD_NETWORK_TESTS=1');
+		const char = listTests('', '1');
+		assert.equal(char.status, 0, `playwright test --list exited ${char.status}: ${char.stderr.slice(0, 500)}`);
+		assert.ok(char.stdout.includes('H-SWU-01'), 'H-SWU-01 is listed with NOTESTEAD_CHARACTERISATION_TESTS=1');
+		assert.ok(!char.stdout.includes('M2-AC10'), 'the @network test stays out');
 	});
 
 	// CC-NET (docs/test-plans/M2-S4.md, Brief CC-NET): red until e2e.yml carries the schedule, the dispatch input and the step output.

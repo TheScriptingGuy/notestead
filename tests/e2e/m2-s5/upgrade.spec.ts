@@ -104,39 +104,30 @@ test.describe('M2-S5 bundle upgrade', () => {
 		});
 
 		if (which === 'B2') {
-			await test.step('the worker was updated: upstream\'s self-reload committed, the documented L22 race, or the update found at navigation (RU-13, RU-17)', async () => {
+			await test.step('the worker was updated: upstream\'s self-reload committed, the documented L22 race, or the update found at navigation (RU-13, RU-17, RU-24)', async () => {
 				const plain = 'Reloading page to make use of COOP/COEP Service Worker.';
 				const events = sw!.events;
 				const load = { t: loadT, previousVersionId: activeVersionBefore(events, loadT) };
 				const lines = (): string[] => ctx.console.slice(consoleMark).filter(l => l.endsWith(updatedWorkerLine));
-				const updatedAtNavigation = async (): Promise<boolean> => classifySelfReload(events, await extraWebs.accessLog(s.web), undefined, 60_000, load).outcome === 'updated-at-navigation';
-				await waitFor('the updated-worker reload line, or the update found at navigation', async () => ((lines().length > 0 || (await updatedAtNavigation())) ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 }).catch(() => undefined);
-				const after = ctx.console.slice(consoleMark);
-				test.info().annotations.push({ type: 'self-reloads', description: `updated-worker lines ${lines().length}, not-controlling lines ${after.filter(l => l.endsWith(plain)).length}` });
-				if (lines().length === 0) {
-					const entries = await extraWebs.accessLog(s.web);
-					const result = classifySelfReload(events, entries, undefined, 60_000, load);
-					await test.info().attach('sw-timeline.json', { body: JSON.stringify({ outcome: result.outcome, parts: result.parts, timeline: events.map(e => ({ ...e, t: e.t - loadT })), container: entries.filter(e => e.path === '/' || e.path === '/serviceWorker.bundle.js') }, null, 2), contentType: 'application/json' });
-					expect(result.outcome, `no reload line, and not the update found at navigation: ${result.parts.join('; ')}`).toBe('updated-at-navigation');
+				const lineAt = (): number | undefined => (lines().length > 0 ? Date.parse(lines()[0].split(' ')[0]) : undefined);
+				const classify = async (): Promise<ReturnType<typeof classifySelfReload>> => classifySelfReload(events, await extraWebs.accessLog(s.web), lineAt(), 60_000, load);
+				// a commit or an update found at navigation shows within seconds; the race and a missed update only after the full window
+				await waitFor('the self-reload to commit or the update found at navigation', async () => (['committed', 'updated-at-navigation'].includes((await classify()).outcome) ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 }).catch(() => undefined);
+				const result = await classify();
+				const entries = await extraWebs.accessLog(s.web);
+				test.info().annotations.push({ type: 'self-reloads', description: `updated-worker lines ${lines().length}, not-controlling lines ${ctx.console.slice(consoleMark).filter(l => l.endsWith(plain)).length}` });
+				await test.info().attach('sw-timeline.json', { body: JSON.stringify({ outcome: result.outcome, parts: result.parts, timeline: events.map(e => ({ ...e, t: e.t - loadT })), container: entries.filter(e => e.path === '/' || e.path === '/serviceWorker.bundle.js').map(e => ({ ...e, ts: e.ts - loadT })) }, null, 2), contentType: 'application/json' });
+				expect(lines().length, 'at most one updated-worker reload line').toBeLessThanOrEqual(1);
+				expect(['committed', 'race', 'updated-at-navigation'], `the worker update: ${result.outcome}, ${result.parts.join('; ')}`).toContain(result.outcome);
+				if (result.outcome === 'committed') {
+					test.info().annotations.push({ type: 'self-reload', description: `C committed in ${Math.max(...events.filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= loadT + 1).map(e => e.t)) - loadT} ms after the load (${result.parts[result.parts.length - 1]})` });
+				} else if (result.outcome === 'updated-at-navigation') {
 					test.info().annotations.push({ type: 'self-reload', description: `N updated at navigation (${result.parts[1]})` });
 				} else {
-					const lineTime = Date.parse(lines()[0].split(' ')[0]);
-					const rootGets = async (from: number): Promise<number> => (await extraWebs.accessLog(s.web)).filter(e => e.method === 'GET' && e.path === '/' && e.ts >= from).length;
-					// a commit shows within seconds; the race is only claimed after a full 60 s without one
-					await waitFor('the self-reload to commit', async () => ((events.some(e => e.kind === 'frameNavigated' && e.main === true && e.path !== 'blank' && e.t >= lineTime) && (await rootGets(lineTime)) > 0) ? true : undefined), { timeoutMs: 60_000, intervalMs: 500 }).catch(() => undefined);
-					const entries = await extraWebs.accessLog(s.web);
-					const result = classifySelfReload(events, entries, lineTime);
-					await test.info().attach('sw-timeline.json', { body: JSON.stringify({ outcome: result.outcome, parts: result.parts, timeline: events.map(e => ({ ...e, t: e.t - lineTime })), container: entries.filter(e => e.ts >= lineTime - 1_000 && (e.path === '/' || e.path === '/serviceWorker.bundle.js')).map(e => ({ ...e, ts: e.ts - lineTime })) }, null, 2), contentType: 'application/json' });
-					expect(lines(), 'exactly one updated-worker reload line').toHaveLength(1);
-					expect(result.outcome, `the hang does not match L22, or is not a commit: ${result.parts.join('; ')}`).not.toBe('unknown');
-					if (result.outcome === 'committed') {
-						test.info().annotations.push({ type: 'self-reload', description: `C committed in ${Math.max(...events.filter(e => e.kind === 'frameNavigated' && e.main === true && e.t >= lineTime).map(e => e.t)) - lineTime} ms` });
-					} else {
-						const reload = await userReload(ctx.page, events, () => extraWebs.accessLog(s.web), { timeoutMs: appStartTimeoutMs });
-						test.info().annotations.push({ type: 'user-reload', description: reload.parts.join('; ') });
-						expect(reload.committed, `the user's reload of the stuck tab committed: ${reload.parts.join('; ')}`).toBe(true);
-						test.info().annotations.push({ type: 'self-reload', description: `R L22 race; manual reload committed in ${reload.ms} ms` });
-					}
+					const reload = await userReload(ctx.page, events, () => extraWebs.accessLog(s.web), { timeoutMs: appStartTimeoutMs });
+					test.info().annotations.push({ type: 'user-reload', description: reload.parts.join('; ') });
+					expect(reload.committed, `the user's reload of the stuck tab committed: ${reload.parts.join('; ')}`).toBe(true);
+					test.info().annotations.push({ type: 'self-reload', description: `R L22 race; manual reload committed in ${reload.ms} ms` });
 				}
 				await sw!.stop();
 				await expect.poll(() => bundleMarker(ctx.page), { timeout: appStartTimeoutMs, intervals: [500] }).toBe(expectedMarker);
