@@ -89,9 +89,9 @@ describe('self-reload classifier', () => {
 	});
 
 	test('swu-11 (N) without the new version activating (ii) is unknown, and names (ii)', () => {
-		const r = classifySelfReload(nEvents.filter(e => e.versionId !== '1'), [swGet(load.t + 8, 200)], undefined, 60_000, load);
+		const r = classifySelfReload(nEvents.filter(e => !(e.versionId === '1' && (e.status === 'activating' || e.status === 'activated'))), [swGet(load.t + 8, 200)], undefined, 60_000, load);
 		expect(r.outcome).toBe('unknown');
-		expect(r.parts.join(' ')).toMatch(/\(ii\)[^;]*missing/);
+		expect(r.parts.join(' ')).toMatch(/\(N\)[^;]*activated: missing/);
 	});
 
 	test('swu-12 (N) with only a 304 for the worker script (iv) is unknown, and names (iv)', () => {
