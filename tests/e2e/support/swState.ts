@@ -1,7 +1,7 @@
 // Browser state probes of the service worker and its cache (docs/test-plans/M2-S5.md D5). Values only: paths, digests, markers,
 // never note text. Each reads in the app's page (or any same-origin page of the context). Upstream's page script reloads the page
 // itself when the worker updates (serviceWorker.ts:272-280), so a read that meets a navigation is repeated, for at most 30 s.
-import { waitFor } from '../../support/poll.ts';
+import { waitFor, withTimeout } from '../../support/poll.ts';
 import type { NetEntry } from './network.ts';
 import type { Page } from '@playwright/test';
 
@@ -10,12 +10,13 @@ import type { Page } from '@playwright/test';
 export const cacheName = 'v1';
 export const cachedPathPattern = /\.(js|css|wasm|json|ttf|html|png)$/;
 
-const navigating = /Execution context was destroyed|frame was detached|Cannot find context with specified id|navigation/i;
+const navigating = /Execution context was destroyed|frame was detached|Cannot find context with specified id|navigation|did not answer within/i;
 
 const inPage = async <T>(page: Page, what: string, read: () => Promise<T>): Promise<T> => {
 	return waitFor(what, async () => {
 		try {
-			return await read();
+			// bounded: an evaluation in a frame stuck in a navigation (L22) never returns, and the poll cannot interrupt it
+			return await withTimeout(what, read(), 10_000);
 		} catch (error) {
 			if (navigating.test((error as Error).message)) return undefined;
 			throw error;
