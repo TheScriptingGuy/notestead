@@ -106,4 +106,27 @@ describe('self-reload classifier', () => {
 		const r = classifySelfReload([...nEvents, requested(line + 5)], [swGet(load.t + 8, 200)], line, 60_000, load);
 		expect(r.outcome).not.toBe('updated-at-navigation');
 	});
+	// RU-24: (C) is proven by the timeline, the console line is not required; (M) the update missed at this load
+	const lt = { t: 100_000, previousVersionId: '0' };
+	const cEvents = [wv(lt.t + 5, '0', 'activated'), wv(lt.t + 3063, '1', 'installing'), requested(lt.t + 3063), navigated(lt.t + 3064)];
+
+	test('swu-14 a page-requested reload with a new version installing, a main-frame commit and a GET / is (C) without a console line', () => {
+		const r = classifySelfReload(cEvents, [get(lt.t + 3070, '/', 304)], undefined, 60_000, lt);
+		expect(r.outcome).toBe('committed');
+	});
+
+	test('swu-15 the same with the console line seen is still (C), and without the GET / it is not', () => {
+		expect(classifySelfReload(cEvents, [get(lt.t + 3070, '/', 304)], lt.t + 3062, 60_000, lt).outcome).toBe('committed');
+		expect(classifySelfReload(cEvents, [], undefined, 60_000, lt).outcome).toBe('unknown');
+	});
+
+	test('swu-16 no new version, no reload request, the active version unchanged and a 200 for the worker script is (M)', () => {
+		const r = classifySelfReload([wv(lt.t + 5, '0', 'activated')], [get(lt.t + 4, '/', 200), swGet(lt.t + 8, 200), swGet(lt.t + 3000, 304)], undefined, 60_000, lt);
+		expect(r.outcome).toBe('missed-at-load');
+	});
+
+	test('swu-17 (M) without the 200 for the worker script, or with a reload request, is unknown', () => {
+		expect(classifySelfReload([wv(lt.t + 5, '0', 'activated')], [swGet(lt.t + 8, 304)], undefined, 60_000, lt).outcome).toBe('unknown');
+		expect(classifySelfReload([wv(lt.t + 5, '0', 'activated'), requested(lt.t + 100)], [swGet(lt.t + 8, 200)], undefined, 60_000, lt).outcome).toBe('unknown');
+	});
 });
